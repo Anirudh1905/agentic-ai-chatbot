@@ -45,7 +45,7 @@ flowchart TB
     subgraph Agent["LangGraph agent"]
         direction TB
         PIIin[PII guard: input] --> LoadMem[Load long-term memory]
-        LoadMem --> LLM[LLM node<br/>Claude]
+        LoadMem --> LLM[LLM node<br/>OpenAI]
         LLM -->|tool call| HITL{Needs approval?}
         HITL -->|yes| Interrupt[[interrupt: wait for human]]
         Interrupt --> Tools
@@ -76,7 +76,7 @@ These are defaults, not hard requirements. Each phase doc notes where a swap is 
 |---------|--------|-------|
 | Language | Python 3.12 | |
 | Agent framework | LangGraph | Built-in checkpointers, `interrupt()` for HITL, and a `Store` for long-term memory cover three of the four features |
-| LLM | Claude (`claude-sonnet-5-5`), `claude-haiku-4-5-20251001` for cheap side tasks | Summarization, memory extraction and query rewriting can run on Haiku |
+| LLM | OpenAI (`gpt-5-mini` for chat; `gpt-5.4` when quality matters more than latency), a small model such as `gpt-5-nano` for cheap side tasks | Model, effort and an optional gateway URL are set in `.env`. Summarization, memory extraction and query rewriting can run on the small model |
 | API | FastAPI + Server-Sent Events | |
 | Vector DB | Postgres + pgvector | One database for vectors, checkpoints and memory. Qdrant is a straightforward swap |
 | Embeddings | Voyage AI or an open-source model (e.g. `bge-m3`) | |

@@ -1,0 +1,57 @@
+[project]
+name = "chatbot"
+version = "0.1.0"
+description = "Agentic chatbot with RAG, web search, HITL, PII masking and memory"
+authors = [
+    { name = "Anirudh1905", email = "anirudhsridhar1905@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.143.0",
+    "langchain>=1.4.4",
+    "langchain-openai>=1.7.0",
+    "langfuse>=4.17.0",
+    "langgraph>=1.2.14",
+    "pydantic-settings>=2.15.0",
+    "sse-starlette>=3.5.0",
+    "uvicorn[standard]>=0.54.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.11.25,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "mypy>=2.4.0",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "ruff>=0.17.0",
+]
+ui = [
+    "httpx>=0.28.1",
+    "httpx-sse>=0.4.3",
+    "streamlit>=1.65.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["docs"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "ASYNC"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = ["sse_starlette.*", "langfuse.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
