@@ -2,7 +2,7 @@
 
 An agentic chatbot with RAG and web search tools, human-in-the-loop approvals, PII detection and masking, and short-term plus long-term memory.
 
-See the phased build plan in [docs/README.md](docs/README.md). Phases 1 (foundation) and 2 (RAG and web search tools) are implemented.
+See the phased build plan in [docs/README.md](docs/README.md). Phases 1 (foundation), 2 (RAG and web search tools) and 3 (short-term memory and checkpointing) are implemented.
 
 ## Quickstart
 
@@ -22,8 +22,9 @@ Tilt's dashboard is at http://localhost:10350. From there:
 | API | http://localhost:8000 (OpenAPI docs at `/docs`) |
 | Langfuse (tracing) | http://localhost:3000, login `dev@local.test` / `password` |
 | Postgres + pgvector | `localhost:5433` |
+| pgweb (database browser) | http://localhost:8081 |
 
-Postgres is mapped to host port 5433 so it doesn't clash with a local Postgres on 5432. Set `POSTGRES_PORT` to change it.
+Postgres is mapped to host port 5433 so it doesn't clash with a local Postgres on 5432. Set `POSTGRES_PORT` to change it. pgweb browses the same database (chunks, threads, checkpoints); `PGWEB_PORT` changes its port.
 
 Without Tilt: `make up`, `make migrate`, `make ingest`, then `make dev` and `make ui` in separate terminals.
 
@@ -47,6 +48,31 @@ The `web_search` tool uses DuckDuckGo through the [`ddgs`](https://pypi.org/proj
 
 Behind a TLS-inspecting proxy (such as Cloudflare Gateway or Zscaler), Python uses the OS certificate store via `truststore`, so outbound HTTPS works without extra setup.
 
+### Conversations and memory
+
+Every conversation is a thread, saved to Postgres after each graph step by LangGraph's `AsyncPostgresSaver`. Restarting the API, closing the tab or opening the chat in another browser picks the thread up where it left off. The chat UI lists your threads in the sidebar and keeps the current one in the URL (`?thread=...`).
+
+There's no login until Phase 7. Clients identify the user with an `X-User-Id` header, and every thread is visible only to the user who created it. The UI sends `demo-user` by default (`CHATBOT_USER_ID`, or change it in the sidebar).
+
+Long threads stay small: once the messages pass `CONTEXT_MAX_TOKENS`, older turns are folded into a running summary by `SUMMARY_MODEL` and removed from the thread, keeping the last `CONTEXT_KEEP_TURNS` turns verbatim. Removed messages no longer appear in the chat history; the UI shows the summary in their place.
+
+If a run stops partway (the process died during a tool call, say), `POST /threads/{id}/resume` finishes it from the last checkpoint. `GET /threads/{id}/history` lists the checkpoints, and resuming with a `checkpoint_id` from it replays the thread from that point.
+
+Each step adds a checkpoint, so `make retention` (run it nightly) keeps only the latest one for threads idle more than `CHECKPOINT_RETENTION_DAYS`. `DELETE /threads/{id}` removes a thread and all its checkpoints.
+
+### Logs
+
+The API logs one line per request, plus what each turn did: context size and summarizing, each model call (time, tokens, tool calls), and each search (query, hit count, time). Every line carries the request ID and thread, so one conversation can be followed with `grep thread=<first 8 chars>`. Responses return the ID in an `X-Request-Id` header; send your own to correlate with a client.
+
+```
+INFO chatbot.graph.builder [req=9f4574e3 thread=46695ac5]: context: 9 messages, ~1262/1000 tokens
+INFO chatbot.graph.builder [req=9f4574e3 thread=46695ac5]: over the limit: summarizing the oldest 8 of 9 messages
+INFO chatbot.tools.rag [req=e7bb1e9a thread=46695ac5]: knowledge base search 'express shipping time': 6 hits in 2.6s
+INFO chatbot.api [req=e7bb1e9a thread=46695ac5]: POST /chat -> 200 in 6.94s (user=log-check)
+```
+
+HTTP client, OpenAI SDK, uvicorn access and `/healthz` lines are hidden unless `LOG_LEVEL=DEBUG`. Search queries are logged as-is, so they can contain personal data until PII masking lands in Phase 5.
+
 ### Tracing
 
 Langfuse runs locally from `docker-compose.langfuse.yml`, which `docker-compose.yml` includes. On first start it creates a project with fixed API keys, and `.env.example` already contains them, so every chat request is traced with no setup. The first `tilt up` pulls about 2 GB of images, and Langfuse takes a minute or two to become healthy.
@@ -55,7 +81,7 @@ The credentials in that file are local-only placeholders. To trace somewhere els
 
 ```bash
 curl -N localhost:8000/chat/stream \
-  -H 'content-type: application/json' \
+  -H 'content-type: application/json' -H 'X-User-Id: me' \
   -d '{"message": "hi"}'
 ```
 
@@ -63,9 +89,17 @@ curl -N localhost:8000/chat/stream \
 
 | Endpoint | Purpose |
 |----------|---------|
-| `POST /chat` | Full reply and its sources as JSON |
-| `POST /chat/stream` | Server-Sent Events: `tool_start` / `tool_end` (with sources) and `token`, then `done` (or `error`) |
+| `POST /chat` | Full reply, its sources and the `thread_id` as JSON. Omit `thread_id` to start a new thread |
+| `POST /chat/stream` | Server-Sent Events: `tool_start` / `tool_end` (with sources) and `token`, then `done` with the `thread_id` (or `error`) |
+| `POST /threads` | Create an empty thread |
+| `GET /threads` | The caller's threads, most recent first |
+| `GET /threads/{id}/messages` | The thread's messages (with each reply's sources) and summary |
+| `GET /threads/{id}/history` | Checkpoints, newest first, for debugging |
+| `POST /threads/{id}/resume` | Finish an interrupted run, or replay from `checkpoint_id` |
+| `DELETE /threads/{id}` | Delete the thread and all its checkpoints |
 | `GET /healthz` | Liveness |
+
+All endpoints except `/healthz` need an `X-User-Id` header.
 
 ## Configuration
 
@@ -76,15 +110,20 @@ Set in `.env` (see `.env.example`):
 | `OPENAI_API_KEY` | unset | Required |
 | `OPENAI_BASE_URL` | unset (api.openai.com) | Set to use an OpenAI-compatible gateway |
 | `MODEL` | `gpt-5-mini` | Any chat model the endpoint serves. Use `gpt-5.4` for harder questions (slower) |
-| `REASONING_EFFORT` | `minimal` | `none` to `high`. Reasoning models only (gpt-5.x, o-series); remove for gpt-4.x |
+| `REASONING_EFFORT` | `low` | `none` to `high`. Reasoning models only (gpt-5.x, o-series); remove for gpt-4.x. `minimal` is a little faster but often skips the search for short questions |
 | `MAX_TOKENS` | unset | Optional cap on output tokens |
 | `EMBEDDING_MODEL` | `text-embedding-3-small` | Must produce 1536-dim vectors, or add a migration and re-ingest |
 | `WEB_SEARCH_ENABLED` | `true` | DuckDuckGo web search; no key needed |
 | `RETRIEVAL_TOP_K` | `6` | Chunks returned per knowledge base search |
 | `RERANKER_MODEL` | `BAAI/bge-reranker-v2-m3-int8` | Local cross-encoder that reorders the top `RERANK_CANDIDATES` (8) results. Empty turns it off |
 | `MAX_AGENT_STEPS` | `12` | Cap on model/tool round trips per request |
+| `SUMMARY_MODEL` | `gpt-5-nano` | Summarizes older turns of long threads |
+| `CONTEXT_MAX_TOKENS` | `32000` | Summarize older turns once a thread's messages pass this (estimated) |
+| `CONTEXT_KEEP_TURNS` | `6` | Recent turns always kept verbatim |
+| `CHECKPOINT_RETENTION_DAYS` | `30` | `make retention` prunes checkpoint history of threads idle this long |
 | `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` | local dev keys | Tracing turns on when both are set |
 | `LANGFUSE_HOST` | `http://localhost:3000` | |
+| `LOG_LEVEL` | `INFO` | `DEBUG` adds HTTP client and access logs |
 
 ## Development
 
@@ -92,4 +131,5 @@ Set in `.env` (see `.env.example`):
 make check    # ruff lint + format check, mypy, pytest (integration tests need `make up`)
 make fmt      # auto-fix lint and formatting
 make eval     # retrieval recall and tool routing on tests/evals/golden.jsonl (calls the model)
+make retention  # prune old checkpoints of idle threads
 ```

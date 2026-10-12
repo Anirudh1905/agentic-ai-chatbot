@@ -4,7 +4,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from chatbot.api.dependencies import resources
-from chatbot.api.routes import chat, health
+from chatbot.api.middleware import RequestLoggingMiddleware
+from chatbot.api.routes import chat, health, threads
 from chatbot.config import get_settings
 from chatbot.observability import configure_logging
 
@@ -17,5 +18,7 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
 
 
 app = FastAPI(title="Agentic AI Chatbot", lifespan=lifespan)
+app.add_middleware(RequestLoggingMiddleware)
 app.include_router(health.router)
 app.include_router(chat.router)
+app.include_router(threads.router)

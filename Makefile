@@ -1,4 +1,4 @@
-.PHONY: dev ui tilt test test-unit lint fmt typecheck up down check migrate ingest eval
+.PHONY: dev ui tilt test test-unit lint fmt typecheck up down check migrate ingest eval retention
 
 dev:
 	uv run uvicorn chatbot.api.main:app --reload
@@ -25,6 +25,9 @@ ingest:
 
 eval:
 	uv run python tests/evals/run.py
+
+retention:
+	uv run python -m chatbot.memory.retention
 
 lint:
 	uv run ruff check .

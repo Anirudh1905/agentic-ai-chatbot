@@ -44,6 +44,7 @@ def test_build_llm_uses_settings() -> None:
     assert llm.openai_api_base == "https://gateway.example"
     assert llm.reasoning_effort == "medium"
     assert llm.streaming is True
+    assert llm.stream_usage is True
 
 
 async def test_tool_loop_runs_tool_and_returns_final_answer() -> None:

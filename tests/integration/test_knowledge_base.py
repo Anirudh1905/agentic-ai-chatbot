@@ -1,17 +1,8 @@
-"""Ingestion and hybrid search against a real Postgres + pgvector.
+"""Ingestion and hybrid search against a real Postgres + pgvector (see conftest.py)."""
 
-Creates a throwaway database, runs the migrations in it, and drops it afterwards.
-Skipped when Postgres isn't reachable, unless REQUIRE_DB=1 (set in CI).
-"""
-
-import os
-import subprocess
-import sys
-import uuid
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator
 from pathlib import Path
 
-import psycopg
 import pytest
 from langchain_core.embeddings import DeterministicFakeEmbedding
 
@@ -21,37 +12,6 @@ from chatbot.ingestion.pipeline import ingest_path
 from chatbot.tools.rag import SearchHit, build_knowledge_base_tool, hybrid_search, retrieve
 
 pytestmark = pytest.mark.integration
-
-ROOT = Path(__file__).resolve().parents[2]
-ADMIN_URL = os.environ.get(
-    "TEST_DATABASE_URL", "postgresql://chatbot:chatbot@localhost:5433/chatbot"
-)
-
-
-@pytest.fixture(scope="module")
-def database_url() -> Iterator[str]:
-    try:
-        admin = psycopg.connect(ADMIN_URL, autocommit=True, connect_timeout=3)
-    except psycopg.OperationalError as e:
-        if os.environ.get("REQUIRE_DB") == "1":
-            raise
-        pytest.skip(f"Postgres not reachable at {ADMIN_URL}: {e}")
-
-    name = f"chatbot_test_{uuid.uuid4().hex[:8]}"
-    admin.execute(f'CREATE DATABASE "{name}"')
-    url = ADMIN_URL.rsplit("/", 1)[0] + f"/{name}"
-    try:
-        subprocess.run(
-            [sys.executable, "-m", "alembic", "upgrade", "head"],
-            cwd=ROOT,
-            env={**os.environ, "DATABASE_URL": url},
-            check=True,
-            capture_output=True,
-        )
-        yield url
-    finally:
-        admin.execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
-        admin.close()
 
 
 @pytest.fixture

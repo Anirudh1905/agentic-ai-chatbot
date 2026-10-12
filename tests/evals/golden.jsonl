@@ -33,3 +33,12 @@
 {"question": "Hi! How are you?", "tools": []}
 {"question": "Thanks, that's all I needed.", "tools": []}
 {"question": "What can you help me with?", "tools": []}
+{"question": "president of USA", "tools": ["web_search"]}
+{"question": "russia president", "tools": ["web_search"]}
+{"question": "CEO of Tesla", "tools": ["web_search"]}
+{"question": "prime minister of UK", "tools": ["web_search"]}
+{"question": "latest iphone", "tools": ["web_search"]}
+{"question": "bitcoin price", "tools": ["web_search"]}
+{"question": "express shipping", "tools": ["search_knowledge_base"]}
+{"question": "refund time", "tools": ["search_knowledge_base"]}
+{"question": "what is 17 * 23", "tools": []}
