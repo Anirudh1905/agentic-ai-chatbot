@@ -1,0 +1,35 @@
+{"question": "Can I return a jacket I bought on clearance at 40% off?", "tools": ["search_knowledge_base"], "expect": {"doc": "refund-policy.md", "heading": "Sale and Clearance Items"}}
+{"question": "How many days do I have to return something?", "tools": ["search_knowledge_base"], "expect": {"doc": "refund-policy.md", "heading": "Standard Returns"}}
+{"question": "Do Trail Club members get a longer return window?", "tools": ["search_knowledge_base"], "expect": {"doc": "refund-policy.md", "heading": "Standard Returns"}}
+{"question": "I used my tent on a camping trip and don't like it. Can I get my money back?", "tools": ["search_knowledge_base"], "expect": {"doc": "refund-policy.md", "heading": "Used Gear"}}
+{"question": "Can I return an opened fuel canister?", "tools": ["search_knowledge_base"], "expect": {"doc": "refund-policy.md", "heading": "Non-Returnable Items"}}
+{"question": "How long until my refund shows up on my card?", "tools": ["search_knowledge_base"], "expect": {"doc": "refund-policy.md", "heading": "Refund Timing"}}
+{"question": "Do you refund the shipping cost when I return something?", "tools": ["search_knowledge_base"], "expect": {"doc": "refund-policy.md", "heading": "Refund Timing"}}
+{"question": "I live in Germany. What are my rights for returning an online order?", "tools": ["search_knowledge_base"], "expect": {"doc": "refund-policy.md", "heading": "Customers in the European Union"}}
+{"question": "How much does a return shipping label cost?", "tools": ["search_knowledge_base"], "expect": {"doc": "refund-policy.md", "heading": "How to Start a Return"}}
+{"question": "How much is express shipping?", "tools": ["search_knowledge_base"], "expect": {"doc": "shipping.md", "heading": "Shipping Options (United States)"}}
+{"question": "What's the minimum order for free shipping?", "tools": ["search_knowledge_base"], "expect": {"doc": "shipping.md", "heading": "Shipping Options (United States)"}}
+{"question": "If I order at 3pm, when will it ship?", "tools": ["search_knowledge_base"], "expect": {"doc": "shipping.md", "heading": "Shipping Options (United States)"}}
+{"question": "Can you send bear spray to Hawaii?", "tools": ["search_knowledge_base"], "expect": {"doc": "shipping.md", "heading": "Restricted Items"}}
+{"question": "Do you ship to Australia, and how much does it cost?", "tools": ["search_knowledge_base"], "expect": {"doc": "shipping.md", "heading": "International Shipping"}}
+{"question": "My package says delivered but it's not here. What should I do?", "tools": ["search_knowledge_base"], "expect": {"doc": "shipping.md", "heading": "Lost or Damaged Packages"}}
+{"question": "Can I cancel an order I placed an hour ago?", "tools": ["search_knowledge_base"], "expect": {"doc": "shipping.md", "heading": "Order Changes"}}
+{"question": "Is my Acme headlamp under warranty after 18 months?", "tools": ["search_knowledge_base"], "expect": {"doc": "warranty.html", "heading": "Coverage Periods"}}
+{"question": "How long is the warranty on Acme backpacks?", "tools": ["search_knowledge_base"], "expect": {"doc": "warranty.html", "heading": "Coverage Periods"}}
+{"question": "The zipper on my pack wore out. Will you fix it for free?", "tools": ["search_knowledge_base"], "expect": {"doc": "warranty.html", "heading": "What Is Not Covered"}}
+{"question": "How do I file a warranty claim without a receipt?", "tools": ["search_knowledge_base"], "expect": {"doc": "warranty.html", "heading": "How to Make a Claim"}}
+{"question": "How many vacation days do employees get?", "tools": ["search_knowledge_base"], "expect": {"doc": "employee-handbook.md", "heading": "Paid Time Off"}}
+{"question": "Can I carry over unused PTO into next year?", "tools": ["search_knowledge_base"], "expect": {"doc": "employee-handbook.md", "heading": "Paid Time Off"}}
+{"question": "How long is paid parental leave?", "tools": ["search_knowledge_base"], "expect": {"doc": "employee-handbook.md", "heading": "Parental Leave"}}
+{"question": "What discount do employees get on other brands?", "tools": ["search_knowledge_base"], "expect": {"doc": "employee-handbook.md", "heading": "Employee Discount"}}
+{"question": "What are Gear Days?", "tools": ["search_knowledge_base"], "expect": {"doc": "employee-handbook.md", "heading": "Gear Days"}}
+{"question": "How many days a week can corporate staff work from home?", "tools": ["search_knowledge_base"], "expect": {"doc": "employee-handbook.md", "heading": "Remote Work"}}
+{"question": "How should I wash my down sleeping bag?", "tools": ["search_knowledge_base"], "expect": {"doc": "product-care.txt", "heading": null}}
+{"question": "Is it OK to store my tent while it's still damp?", "tools": ["search_knowledge_base"], "expect": {"doc": "product-care.txt", "heading": null}}
+{"question": "What's the latest news about REI?", "tools": ["web_search"]}
+{"question": "What is the current price of a Patagonia Nano Puff jacket?", "tools": ["web_search"]}
+{"question": "Who won the most recent Tour de France?", "tools": ["web_search"]}
+{"question": "How does REI's return policy compare to Acme's?", "tools": ["search_knowledge_base", "web_search"]}
+{"question": "Hi! How are you?", "tools": []}
+{"question": "Thanks, that's all I needed.", "tools": []}
+{"question": "What can you help me with?", "tools": []}
