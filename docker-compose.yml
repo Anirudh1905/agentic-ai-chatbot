@@ -17,5 +17,16 @@ services:
       interval: 5s
       retries: 10
 
+  # Web UI for browsing the database: chunks, threads, checkpoints. Local dev only.
+  pgweb:
+    image: sosedoff/pgweb:0.17.0
+    environment:
+      PGWEB_DATABASE_URL: postgres://chatbot:chatbot@postgres:5432/chatbot?sslmode=disable
+    ports:
+      - "127.0.0.1:${PGWEB_PORT:-8081}:8081"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
 volumes:
   pgdata:

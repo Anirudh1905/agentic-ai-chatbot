@@ -2,6 +2,7 @@
 
 docker_compose('./docker-compose.yml')
 dc_resource('postgres', labels=['infra'])
+dc_resource('pgweb', labels=['infra'], links=[link('http://localhost:8081', 'pgweb')])
 
 dc_resource('langfuse-web', labels=['langfuse'], links=[link('http://localhost:3000', 'Langfuse')])
 for name in ['langfuse-worker', 'langfuse-postgres', 'langfuse-clickhouse', 'langfuse-minio', 'langfuse-redis']:
@@ -47,6 +48,15 @@ local_resource(
     resource_deps=['api'],
     links=[link('http://localhost:8501', 'Chat UI')],
     labels=['app'],
+)
+
+local_resource(
+    'retention',
+    cmd='uv run python -m chatbot.memory.retention',
+    auto_init=False,
+    trigger_mode=TRIGGER_MODE_MANUAL,
+    resource_deps=['migrate'],
+    labels=['dev'],
 )
 
 local_resource(

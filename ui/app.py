@@ -10,6 +10,8 @@ import streamlit as st
 from httpx_sse import connect_sse
 
 API_URL = os.environ.get("CHATBOT_API_URL", "http://localhost:8000")
+# No login until Phase 7: the API trusts this header to say whose threads these are.
+DEFAULT_USER = os.environ.get("CHATBOT_USER_ID", "demo-user")
 
 TOOL_LABELS = {
     "search_knowledge_base": "Searching the knowledge base",
@@ -21,9 +23,50 @@ class StreamError(Exception):
     pass
 
 
+def api() -> httpx.Client:
+    return httpx.Client(
+        base_url=API_URL,
+        headers={"X-User-Id": st.session_state.user_id},
+        timeout=httpx.Timeout(10.0, read=300.0),
+    )
+
+
+def list_threads() -> list[dict[str, Any]]:
+    try:
+        with api() as client:
+            resp = client.get("/threads")
+            resp.raise_for_status()
+            return resp.json()
+    except httpx.HTTPError:
+        return []
+
+
+def load_thread(thread_id: str) -> None:
+    """Fetch the thread's messages from the API, so a reload or another tab picks up where
+    the conversation left off."""
+    st.session_state.thread_id = thread_id
+    st.session_state.messages = []
+    st.session_state.summary = None
+    st.query_params["thread"] = thread_id
+    try:
+        with api() as client:
+            resp = client.get(f"/threads/{thread_id}/messages")
+    except httpx.HTTPError:
+        return
+    if resp.status_code == 200:
+        body = resp.json()
+        st.session_state.messages = body["messages"]
+        st.session_state.summary = body["summary"]
+
+
+def new_thread() -> None:
+    # Created on the API side with the first message.
+    load_thread(str(uuid.uuid4()))
+
+
 def stream_events(message: str, thread_id: str) -> Iterator[tuple[str, dict[str, Any]]]:
     with (
-        httpx.Client(base_url=API_URL, timeout=httpx.Timeout(10.0, read=300.0)) as client,
+        api() as client,
         connect_sse(
             client, "POST", "/chat/stream", json={"message": message, "thread_id": thread_id}
         ) as source,
@@ -54,18 +97,51 @@ def render_sources(sources: list[dict[str, Any]], reply: str) -> None:
 st.set_page_config(page_title="Agentic AI Chatbot", page_icon="💬")
 st.title("Agentic AI Chatbot")
 
+if "user_id" not in st.session_state:
+    st.session_state.user_id = DEFAULT_USER
 if "thread_id" not in st.session_state:
-    st.session_state.thread_id = str(uuid.uuid4())
-    st.session_state.messages = []
+    if thread := st.query_params.get("thread"):
+        load_thread(thread)
+    else:
+        new_thread()
 
 with st.sidebar:
-    st.caption(f"API: `{API_URL}`")
-    st.caption(f"Thread: `{st.session_state.thread_id[:8]}`")
-    if st.button("New chat", width="stretch"):
-        st.session_state.thread_id = str(uuid.uuid4())
-        st.session_state.messages = []
+    user = st.text_input("User", value=st.session_state.user_id)
+    if user and user != st.session_state.user_id:
+        st.session_state.user_id = user
+        new_thread()
         st.rerun()
-    st.info("The bot doesn't remember earlier messages yet. Memory arrives in Phase 3.")
+    if st.button("New chat", width="stretch", icon=":material/add:"):
+        new_thread()
+        st.rerun()
+
+    threads = list_threads()
+    if threads:
+        st.subheader("Chats")
+    for t in threads:
+        current = t["id"] == st.session_state.thread_id
+        label = t["title"] or "Untitled"
+        if st.button(
+            label,
+            key=f"thread-{t['id']}",
+            width="stretch",
+            type="primary" if current else "secondary",
+        ):
+            load_thread(t["id"])
+            st.rerun()
+
+    if any(t["id"] == st.session_state.thread_id for t in threads):
+        st.divider()
+        if st.button("Delete this chat", width="stretch", icon=":material/delete:"):
+            with api() as client:
+                client.delete(f"/threads/{st.session_state.thread_id}")
+            new_thread()
+            st.rerun()
+    st.caption(f"API: `{API_URL}` · thread `{st.session_state.thread_id[:8]}`")
+
+if st.session_state.summary:
+    with st.expander("Earlier messages were condensed into a summary"):
+        st.markdown(st.session_state.summary)
 
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
@@ -116,3 +192,5 @@ if prompt := st.chat_input("Ask something"):
             st.session_state.messages.append(
                 {"role": "assistant", "content": reply, "sources": sources}
             )
+            # Refresh the sidebar so a new thread shows up in the list.
+            st.rerun()

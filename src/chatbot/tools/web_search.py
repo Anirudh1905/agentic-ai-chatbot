@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 from html import escape
 from typing import Any
 
@@ -57,6 +58,7 @@ async def search(query: str, settings: Settings) -> list[dict[str, Any]]:
                 continue
             results = [r for r in results if not is_ad(r)]
             if results:
+                logger.debug("web search (%s) returned %d results", backend, len(results))
                 return results
     if last_error is not None:
         raise last_error
@@ -78,14 +80,19 @@ def build_web_search_tool(settings: Settings) -> BaseTool | None:
         Args:
             query: A search engine query, e.g. "REI return policy 2026".
         """
+        start = time.monotonic()
         try:
             results = await search(query, settings)
         except Exception:
+            logger.exception("web search %r failed on every backend", query)
             return (
                 "Web search is unavailable right now. Answer from other sources if you "
                 "can, and tell the user you couldn't search the web.",
                 [],
             )
+        logger.info(
+            "web search %r: %d results in %.1fs", query, len(results), time.monotonic() - start
+        )
         sources = [
             {
                 "type": "web",

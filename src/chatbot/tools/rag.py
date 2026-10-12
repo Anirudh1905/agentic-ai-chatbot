@@ -1,4 +1,5 @@
 import logging
+import time
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from html import escape
@@ -144,11 +145,19 @@ def build_knowledge_base_tool(
         Args:
             query: A short search query in plain words, e.g. "refund window for sale items".
         """
+        start = time.monotonic()
         try:
             hits = await retrieve(pool, embeddings, settings, query, reranker)
         except Exception:
             logger.exception("knowledge base search failed")
             return "Knowledge base search failed. Tell the user it is unavailable right now.", []
+        logger.info(
+            "knowledge base search %r: %d hits in %.1fs (top: %s)",
+            query,
+            len(hits),
+            time.monotonic() - start,
+            hits[0].cite_as if hits else "none",
+        )
         sources = [{"type": "kb", "cite_as": h.cite_as, **asdict(h)} for h in hits]
         return format_hits(query, hits), sources
 

@@ -15,13 +15,25 @@ class Settings(BaseSettings):
     # Unset means api.openai.com; set it to route through an OpenAI-compatible gateway.
     openai_base_url: str | None = None
     model: str = "gpt-5-mini"
-    # Only sent to reasoning models (gpt-5.x, o-series). Leave unset for gpt-4.x.
-    reasoning_effort: ReasoningEffort | None = "minimal"
+    # Only sent to reasoning models (gpt-5.x, o-series). Leave unset for gpt-4.x. At "minimal",
+    # gpt-5-mini answered terse questions like "president of USA" from stale memory instead of
+    # searching; "low" routed them correctly at about the same latency.
+    reasoning_effort: ReasoningEffort | None = "low"
     max_tokens: int | None = None
     request_timeout: float = 120.0
 
     # Cap on LLM <-> tool round trips per request, so a confused model can't loop forever.
     max_agent_steps: int = 12
+
+    # Cheap model for side tasks such as summarizing old turns. Same endpoint as `model`.
+    summary_model: str = "gpt-5-nano"
+    # Once a thread's messages pass this many tokens (local estimate), older turns are folded
+    # into a running summary. Well under the model's window: every turn resends the history.
+    context_max_tokens: int = 32_000
+    # Most recent user turns (with their tool calls and replies) that are always kept verbatim.
+    context_keep_turns: int = 6
+    # The retention job keeps only the latest checkpoint of threads idle this many days.
+    checkpoint_retention_days: int = 30
 
     database_url: str = "postgresql://chatbot:chatbot@localhost:5433/chatbot"
 
