@@ -40,7 +40,7 @@ flowchart TB
     end
 
     Graph <-->|"put / get after each step"| CP[(Postgres<br/>checkpoints<br/>checkpoint_writes<br/>checkpoint_blobs)]
-    Trim -->|summary call| Haiku[Claude Haiku]
+    Trim -->|summary call| Small[Small model<br/>gpt-5-mini]
     API -->|thread metadata| Threads[(threads table<br/>user_id, title,<br/>created_at)]
 ```
 
@@ -80,7 +80,7 @@ flowchart LR
     In[Thread messages] --> Count{Tokens over<br/>threshold?}
     Count -->|no| Pass[Send as-is]
     Count -->|yes| Split[Split: older vs.<br/>last N turns]
-    Split --> Sum[Summarize older turns<br/>into running summary<br/>Haiku]
+    Split --> Sum[Summarize older turns<br/>into running summary<br/>small model]
     Sum --> Del[RemoveMessage<br/>for summarized msgs]
     Del --> Out[System prompt<br/>+ summary<br/>+ last N turns]
     Pass --> Out

@@ -40,7 +40,7 @@ flowchart TB
 
     LLM -.->|explicit: 'remember that...'| MemTool[save_memory tool]
 
-    END -.->|async, after response| Extract[memory_extractor<br/>Haiku]
+    END -.->|async, after response| Extract[memory_extractor<br/>small model]
     Extract --> Merge{new, update,<br/>or duplicate?}
     Merge -->|new / update| Store
     Merge -->|duplicate| Skip[skip]
@@ -57,7 +57,7 @@ sequenceDiagram
     autonumber
     participant G as Graph (turn finished)
     participant Q as Background queue
-    participant X as Extractor (Haiku)
+    participant X as Extractor (small model)
     participant S as Store
 
     G-->>Q: enqueue {user_id, thread_id, last N messages (masked)}
@@ -103,7 +103,7 @@ Nodes access it through the injected `store` parameter. `user_id` comes from the
 
 ### Recall node
 
-- Query: the latest user message, optionally rewritten by Haiku into a search query.
+- Query: the latest user message, optionally rewritten by the small model into a search query.
 - `store.asearch(("users", user_id, "facts"), query=q, limit=5)`, then drop results below a similarity threshold.
 - Always include `instructions` memories (they're few and always relevant).
 - Inject into the system prompt under a clear heading, e.g. `## What you know about this user`, and tell the model not to mention memories unless relevant.

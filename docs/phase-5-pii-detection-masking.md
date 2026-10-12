@@ -90,7 +90,7 @@ Layered, cheapest first:
 
 1. **Regex / checksum recognizers:** emails, phone numbers, credit cards (Luhn), IBAN, SSN, plus custom domain IDs (order numbers, employee IDs). Fast and precise.
 2. **NER (Presidio + spaCy `en_core_web_lg` or a transformer model):** names, locations, organizations.
-3. **Optional LLM check (Haiku)** for context-dependent PII ("my neighbour who has diabetes"). Run it only when the cheaper layers flag something borderline, or for high-risk tenants.
+3. **Optional LLM check (small model)** for context-dependent PII ("my neighbour who has diabetes"). Run it only when the cheaper layers flag something borderline, or for high-risk tenants.
 
 Configure per entity type: `action: mask | redact | allow` and a confidence threshold. Names need a higher threshold than emails or you'll mask "Jordan" in "flights to Jordan".
 

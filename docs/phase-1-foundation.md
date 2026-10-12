@@ -13,6 +13,8 @@
 - FastAPI service with a non-streaming `/chat` and a streaming `/chat/stream` (SSE) endpoint
 - Tracing for every LLM call
 - Docker Compose with Postgres + pgvector (unused until Phase 2/3, but set up now)
+- Streamlit chat UI that talks to `/chat/stream`
+- Tiltfile that runs Postgres, the API and the UI together with live reload
 
 **Out of scope:** tools, persistence, memory, guardrails.
 
@@ -20,7 +22,7 @@
 
 ```mermaid
 flowchart LR
-    Client([Client / curl]) -->|POST /chat/stream| API[FastAPI]
+    Client([Streamlit UI / curl]) -->|POST /chat/stream| API[FastAPI]
     API -->|astream_events| Graph
 
     subgraph Graph["LangGraph StateGraph"]
@@ -28,7 +30,7 @@ flowchart LR
         LLM --> END((END))
     end
 
-    LLM <-->|Messages API| Claude[Claude]
+    LLM <-->|Chat Completions API| OpenAI[OpenAI model]
     LLM -.trace.-> Obs[Langfuse / LangSmith]
     Config[config.py<br/>pydantic-settings] -.-> API
     Config -.-> Graph
@@ -42,7 +44,7 @@ sequenceDiagram
     participant C as Client
     participant A as FastAPI
     participant G as Graph
-    participant L as Claude
+    participant L as OpenAI model
 
     C->>A: POST /chat/stream {message}
     A->>G: astream_events({messages:[HumanMessage]})
@@ -74,10 +76,10 @@ Keep the state small and typed from day one. Later phases add fields (`summary`,
 ```python
 # src/chatbot/graph/builder.py
 from langgraph.graph import StateGraph, START, END
-from langchain_anthropic import ChatAnthropic
+from langchain_openai import ChatOpenAI
 
 def build_graph(settings):
-    llm = ChatAnthropic(model=settings.model, max_tokens=4096)
+    llm = ChatOpenAI(model=settings.model, base_url=settings.openai_base_url, streaming=True)
 
     async def llm_node(state: AgentState):
         msgs = [SystemMessage(settings.system_prompt), *state["messages"]]
@@ -105,18 +107,21 @@ Request schema: `{ "message": str, "thread_id": str | None }`. Accept `thread_id
 ### Config
 
 ```
-ANTHROPIC_API_KEY=
-MODEL=claude-sonnet-5-5
-DATABASE_URL=postgresql://chatbot:chatbot@localhost:5432/chatbot
-LANGFUSE_PUBLIC_KEY=
-LANGFUSE_SECRET_KEY=
+OPENAI_API_KEY=
+OPENAI_BASE_URL=        # optional, for an OpenAI-compatible gateway
+MODEL=gpt-5-mini
+REASONING_EFFORT=minimal
+DATABASE_URL=postgresql://chatbot:chatbot@localhost:5433/chatbot
+LANGFUSE_PUBLIC_KEY=pk-lf-local-dev
+LANGFUSE_SECRET_KEY=sk-lf-local-dev
+LANGFUSE_HOST=http://localhost:3000
 LOG_LEVEL=INFO
 ```
 
 ## Implementation steps
 
-1. `uv init`, add deps: `langgraph`, `langchain-anthropic`, `fastapi`, `uvicorn`, `sse-starlette`, `pydantic-settings`, `langfuse`.
-2. Add `docker-compose.yml` with `pgvector/pgvector:pg16` (and Langfuse if self-hosting).
+1. `uv init`, add deps: `langgraph`, `langchain-openai`, `fastapi`, `uvicorn`, `sse-starlette`, `pydantic-settings`, `langfuse`.
+2. Add `docker-compose.yml` with `pgvector/pgvector:pg16`, plus a self-hosted Langfuse stack (`docker-compose.langfuse.yml`).
 3. Write `config.py`, `graph/state.py`, `graph/builder.py`.
 4. Write `api/main.py` with the three endpoints; stream with `graph.astream_events(..., version="v2")` and forward `on_chat_model_stream` chunks.
 5. Wire up the tracing callback handler.
