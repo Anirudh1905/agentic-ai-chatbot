@@ -80,7 +80,7 @@ These are defaults, not hard requirements. Each phase doc notes where a swap is 
 | API | FastAPI + Server-Sent Events | |
 | Vector DB | Postgres + pgvector | One database for vectors, checkpoints and memory. Qdrant is a straightforward swap |
 | Embeddings | Voyage AI or an open-source model (e.g. `bge-m3`) | |
-| Web search | Tavily | Brave Search and Exa have similar APIs |
+| Web search | DuckDuckGo via `ddgs` (no API key) | Tavily, Brave Search and Exa return richer snippets but need a key |
 | PII | Microsoft Presidio + spaCy | Add custom recognizers for domain-specific IDs |
 | Tracing | Langfuse (self-hosted) or LangSmith | |
 | Packaging | `uv`, Docker Compose for local infra | |

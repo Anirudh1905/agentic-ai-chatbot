@@ -1,7 +1,8 @@
 from functools import lru_cache
-from typing import Literal
+from pathlib import Path
+from typing import Any, Literal
 
-from pydantic import SecretStr
+from pydantic import SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ReasoningEffort = Literal["none", "minimal", "low", "medium", "high"]
@@ -19,13 +20,45 @@ class Settings(BaseSettings):
     max_tokens: int | None = None
     request_timeout: float = 120.0
 
+    # Cap on LLM <-> tool round trips per request, so a confused model can't loop forever.
+    max_agent_steps: int = 12
+
     database_url: str = "postgresql://chatbot:chatbot@localhost:5433/chatbot"
+
+    embedding_model: str = "text-embedding-3-small"
+    # Must match the vector column in migrations/versions/0001_chunks.py.
+    embedding_dimensions: int = 1536
+    chunk_size_tokens: int = 600
+    chunk_overlap_tokens: int = 80
+    # Candidates fetched from each of vector and full-text search before fusion.
+    retrieval_candidates: int = 30
+    retrieval_top_k: int = 6
+    # Cross-encoder that reorders the fused results (fastembed model name). Empty disables it.
+    # Measured on the golden set: top-1 accuracy 96% -> 100%, about +0.5 s per search on CPU.
+    reranker_model: str | None = "BAAI/bge-reranker-v2-m3-int8"
+    # How many fused results the reranker scores. Latency grows quickly past ~10.
+    rerank_candidates: int = 8
+    reranker_cache_dir: Path = Path.home() / ".cache" / "fastembed"
+
+    # DuckDuckGo via the ddgs package; no API key needed.
+    web_search_enabled: bool = True
+    web_search_max_results: int = 5
+    web_search_timeout: float = 15.0
 
     langfuse_public_key: str | None = None
     langfuse_secret_key: SecretStr | None = None
     langfuse_host: str = "http://localhost:3000"
 
     log_level: str = "INFO"
+
+    @model_validator(mode="before")
+    @classmethod
+    def _empty_means_unset(cls, data: Any) -> Any:
+        # `OPENAI_BASE_URL=` in .env should mean "not set", not an empty URL. RERANKER_MODEL is
+        # the exception: empty there explicitly turns reranking off.
+        if isinstance(data, dict):
+            return {k: v for k, v in data.items() if v != "" or k.lower() == "reranker_model"}
+        return data
 
     @property
     def tracing_enabled(self) -> bool:

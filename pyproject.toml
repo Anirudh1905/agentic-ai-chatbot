@@ -7,13 +7,24 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
+    "alembic>=1.20.0",
+    "ddgs>=9.16.0",
     "fastapi>=0.143.0",
+    "fastembed>=0.9.0",
     "langchain>=1.4.4",
     "langchain-openai>=1.7.0",
+    "langchain-text-splitters>=1.1.3",
     "langfuse>=4.17.0",
     "langgraph>=1.2.14",
+    "markdownify>=1.2.3",
+    "pgvector>=0.5.1",
+    "psycopg[binary,pool]>=3.3.6",
     "pydantic-settings>=2.15.0",
+    "pymupdf>=1.28.2",
+    "python-docx>=1.2.0",
+    "sqlalchemy>=2.1.4",
     "sse-starlette>=3.5.0",
+    "truststore>=0.10.4",
     "uvicorn[standard]>=0.54.0",
 ]
 
@@ -43,15 +54,23 @@ extend-exclude = ["docs"]
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM", "ASYNC"]
 
+[tool.ruff.lint.per-file-ignores]
+# Batch CLI: blocking file access inside async code is fine here.
+"src/chatbot/ingestion/*" = ["ASYNC240"]
+
 [tool.mypy]
 python_version = "3.12"
 strict = true
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
-module = ["sse_starlette.*", "langfuse.*"]
+module = ["sse_starlette.*", "langfuse.*", "ddgs.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+pythonpath = ["tests"]
+markers = ["integration: needs a running Postgres with pgvector (see tests/integration)"]
+# pymupdf's SWIG bindings warn on import under Python 3.12.
+filterwarnings = ["ignore:builtin type .* has no __module__ attribute:DeprecationWarning"]

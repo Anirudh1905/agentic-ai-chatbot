@@ -27,7 +27,7 @@ flowchart TB
     Workers --> PG
 
     API1 & API2 & APIn --> LLMAPI[OpenAI API / gateway]
-    API1 & API2 & APIn --> Tavily[Tavily API]
+    API1 & API2 & APIn --> Search[DuckDuckGo]
     API1 & API2 & APIn --> KMS[KMS<br/>vault keys]
 
     API1 & API2 & APIn -.-> Obs[Langfuse / LangSmith<br/>+ Prometheus + Grafana]
@@ -80,7 +80,7 @@ Add real (masked, consented) production conversations that went wrong to the gol
 - [ ] Cache frequent web search queries (short TTL)
 
 ### Reliability
-- [ ] Retries with backoff and circuit breakers on the LLM, Tavily and embedding calls
+- [ ] Retries with backoff and circuit breakers on the LLM, web search and embedding calls
 - [ ] Fallback model on provider outage
 - [ ] Graceful degradation: web search down → answer from RAG and say so
 - [ ] DB migrations (Alembic) run as a separate deploy step
@@ -89,7 +89,7 @@ Add real (masked, consented) production conversations that went wrong to the gol
 ### Compliance
 - [ ] Data retention policy implemented (checkpoints, vault, memories, audit logs)
 - [ ] "Delete my data" removes threads, checkpoints, vault entries and memories
-- [ ] Data processing records for third parties (OpenAI or the gateway, Tavily, embedding provider)
+- [ ] Data processing records for third parties (OpenAI or the gateway, the web search provider, embedding provider)
 
 ## Exit criteria
 

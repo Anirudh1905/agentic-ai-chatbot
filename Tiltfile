@@ -8,9 +8,32 @@ for name in ['langfuse-worker', 'langfuse-postgres', 'langfuse-clickhouse', 'lan
     dc_resource(name, labels=['langfuse'])
 
 local_resource(
+    'migrate',
+    cmd='uv run alembic upgrade head',
+    deps=['migrations'],
+    resource_deps=['postgres'],
+    labels=['infra'],
+)
+
+local_resource(
+    'ingest-sample',
+    cmd='uv run python -m chatbot.ingestion data/sample --prune',
+    deps=['data/sample'],
+    resource_deps=['migrate'],
+    labels=['infra'],
+)
+
+local_resource(
+    'reranker-model',
+    cmd='uv run python -m chatbot.tools.rerank',
+    labels=['infra'],
+)
+
+local_resource(
     'api',
     serve_cmd='uv run uvicorn chatbot.api.main:app --reload --port 8000',
     deps=['pyproject.toml', 'uv.lock'],
+    resource_deps=['migrate', 'reranker-model'],
     readiness_probe=probe(http_get=http_get_action(port=8000, path='/healthz')),
     links=[link('http://localhost:8000/docs', 'API docs')],
     labels=['app'],
@@ -31,5 +54,14 @@ local_resource(
     cmd='make check',
     auto_init=False,
     trigger_mode=TRIGGER_MODE_MANUAL,
+    labels=['dev'],
+)
+
+local_resource(
+    'evals',
+    cmd='uv run python tests/evals/run.py',
+    auto_init=False,
+    trigger_mode=TRIGGER_MODE_MANUAL,
+    resource_deps=['ingest-sample'],
     labels=['dev'],
 )

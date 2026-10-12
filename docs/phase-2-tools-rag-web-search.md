@@ -9,9 +9,9 @@
 **In scope**
 - Ingestion pipeline: load → clean → chunk → embed → index into pgvector
 - `search_knowledge_base` tool (RAG retrieval with metadata filters)
-- `web_search` tool (Tavily)
+- `web_search` tool (DuckDuckGo via `ddgs`, no API key)
 - Agent loop: LLM ↔ tool node until the model returns a final answer
-- Citations in answers (doc chunk IDs or URLs)
+- Citations in answers (`[Title › Section]` for documents, markdown links for web pages)
 
 **Out of scope:** approval gates (Phase 4), PII filtering of tool inputs (Phase 5).
 
@@ -39,8 +39,8 @@ flowchart TB
     TN --> KB[search_knowledge_base]
     TN --> WS[web_search]
     KB -->|hybrid search| Idx
-    KB --> RR[Reranker<br/>optional]
-    WS --> Tavily[Tavily API]
+    KB --> RR[Reranker<br/>local cross-encoder]
+    WS --> DDG[DuckDuckGo<br/>fallback: ddgs multi-engine]
 ```
 
 ## Tool-use sequence
@@ -63,7 +63,7 @@ sequenceDiagram
     T->>W: query
     W-->>T: results + URLs
     T-->>L: ToolMessage(results)
-    L-->>U: Answer with citations [doc:policy.pdf p.3] [amazon.com/...]
+    L-->>U: Answer with citations [Refund Policy › Sale Items] [Amazon Returns](amazon.com/...)
 ```
 
 The model can also issue both tool calls in one turn. The tool node runs them in parallel.
@@ -76,7 +76,7 @@ The model can also issue both tool calls in one turn. The tool node runs them in
 |------|---------|-------|
 | Load | `unstructured` or `pymupdf` for PDFs, `markdownify` for HTML | Keep page numbers and headings as metadata |
 | Chunk | Recursive splitter on headings → paragraphs → sentences | Store the heading path in each chunk (`"Policies > Refunds > EU"`) so retrieval results make sense on their own |
-| Embed | Voyage `voyage-3` or `bge-m3` | Pin the model version. Changing it means re-embedding everything |
+| Embed | OpenAI `text-embedding-3-small` (1536 dims), through the same endpoint as the chat model | Pin the model version. Changing it means re-embedding everything |
 | Index | pgvector `HNSW` index + Postgres full-text `tsvector` | Both are needed for hybrid search |
 | Dedup | Hash of normalized chunk text | Re-ingesting a doc should be a no-op |
 
@@ -109,7 +109,16 @@ async def search_knowledge_base(query: str, filters: dict | None = None, top_k: 
 ```
 
 - **Hybrid retrieval:** vector similarity + BM25-style full-text, merged with Reciprocal Rank Fusion.
-- **Optional reranker** (Cohere Rerank, `bge-reranker`) over the top ~30 candidates. Usually the biggest quality win per line of code.
+- **Reranker:** a local cross-encoder (`BAAI/bge-reranker-v2-m3-int8` via fastembed/ONNX) rescores the top 8 fused results and the best 6 go to the model. If it fails, the fused order is used. Measured on the golden set (M3 Pro CPU):
+
+  | Setup | recall@1 | MRR | Added latency (p50) |
+  |-------|---:|---:|---:|
+  | Hybrid search only | 96% | 0.98 | none |
+  | + bge-reranker-v2-m3-int8, 8 candidates | 100% | 1.00 | ~0.5 s |
+  | + bge-reranker-v2-m3-int8, 20 candidates | 100% | 1.00 | ~3.8 s |
+  | + MiniLM-L-6 / MiniLM-L-12 / jina-tiny | 86–93% | 0.91–0.96 | 0.3–0.7 s |
+
+  The small English rerankers made ranking worse on this corpus. Cross-encoder latency grows quickly with the candidate count, so keep `RERANK_CANDIDATES` small. Re-run `make eval` (it supports `--no-rerank`) when the corpus changes.
 - Return `content`, `source_uri`, `heading`, `page` and a stable `chunk_id` so the model can cite.
 
 ### `web_search` tool
@@ -121,7 +130,7 @@ async def web_search(query: str, max_results: int = 5) -> list[dict]:
     or anything that changes over time."""
 ```
 
-- Wrap Tavily (`langchain-tavily`), trim each result to title, URL and a snippet of 500–1000 characters.
+- Use DuckDuckGo through `ddgs` (no key). It is fast (about 2 s) but sometimes returns nothing, so fall back to `ddgs`'s `auto` backend, which queries several engines. Drop ad links (`/aclick?`). Snippets are short (about 150 characters); Tavily or Brave give richer content if answer quality needs it.
 - Apply a timeout and retry with backoff. Return a structured error string on failure rather than raising, so the model can recover.
 
 ### Tool descriptions matter
@@ -143,7 +152,7 @@ Set a `recursion_limit` (e.g. 12) on invocation so a confused model can't loop f
 ## Implementation steps
 
 1. Create `chunks` table migration (Alembic).
-2. Build `ingestion/` CLI: `python -m chatbot.ingestion ingest ./data/docs`.
+2. Build `ingestion/` CLI: `python -m chatbot.ingestion ./data/docs [--prune]`.
 3. Implement hybrid search + RRF in `tools/rag.py`; unit-test the fusion logic.
 4. Implement `tools/web_search.py` with timeouts and result trimming.
 5. Add a `tools/registry.py` so Phase 4 can attach approval policies per tool.
@@ -159,8 +168,10 @@ Build a small golden set now (30–50 questions) and keep growing it:
 |--------|-----|
 | Retrieval recall@k | Does the correct chunk appear in the top k? Labelled question → chunk pairs |
 | Tool routing accuracy | For each question, the expected tool(s). Did the agent pick them? |
-| Answer faithfulness | LLM-as-judge (or Ragas): are claims supported by retrieved context? |
-| Citation correctness | Does every cited source actually contain the claim? |
+| Answer faithfulness | LLM-as-judge (or Ragas): are claims supported by retrieved context? Planned for Phase 7 |
+| Citation correctness | Does every cited source actually contain the claim? Planned for Phase 7 |
+
+The golden set lives in `tests/evals/golden.jsonl` and runs with `make eval` (or the `evals` button in Tilt). It scores retrieval recall@k and tool routing. Routing cases for tools that aren't configured, such as `web_search` without a Tavily key, are skipped and reported.
 
 ## Exit criteria
 
