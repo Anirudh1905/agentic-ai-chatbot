@@ -2,8 +2,8 @@ from fakes import ScriptedChatModel, make_lookup_tool, tool_call
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
+from chatbot.agent.builder import build_graph, build_llm
 from chatbot.config import Settings
-from chatbot.graph.builder import build_graph, build_llm
 
 
 async def test_graph_returns_llm_reply() -> None:

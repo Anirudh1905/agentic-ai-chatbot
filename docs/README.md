@@ -101,12 +101,11 @@ These are defaults, not hard requirements. Each phase doc notes where a swap is 
 agentic-ai-chatbot/
 ├── docs/                      # these documents
 ├── src/chatbot/
-│   ├── api/                   # FastAPI routes, SSE streaming, schemas, request logging
-│   ├── graph/                 # builder.py (create_agent), middleware.py, state.py
+│   ├── agent/                 # builder.py (create_agent), middleware.py, approvals.py (HITL rules)
+│   ├── api/                   # routes/, runs.py, streaming.py (SSE), schemas.py, request_logging.py
 │   ├── tools/                 # rag.py, web_search.py, rerank.py, registry.py
 │   ├── ingestion/             # loaders, chunking, indexing CLI
 │   ├── memory/                # threads.py (thread metadata), retention.py; Phase 6: long-term memory
-│   ├── hitl/                  # policy.py (approval rules for HumanInTheLoopMiddleware)
 │   ├── pii/                   # Phase 5: detector, vault, recognizers
 │   ├── prompts/               # system.md, summarize.md
 │   ├── config.py

@@ -8,9 +8,9 @@ from langchain_core.tools import BaseTool, tool
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 
+from chatbot.agent.approvals import interrupt_on, sensitive_reason
+from chatbot.agent.builder import build_graph
 from chatbot.config import Settings
-from chatbot.graph.builder import build_graph
-from chatbot.hitl.policy import interrupt_on, sensitive_reason
 
 CONFIG: RunnableConfig = {"configurable": {"thread_id": "t"}}
 

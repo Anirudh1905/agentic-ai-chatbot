@@ -62,7 +62,7 @@ Each step adds a checkpoint, so `make retention` (run it nightly) keeps only the
 
 ### Approvals (human-in-the-loop)
 
-The agent is LangChain's `create_agent` with middleware, and approvals use its `HumanInTheLoopMiddleware`. Some tool calls wait for a person before they run. A web search sends its query to an outside search engine, so it pauses when the query mentions an internal term (`HITL_SENSITIVE_TERMS`: "confidential", "internal", "Project Falcon", ...) or contains an email address, phone number or order number. Knowledge base searches never pause. Any other tool always pauses, so new tools with side effects are safe by default. The rules are in `src/chatbot/hitl/policy.py`.
+The agent is LangChain's `create_agent` with middleware, and approvals use its `HumanInTheLoopMiddleware`. Some tool calls wait for a person before they run. A web search sends its query to an outside search engine, so it pauses when the query mentions an internal term (`HITL_SENSITIVE_TERMS`: "confidential", "internal", "Project Falcon", ...) or contains an email address, phone number or order number. Knowledge base searches never pause. Any other tool always pauses, so new tools with side effects are safe by default. The rules are in `src/chatbot/agent/approvals.py`.
 
 When a run pauses, the chat UI shows an approval card: approve, edit the query, or reject with a reason the bot sees. The thread waits in Postgres for as long as it takes, across restarts. Over the API, `/chat` returns `pending` (and `/chat/stream` sends an `interrupt` event). `POST /threads/{id}/resume` takes one decision per pending call, in the order of `pending.action_requests`:
 

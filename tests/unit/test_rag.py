@@ -3,8 +3,8 @@ from fakes import ScriptedChatModel, tool_call
 from langchain_core.embeddings import Embeddings
 from langchain_core.messages import AIMessage, HumanMessage
 
+from chatbot.agent.builder import build_graph
 from chatbot.config import Settings
-from chatbot.graph.builder import build_graph
 from chatbot.tools import web_search
 from chatbot.tools.rag import (
     SearchHit,

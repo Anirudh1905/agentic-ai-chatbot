@@ -9,7 +9,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage
 from langchain_core.tools import BaseTool, tool
 
-from chatbot.hitl.policy import interrupt_on
+from chatbot.agent.approvals import interrupt_on
 
 REASON = 'The query mentions "internal", which may be internal information.'
 

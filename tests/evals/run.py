@@ -17,10 +17,10 @@ from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage
 
+from chatbot.agent.builder import build_graph
 from chatbot.config import get_settings
 from chatbot.db import open_pool
 from chatbot.embeddings import build_embeddings
-from chatbot.graph.builder import build_graph
 from chatbot.tools.rag import retrieve
 from chatbot.tools.registry import build_tools
 from chatbot.tools.rerank import build_reranker

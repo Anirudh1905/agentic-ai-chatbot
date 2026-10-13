@@ -153,7 +153,7 @@ The output guard needs whole placeholders to unmask, but tokens arrive in fragme
 3. Add the three guards as middleware: `PIIMiddleware` instances (with a Presidio `detector`) for detection, plus a small vault middleware for reversible placeholders.
 4. Add a tracing callback that redacts before export.
 5. Add the stream buffer for placeholder unmasking.
-6. Hook PII-in-external-tool-args into the Phase 4 approval rule (`hitl/policy.py`).
+6. Hook PII-in-external-tool-args into the Phase 4 approval rule (`agent/approvals.py`).
 7. Add the PII config (entity types, thresholds, `PII_MASK_FOR_LLM`).
 
 ## Evaluation

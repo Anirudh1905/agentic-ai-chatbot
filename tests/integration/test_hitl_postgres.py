@@ -12,10 +12,10 @@ from langchain_core.tools import BaseTool, tool
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.types import Command
 
+from chatbot.agent.approvals import interrupt_on
+from chatbot.agent.builder import build_graph
 from chatbot.config import Settings
 from chatbot.db import Pool, open_pool
-from chatbot.graph.builder import build_graph
-from chatbot.hitl.policy import interrupt_on
 
 pytestmark = pytest.mark.integration
 

@@ -75,7 +75,7 @@ With the Phase 4 middleware there are a few more steps per round trip (one per m
 
 ## Context-window management
 
-Messages grow without limit, but the context window doesn't. Older turns are folded into a running summary by LangChain's `SummarizationMiddleware`, configured and slightly adjusted in `src/chatbot/graph/middleware.py`:
+Messages grow without limit, but the context window doesn't. Older turns are folded into a running summary by LangChain's `SummarizationMiddleware`, configured and slightly adjusted in `src/chatbot/agent/middleware.py`:
 
 ```mermaid
 flowchart LR
@@ -104,7 +104,7 @@ Summarization(                       # subclass of SummarizationMiddleware
 - **What the summarizer is told** (`prompts/summarize.md`): keep names, numbers, dates, order IDs and decisions verbatim, keep answers with their citations, and treat the messages as data.
 - **Only the agent's reply is streamed.** `stream_run` forwards tokens from the `model` node only, so the summarizer's output never reaches the client.
 
-**Three adjustments to the built-in**, each covered by a test in `tests/unit/test_short_term.py`:
+**Three adjustments to the built-in**, each covered by a test in `tests/unit/test_summarization.py`:
 
 | Built-in behaviour | Problem | Adjustment |
 |--------------------|---------|------------|
@@ -155,7 +155,7 @@ Checkpoints pile up quickly (one per step, several per turn). Two mechanisms:
 
 ### Debugging and observability
 
-- **Logs.** One line per request, plus what each turn did, each tagged with the request ID and thread (`ContextFilter` in `observability.py`, `RequestLoggingMiddleware` in `api/middleware.py`). `grep thread=<first 8 chars>` follows a conversation:
+- **Logs.** One line per request, plus what each turn did, each tagged with the request ID and thread (`ContextFilter` in `observability.py`, `RequestLoggingMiddleware` in `api/request_logging.py`). `grep thread=<first 8 chars>` follows a conversation:
 
   ```text
   chatbot.api.routes.chat  [req=daf6ce1f thread=ee996bd2]: continuing thread, message of 28 chars

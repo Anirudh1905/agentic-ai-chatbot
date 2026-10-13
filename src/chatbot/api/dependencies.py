@@ -9,12 +9,11 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.graph.state import CompiledStateGraph
 
+from chatbot.agent.approvals import interrupt_on
+from chatbot.agent.builder import AgentState, build_graph
 from chatbot.config import get_settings
 from chatbot.db import Pool, open_pool
 from chatbot.embeddings import build_embeddings
-from chatbot.graph.builder import build_graph
-from chatbot.graph.state import AgentState
-from chatbot.hitl.policy import interrupt_on
 from chatbot.memory.threads import PostgresThreadStore, ThreadStore
 from chatbot.observability import build_callbacks
 from chatbot.tools.registry import build_tools

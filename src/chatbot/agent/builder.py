@@ -1,6 +1,7 @@
 from collections.abc import Sequence
 from typing import Any, cast
 
+from langchain.agents import AgentState as _AgentState
 from langchain.agents import create_agent
 from langchain.agents.middleware import (
     AgentMiddleware,
@@ -14,10 +15,12 @@ from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph.state import CompiledStateGraph
 
+from chatbot.agent.middleware import ModelCallMiddleware, summarization, system_prompt
 from chatbot.config import Settings
-from chatbot.graph.middleware import ModelCallMiddleware, summarization, system_prompt
-from chatbot.graph.state import AgentState
 from chatbot.tools.registry import tool_retry
+
+# create_agent's state: the messages, plus a few internal keys its middleware uses.
+AgentState = _AgentState[Any]
 
 # The node that calls the chat model in create_agent's graph. Its tokens are the reply.
 MODEL_NODE = "model"

@@ -62,7 +62,7 @@ sequenceDiagram
 ### Agent
 
 ```python
-# src/chatbot/graph/builder.py (Phase 1 subset)
+# src/chatbot/agent/builder.py (Phase 1 subset)
 def build_llm(settings: Settings) -> ChatOpenAI:
     return ChatOpenAI(
         model=settings.model,
@@ -78,14 +78,14 @@ def build_graph(settings, tools=(), llm=None, ...):
 ```
 
 ```python
-# src/chatbot/graph/middleware.py
+# src/chatbot/agent/middleware.py
 @dynamic_prompt
 def system_prompt(_request: ModelRequest) -> str:
     return load_prompt("system").replace("{today}", date.today().isoformat())
 ```
 
 - `build_graph` is a factory that takes its dependencies (settings, and later tools, a checkpointer and approval rules). Tests pass a fake chat model.
-- The state is `create_agent`'s `AgentState`: the message list, plus internal keys its middleware uses (`graph/state.py`).
+- The state is `create_agent`'s `AgentState`: the message list, plus internal keys its middleware uses (`agent/builder.py`).
 - The system prompt lives in `src/chatbot/prompts/system.md`, not in code.
 
 ### API
@@ -120,13 +120,13 @@ LOG_LEVEL=INFO
 
 ### Logging
 
-Every log line carries the request ID and thread (`observability.py`, `api/middleware.py`), and each model call logs its time and token counts. HTTP client and access logs only show with `LOG_LEVEL=DEBUG`.
+Every log line carries the request ID and thread (`observability.py`, `api/request_logging.py`), and each model call logs its time and token counts. HTTP client and access logs only show with `LOG_LEVEL=DEBUG`.
 
 ## Implementation steps
 
 1. `uv init`, add deps: `langchain`, `langgraph`, `langchain-openai`, `fastapi`, `uvicorn`, `sse-starlette`, `pydantic-settings`, `langfuse`.
 2. Add `docker-compose.yml` with `pgvector/pgvector:pg16`, plus a self-hosted Langfuse stack (`docker-compose.langfuse.yml`).
-3. Write `config.py`, `graph/builder.py`, `graph/middleware.py`.
+3. Write `config.py`, `agent/builder.py`, `agent/middleware.py`.
 4. Write the API with the three endpoints; stream with `agent.astream_events(..., version="v2")` and forward `on_chat_model_stream` chunks from the `model` node.
 5. Wire up the tracing callback handler.
 6. Add a `Makefile` with `dev`, `test`, `lint`, `up`, and a Tiltfile.
@@ -135,7 +135,7 @@ Every log line carries the request ID and thread (`observability.py`, `api/middl
 
 - [x] `curl -N localhost:8000/chat/stream -H 'X-User-Id: me' -d '{"message":"hi"}'` streams tokens (`test_chat_stream_emits_tokens_then_done`)
 - [x] Every request shows up as a trace with token counts (Langfuse; token counts also in the API log)
-- [x] Unit test runs the agent with a fake chat model and no network (`tests/unit/test_graph.py`)
+- [x] Unit test runs the agent with a fake chat model and no network (`tests/unit/test_agent.py`)
 - [x] CI runs lint, type check and tests (`.github/workflows/ci.yml`)
 
 ## Risks and notes

@@ -280,7 +280,7 @@ def test_requests_are_logged_with_request_and_thread_ids(
     thread = resp.json()["thread_id"][:8]
     lines = [f"{r.name}{r.ctx}: {r.getMessage()}" for r in caplog.records]  # type: ignore[attr-defined]
     assert any(
-        line.startswith(f"chatbot.graph.middleware [req=abc123 thread={thread}]: model replied")
+        line.startswith(f"chatbot.agent.middleware [req=abc123 thread={thread}]: model replied")
         for line in lines
     )
     assert any(

@@ -1,53 +1,23 @@
 import logging
-from typing import Any
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, HTTPException, status
-from langchain_core.callbacks import BaseCallbackHandler
-from langchain_core.messages import AnyMessage, HumanMessage, ToolMessage
-from langchain_core.runnables import RunnableConfig
+from langchain_core.messages import HumanMessage
 from langgraph.graph.state import CompiledStateGraph
 from sse_starlette.sse import EventSourceResponse
 
+from chatbot.agent.approvals import pending_request
+from chatbot.agent.builder import AgentState
 from chatbot.api.dependencies import Callbacks, Graph, Threads, UserId
+from chatbot.api.runs import chat_response, run_config, thread_config
 from chatbot.api.schemas import ChatRequest, ChatResponse
-from chatbot.api.streaming import pending_request, stream_run
-from chatbot.graph.state import AgentState
+from chatbot.api.streaming import stream_run
 from chatbot.memory.threads import ThreadStore, make_title
 from chatbot.observability import thread_id as thread_id_var
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/chat", tags=["chat"])
-
-
-def run_config(
-    thread_id: UUID, callbacks: list[BaseCallbackHandler], checkpoint_id: str | None = None
-) -> RunnableConfig:
-    configurable: dict[str, Any] = {"thread_id": str(thread_id)}
-    if checkpoint_id:
-        configurable["checkpoint_id"] = checkpoint_id
-    return {
-        "configurable": configurable,
-        "callbacks": callbacks,
-    }
-
-
-def current_turn(messages: list[AnyMessage]) -> list[AnyMessage]:
-    """Messages after the last user message: this turn's tool calls, results and reply."""
-    for i in range(len(messages) - 1, -1, -1):
-        if isinstance(messages[i], HumanMessage):
-            return messages[i + 1 :]
-    return messages
-
-
-def collect_sources(messages: list[AnyMessage]) -> list[dict[str, Any]]:
-    return [
-        source
-        for m in current_turn(messages)
-        if isinstance(m, ToolMessage) and m.artifact
-        for source in m.artifact
-    ]
 
 
 async def open_thread(
@@ -73,28 +43,6 @@ async def open_thread(
         len(body.message),
     )
     return thread_id
-
-
-def thread_config(thread_id: UUID) -> RunnableConfig:
-    return {"configurable": {"thread_id": str(thread_id)}}
-
-
-async def chat_response(
-    graph: CompiledStateGraph[AgentState], result: dict[str, Any], thread_id: UUID
-) -> ChatResponse:
-    pending = pending_request(await graph.aget_state(thread_config(thread_id)))
-    if pending:
-        logger.info(
-            "paused for approval: %s",
-            "; ".join(f"{a['name']}({a['args']})" for a in pending["action_requests"]),
-        )
-    return ChatResponse(
-        # While paused, the last message is the model's tool call, not an answer.
-        reply="" if pending else result["messages"][-1].text,
-        thread_id=thread_id,
-        sources=collect_sources(result["messages"]),
-        pending=pending,
-    )
 
 
 @router.post("")

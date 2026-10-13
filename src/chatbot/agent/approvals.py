@@ -9,6 +9,7 @@ from langchain.agents.middleware.pii import detect_credit_card, detect_email
 from langchain_core.messages import ToolCall
 from langchain_core.tools import BaseTool
 from langgraph.runtime import Runtime
+from langgraph.types import StateSnapshot
 
 # Phone and order numbers have no built-in LangChain detector.
 PHONE = re.compile(r"(?<!\w)\+?\d[\d ().-]{7,}\d(?!\w)")
@@ -72,3 +73,11 @@ def interrupt_on(
                 description=f"{tool.name} always needs approval.",
             )
     return config
+
+
+def pending_request(state: StateSnapshot) -> dict[str, Any] | None:
+    """The approval request a paused thread is waiting on, or None."""
+    for pending in state.interrupts:
+        if isinstance(pending.value, dict) and "action_requests" in pending.value:
+            return pending.value
+    return None

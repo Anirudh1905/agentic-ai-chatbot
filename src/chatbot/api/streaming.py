@@ -9,25 +9,17 @@ from uuid import UUID
 from langchain_core.messages import AIMessageChunk, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph.state import CompiledStateGraph
-from langgraph.types import Command, StateSnapshot
+from langgraph.types import Command
 
+from chatbot.agent.approvals import pending_request
+from chatbot.agent.builder import MODEL_NODE, AgentState
 from chatbot.api.schemas import StreamEvent
-from chatbot.graph.builder import MODEL_NODE
-from chatbot.graph.state import AgentState
 
 logger = logging.getLogger(__name__)
 
 
 def sse(event: StreamEvent, data: dict[str, Any]) -> dict[str, str]:
     return {"event": event, "data": json.dumps(data, default=str)}
-
-
-def pending_request(state: StateSnapshot) -> dict[str, Any] | None:
-    """The approval request a paused thread is waiting on, or None."""
-    for pending in state.interrupts:
-        if isinstance(pending.value, dict) and "action_requests" in pending.value:
-            return pending.value
-    return None
 
 
 async def stream_run(

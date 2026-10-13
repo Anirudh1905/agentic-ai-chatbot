@@ -13,10 +13,10 @@ from langchain_core.messages import AIMessage
 from langchain_core.tools import BaseTool
 from langgraph.checkpoint.memory import InMemorySaver
 
+from chatbot.agent.builder import build_graph
 from chatbot.api.dependencies import get_callbacks, get_checkpointer, get_graph, get_threads
 from chatbot.api.main import app
 from chatbot.config import Settings
-from chatbot.graph.builder import build_graph
 
 ALICE = {"X-User-Id": "alice"}
 BOB = {"X-User-Id": "bob"}

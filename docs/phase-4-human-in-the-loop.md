@@ -6,7 +6,7 @@
 
 ## In one paragraph
 
-The agent is LangChain's `create_agent`, and approvals use its built-in **`HumanInTheLoopMiddleware`**. After each model call, the middleware checks the requested tool calls against our rules (`hitl/policy.py`). If any match, it calls LangGraph's `interrupt()`, which saves the thread to the Postgres checkpointer and stops the run. The API returns the pending calls (or sends an `interrupt` SSE event), and the UI shows an approval card. When the human decides, the client calls `/resume` with one decision per pending call, and the API resumes the agent with `Command(resume={"decisions": [...]})`. The middleware then runs approved calls, runs edited calls with the new args, and answers rejected calls with a "user rejected" message.
+The agent is LangChain's `create_agent`, and approvals use its built-in **`HumanInTheLoopMiddleware`**. After each model call, the middleware checks the requested tool calls against our rules (`agent/approvals.py`). If any match, it calls LangGraph's `interrupt()`, which saves the thread to the Postgres checkpointer and stops the run. The API returns the pending calls (or sends an `interrupt` SSE event), and the UI shows an approval card. When the human decides, the client calls `/resume` with one decision per pending call, and the API resumes the agent with `Command(resume={"decisions": [...]})`. The middleware then runs approved calls, runs edited calls with the new args, and answers rejected calls with a "user rejected" message.
 
 ## When to interrupt
 
@@ -23,16 +23,17 @@ This phase builds **tool approval**. Clarification and low-confidence pauses can
 
 | File | What it does |
 |------|--------------|
-| `src/chatbot/hitl/policy.py` | The approval rules: `sensitive_reason` and `interrupt_on(tools, terms)`, the middleware's config |
-| `src/chatbot/graph/builder.py` | Adds `HumanInTheLoopMiddleware(interrupt_on)` to the agent |
-| `src/chatbot/api/streaming.py` | `pending_request(state)`; the `interrupt` SSE event |
-| `src/chatbot/api/routes/chat.py` | 409 on paused threads; `pending` in responses |
+| `src/chatbot/agent/approvals.py` | The approval rules (`sensitive_reason`, `interrupt_on(tools, terms)`, the middleware's config), and `pending_request(state)`, which reads a paused thread's request |
+| `src/chatbot/agent/builder.py` | Adds `HumanInTheLoopMiddleware(interrupt_on)` to the agent |
+| `src/chatbot/api/streaming.py` | The `interrupt` SSE event |
+| `src/chatbot/api/runs.py` | `chat_response`: `pending` in responses, empty `reply` while paused |
+| `src/chatbot/api/routes/chat.py` | 409 on paused threads |
 | `src/chatbot/api/routes/threads.py` | Decisions on `/resume`, `/resume/stream`, `pending` in `/messages` |
 | `src/chatbot/api/schemas.py` | `pending`, `Decision` (an edit must carry `edited_action`), `decisions` on `ResumeRequest` |
 | `src/chatbot/api/dependencies.py`, `config.py` | Build `interrupt_on` from `HITL_ENABLED` and `HITL_SENSITIVE_TERMS` |
 | `ui/app.py` | The approval card |
 
-## The rules: `hitl/policy.py`
+## The rules: `agent/approvals.py`
 
 `sensitive_reason(query, terms)` returns why a web query could leak information, or `None`. A web query goes to a third-party search engine, so these are the checks:
 
@@ -76,7 +77,7 @@ flowchart TB
 ```
 
 ```python
-# src/chatbot/graph/builder.py
+# src/chatbot/agent/builder.py
 middleware = [
     summarization(settings, summary_model),   # SummarizationMiddleware, adjusted (Phase 3)
     system_prompt,                            # @dynamic_prompt: today's date
@@ -175,7 +176,7 @@ def pending_request(state: StateSnapshot) -> dict[str, Any] | None:
 It's used in four places:
 
 - `stream_run`, after the agent finishes: sends `interrupt` before `done`, and `done` carries `pending: true/false`
-- `chat_response`, after `/chat` and `/resume`: sets `pending`, and `reply` is empty while paused
+- `chat_response` (`api/runs.py`), after `/chat` and `/resume`: sets `pending`, and `reply` is empty while paused
 - `open_thread`, before a new message: a paused thread is a 409, since a new message would leave the pending calls without results
 - `GET /threads/{id}/messages`, so a client can rebuild the card after a reload
 
@@ -249,7 +250,7 @@ The plan was an `hitl_events` table: `thread_id, user_id, tool, original_args, f
 
 | Test file | Covers |
 |-----------|--------|
-| `tests/unit/test_hitl.py` | `sensitive_reason` cases; the `interrupt_on` config; the agent: safe call runs, sensitive call pauses, approve, edit, reject, mixed parallel decisions. Each run checks that every tool call the model is sent has exactly one result |
+| `tests/unit/test_approvals.py` | `sensitive_reason` cases; the `interrupt_on` config; the agent: safe call runs, sensitive call pauses, approve, edit, reject, mixed parallel decisions. Each run checks that every tool call the model is sent has exactly one result |
 | `tests/unit/test_api_hitl.py` | Over HTTP: `pending` in `/chat` and `/messages`, the `interrupt` SSE event, 409s, 422s, approve/edit/reject via `/resume` and `/resume/stream`, mixed decisions, other users get 404 |
 | `tests/integration/test_hitl_postgres.py` | A pending approval survives a restart (new pool, saver and agent) and resumes |
 

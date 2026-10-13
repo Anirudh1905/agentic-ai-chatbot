@@ -4,8 +4,8 @@ import pytest
 from fakes import ScriptedChatModel, tool_call
 from langchain_core.messages import AIMessage, HumanMessage
 
+from chatbot.agent.builder import build_graph
 from chatbot.config import Settings
-from chatbot.graph.builder import build_graph
 from chatbot.tools import web_search as web_search_module
 from chatbot.tools.web_search import build_web_search_tool, format_results
 

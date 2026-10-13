@@ -18,10 +18,9 @@ from langchain_core.tools import BaseTool
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.graph.state import CompiledStateGraph
 
+from chatbot.agent.builder import AgentState, build_graph
 from chatbot.config import Settings
 from chatbot.db import Pool, open_pool
-from chatbot.graph.builder import build_graph
-from chatbot.graph.state import AgentState
 from chatbot.memory.retention import prune_checkpoints
 from chatbot.memory.threads import PostgresThreadStore
 
@@ -99,7 +98,7 @@ KILLED_RUN = textwrap.dedent("""
     from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
     from chatbot.config import Settings
     from chatbot.db import open_pool
-    from chatbot.graph.builder import build_graph
+    from chatbot.agent.builder import build_graph
 
     @tool
     async def lookup(query: str) -> str:
