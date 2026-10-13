@@ -96,7 +96,7 @@ def system_prompt(_request: ModelRequest) -> str:
 | `POST /chat/stream` | SSE stream: `token` events, then `done` (or `error`) |
 | `GET /healthz` | Liveness |
 
-`stream_run` (`api/streaming.py`) forwards `on_chat_model_stream` events from the `model` node as `token` events. The SSE event types were defined up front (`token`, `tool_start`, `tool_end`, `interrupt`, `done`, `error`), so later phases added events without changing the contract.
+`stream_run` (`api/streaming.py`) forwards `on_chat_model_stream` events from the `model` node as `token` events. Since Phase 5 they pass through `StreamRedactor` first, which redacts PII and holds back the last 128 characters, so short replies arrive in one piece. The SSE event types were defined up front (`token`, `tool_start`, `tool_end`, `interrupt`, `done`, `error`), so later phases added events without changing the contract.
 
 ### Config
 

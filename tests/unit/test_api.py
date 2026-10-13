@@ -85,8 +85,18 @@ def test_chat_stream_emits_tokens_then_done(client: TestClient) -> None:
     assert events[-1][0] == "done" and events[-1][1]["pending"] is False
     uuid.UUID(str(events[-1][1]["thread_id"]))
     tokens = [data["token"] for name, data in events if name == "token"]
-    assert len(tokens) > 1
     assert "".join(tokens) == "hello from the bot"
+
+
+def test_long_replies_stream_in_pieces() -> None:
+    # PII redaction holds back the last 128 characters; anything before that streams.
+    reply = " ".join(f"word{i}" for i in range(80))
+    with client_for(scripted(reply)) as c:
+        events = parse_sse(c.post("/chat/stream", json={"message": "hi"}).text)
+
+    tokens = [str(data["token"]) for name, data in events if name == "token"]
+    assert len(tokens) > 10
+    assert "".join(tokens) == reply
 
 
 def test_chat_stream_reports_errors() -> None:
@@ -296,3 +306,33 @@ def test_health_probes_are_not_logged_at_info(
     caplog.set_level(logging.INFO)
     client.get("/healthz")
     assert not [r for r in caplog.records if "/healthz" in r.getMessage()]
+
+
+def test_thread_title_is_redacted_and_logged_without_values(
+    client: TestClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO)
+
+    client.post("/chat", json={"message": "hi, I'm jane@example.com"})
+
+    assert client.get("/threads").json()[0]["title"] == "hi, I'm [REDACTED_EMAIL]"
+    assert "redacted PII from the message: email" in caplog.text
+    assert "jane@example.com" not in caplog.text
+
+
+def test_several_tool_rounds_fit_in_the_step_limit() -> None:
+    # Each round is many graph steps (one per middleware hook); LangGraph's default limit of
+    # 25 used to end a run like this with GraphRecursionError.
+    llm = scripted(
+        tool_call("lookup", call_id="a", query="one"),
+        tool_call("lookup", call_id="b", query="two"),
+        tool_call("lookup", call_id="c", query="three"),
+        "Done after three searches.",
+    )
+    with client_for(llm, [make_lookup_tool()]) as c:
+        events = parse_sse(c.post("/chat/stream", json={"message": "dig deep"}).text)
+
+    assert events[-1][0] == "done"
+    assert (
+        "".join(str(d["token"]) for n, d in events if n == "token") == "Done after three searches."
+    )

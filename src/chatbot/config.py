@@ -59,6 +59,13 @@ class Settings(BaseSettings):
     web_search_max_results: int = 5
     web_search_timeout: float = 15.0
 
+    # Redact emails, card numbers, IPs and phone numbers: from user messages before the agent
+    # runs, and from tool results and replies inside it (pii.py).
+    pii_enabled: bool = True
+    # Emails at these domains are never redacted: Acme's own contact addresses must reach
+    # customers. JSON list in .env.
+    pii_allowed_email_domains: list[str] = ["acme-outfitters.example"]
+
     # Human approval before risky tool calls (see hitl/policy.py).
     hitl_enabled: bool = True
     # Web searches mentioning any of these (whole words, any case) wait for approval, since the

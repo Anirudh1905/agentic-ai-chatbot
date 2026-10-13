@@ -7,7 +7,6 @@ from langchain.agents.middleware import (
     AgentMiddleware,
     HumanInTheLoopMiddleware,
     InterruptOnConfig,
-    ModelCallLimitMiddleware,
 )
 from langchain_core.language_models import BaseChatModel
 from langchain_core.tools import BaseTool
@@ -15,12 +14,25 @@ from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph.state import CompiledStateGraph
 
-from chatbot.agent.middleware import ModelCallMiddleware, summarization, system_prompt
+from chatbot.agent.middleware import (
+    ModelCallLimit,
+    ModelCallMiddleware,
+    summarization,
+    system_prompt,
+)
 from chatbot.config import Settings
+from chatbot.pii import output_middleware
 from chatbot.tools.registry import tool_retry
 
 # create_agent's state: the messages, plus a few internal keys its middleware uses.
 AgentState = _AgentState[Any]
+
+# Graph steps per run, passed in every run's config. ModelCallLimitMiddleware is the real cap
+# (MAX_MODEL_CALLS); this is a backstop. Each model/tool round is many steps, one per
+# middleware hook (the four PIIMiddleware instances alone add eight), so LangGraph's default
+# of 25 would stop a run after two rounds. Setting it with agent.with_config() doesn't work:
+# a run's own config replaces it.
+RECURSION_LIMIT = 200
 
 # The node that calls the chat model in create_agent's graph. Its tokens are the reply.
 MODEL_NODE = "model"
@@ -57,17 +69,17 @@ def build_graph(
     model = llm or build_llm(settings)
     summary_model = summarizer or llm or build_llm(settings, settings.summary_model, False)
     middleware: list[AgentMiddleware[Any, Any]] = [
+        # PII in tool results and replies (user messages are redacted earlier, by the API).
+        *(output_middleware() if settings.pii_enabled else []),
         summarization(settings, summary_model),
         system_prompt,
         ModelCallMiddleware(),
         # Ends the run with a short message rather than an error if the model keeps going.
-        ModelCallLimitMiddleware(run_limit=settings.max_model_calls, exit_behavior="end"),
+        ModelCallLimit(run_limit=settings.max_model_calls, exit_behavior="end"),
     ]
     if retry := tool_retry(tools):
         middleware.append(retry)
     if interrupt_on:
         middleware.append(HumanInTheLoopMiddleware(interrupt_on))
     agent = create_agent(model, tools=list(tools), middleware=middleware, checkpointer=checkpointer)
-    # ModelCallLimitMiddleware is the real cap. Each round trip is several graph steps (one
-    # per middleware hook), so LangGraph's default limit of 25 would cut in first.
-    return cast(CompiledStateGraph[AgentState], agent.with_config(recursion_limit=100))
+    return cast(CompiledStateGraph[AgentState], agent)

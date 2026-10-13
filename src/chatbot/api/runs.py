@@ -1,5 +1,5 @@
-"""Shared by the chat and thread routes: run config for the agent, and turning a finished run
-into a response."""
+"""Shared by the chat and thread routes: redacting what the user types, run config for the
+agent, and turning a finished run into a response."""
 
 import logging
 from typing import Any
@@ -11,8 +11,10 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.graph.state import CompiledStateGraph
 
 from chatbot.agent.approvals import pending_request
-from chatbot.agent.builder import AgentState
+from chatbot.agent.builder import RECURSION_LIMIT, AgentState
 from chatbot.api.schemas import ChatResponse
+from chatbot.config import get_settings
+from chatbot.pii import redact_pii
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +28,7 @@ def run_config(
     return {
         "configurable": configurable,
         "callbacks": callbacks,
+        "recursion_limit": RECURSION_LIMIT,
     }
 
 
@@ -66,3 +69,13 @@ async def chat_response(
         sources=collect_sources(result["messages"]),
         pending=pending,
     )
+
+
+def redact(text: str) -> str:
+    """The user's text with their PII redacted, before anything stores or sends it."""
+    if not get_settings().pii_enabled:
+        return text
+    redacted, found = redact_pii(text)
+    if found:
+        logger.info("redacted PII from the message: %s", ", ".join(sorted(set(found))))
+    return redacted

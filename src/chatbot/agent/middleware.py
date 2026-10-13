@@ -9,10 +9,12 @@ from typing import Any
 from langchain.agents.middleware import (
     AgentMiddleware,
     AgentState,
+    ModelCallLimitMiddleware,
     ModelRequest,
     ModelResponse,
     SummarizationMiddleware,
     dynamic_prompt,
+    hook_config,
 )
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, ToolMessage
@@ -99,6 +101,20 @@ def summarization(settings: Settings, model: BaseChatModel) -> Summarization:
 @dynamic_prompt
 def system_prompt(_request: ModelRequest) -> str:
     return load_prompt("system").replace("{today}", date.today().isoformat())
+
+
+class ModelCallLimit(ModelCallLimitMiddleware):
+    """ModelCallLimitMiddleware that logs when it stops a run. A model that keeps calling
+    tools without answering is a bug worth seeing in the logs."""
+
+    @hook_config(can_jump_to=["end"])
+    async def abefore_model(
+        self, state: AgentState[Any], runtime: Runtime[Any]
+    ) -> dict[str, Any] | None:
+        update = await super().abefore_model(state, runtime)  # type: ignore[arg-type]
+        if update and update.get("jump_to") == "end":
+            logger.warning("stopped the run: %s", update["messages"][0].text)
+        return update
 
 
 def close_dangling_tool_calls(messages: list[AnyMessage]) -> list[AnyMessage]:

@@ -14,7 +14,7 @@ from chatbot.agent.approvals import pending_request
 from chatbot.agent.builder import AgentState
 from chatbot.agent.middleware import summary_text
 from chatbot.api.dependencies import Callbacks, Checkpointer, Graph, Threads, UserId
-from chatbot.api.runs import chat_response, run_config
+from chatbot.api.runs import chat_response, redact, run_config
 from chatbot.api.schemas import (
     ChatMessage,
     ChatResponse,
@@ -174,10 +174,19 @@ async def prepare_resume(
         )
         decisions = [d.model_dump(exclude_none=True) for d in body.decisions]
         for d in decisions:
+            # The reviewer's text goes into the thread too, so it's redacted like a message.
+            if d["type"] == "edit":
+                args = d["edited_action"]["args"]
+                d["edited_action"]["args"] = {
+                    k: redact(v) if isinstance(v, str) else v for k, v in args.items()
+                }
             if d["type"] == "reject" and d.get("message"):
                 # The middleware sends "User rejected the tool call ... with reason: <message>".
                 # A bare reason like "no" reads as the tool failing; say it was a choice.
-                d["message"] += ". It was not run; don't retry it, and answer without it."
+                d["message"] = (
+                    redact(d["message"])
+                    + ". It was not run; don't retry it, and answer without it."
+                )
         return config, Command(resume={"decisions": decisions})
     if body.decisions:
         raise HTTPException(status.HTTP_409_CONFLICT, "Nothing in this thread needs approval")

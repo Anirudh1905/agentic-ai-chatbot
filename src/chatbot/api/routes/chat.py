@@ -9,7 +9,7 @@ from sse_starlette.sse import EventSourceResponse
 from chatbot.agent.approvals import pending_request
 from chatbot.agent.builder import AgentState
 from chatbot.api.dependencies import Callbacks, Graph, Threads, UserId
-from chatbot.api.runs import chat_response, run_config, thread_config
+from chatbot.api.runs import chat_response, redact, run_config, thread_config
 from chatbot.api.schemas import ChatRequest, ChatResponse
 from chatbot.api.streaming import stream_run
 from chatbot.memory.threads import ThreadStore, make_title
@@ -22,10 +22,12 @@ router = APIRouter(prefix="/chat", tags=["chat"])
 
 async def open_thread(
     body: ChatRequest, user_id: str, threads: ThreadStore, graph: CompiledStateGraph[AgentState]
-) -> UUID:
+) -> tuple[UUID, str]:
+    """The thread to run in, and the message to send it (redacted)."""
     thread_id = body.thread_id or uuid4()
     thread_id_var.set(str(thread_id))
-    thread = await threads.claim(thread_id, user_id, make_title(body.message))
+    message = redact(body.message)
+    thread = await threads.claim(thread_id, user_id, make_title(message))
     if thread is None:
         logger.warning("user %s tried to post to a thread they don't own", user_id)
         # 404, not 403: don't confirm that someone else's thread exists.
@@ -42,16 +44,16 @@ async def open_thread(
         "new" if thread.created_at == thread.updated_at else "continuing",
         len(body.message),
     )
-    return thread_id
+    return thread_id, message
 
 
 @router.post("")
 async def chat(
     body: ChatRequest, graph: Graph, threads: Threads, user_id: UserId, callbacks: Callbacks
 ) -> ChatResponse:
-    thread_id = await open_thread(body, user_id, threads, graph)
+    thread_id, message = await open_thread(body, user_id, threads, graph)
     result = await graph.ainvoke(
-        {"messages": [HumanMessage(body.message)]}, config=run_config(thread_id, callbacks)
+        {"messages": [HumanMessage(message)]}, config=run_config(thread_id, callbacks)
     )
     return await chat_response(graph, result, thread_id)
 
@@ -60,11 +62,11 @@ async def chat(
 async def chat_stream(
     body: ChatRequest, graph: Graph, threads: Threads, user_id: UserId, callbacks: Callbacks
 ) -> EventSourceResponse:
-    thread_id = await open_thread(body, user_id, threads, graph)
+    thread_id, message = await open_thread(body, user_id, threads, graph)
     return EventSourceResponse(
         stream_run(
             graph,
-            {"messages": [HumanMessage(body.message)]},
+            {"messages": [HumanMessage(message)]},
             run_config(thread_id, callbacks),
             thread_id,
         )
