@@ -3,10 +3,18 @@ from typing import Annotated, Any
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, HTTPException, Query, Response, status
+from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, ToolMessage
+from langchain_core.runnables import RunnableConfig
+from langgraph.graph.state import CompiledStateGraph
+from langgraph.types import Command
+from sse_starlette.sse import EventSourceResponse
 
+from chatbot.agent.approvals import pending_request
+from chatbot.agent.builder import AgentState
+from chatbot.agent.middleware import summary_text
 from chatbot.api.dependencies import Callbacks, Checkpointer, Graph, Threads, UserId
-from chatbot.api.routes.chat import collect_sources, run_config
+from chatbot.api.runs import chat_response, run_config
 from chatbot.api.schemas import (
     ChatMessage,
     ChatResponse,
@@ -16,6 +24,7 @@ from chatbot.api.schemas import (
     ThreadInfo,
     ThreadMessages,
 )
+from chatbot.api.streaming import stream_run
 from chatbot.memory.threads import Thread, ThreadStore
 from chatbot.observability import thread_id as thread_id_var
 
@@ -49,6 +58,8 @@ def to_chat_messages(messages: list[AnyMessage]) -> list[ChatMessage]:
     tools: list[str] = []
     sources: list[dict[str, Any]] = []
     for m in messages:
+        if summary_text(m) is not None:
+            continue  # shown separately as ThreadMessages.summary
         if isinstance(m, HumanMessage):
             out.append(ChatMessage(role="user", content=m.text))
             tools, sources = [], []
@@ -87,10 +98,12 @@ async def get_messages(
 ) -> ThreadMessages:
     await owned_thread(thread_id, user_id, threads)
     state = await graph.aget_state({"configurable": {"thread_id": str(thread_id)}})
+    messages = state.values.get("messages", [])
     return ThreadMessages(
         thread_id=thread_id,
-        summary=state.values.get("summary") or None,
-        messages=to_chat_messages(state.values.get("messages", [])),
+        summary=next(filter(None, map(summary_text, messages)), None),
+        messages=to_chat_messages(messages),
+        pending=pending_request(state),
     )
 
 
@@ -126,6 +139,59 @@ async def get_history(
     return history
 
 
+async def prepare_resume(
+    thread_id: UUID,
+    body: ResumeRequest | None,
+    graph: CompiledStateGraph[AgentState],
+    callbacks: list[BaseCallbackHandler],
+) -> tuple[RunnableConfig, Command[Any] | None]:
+    """The config and graph input that continue the thread, or raise if it can't continue."""
+    body = body or ResumeRequest()
+    config = run_config(thread_id, callbacks, body.checkpoint_id)
+    state = await graph.aget_state(config)
+    if state.created_at is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Checkpoint not found")
+    if pending := pending_request(state):
+        if body.decisions is None:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "The thread is waiting for approval: send one decision per pending tool call",
+            )
+        # The middleware matches decisions to calls by position; a wrong count would fail
+        # halfway through the run.
+        if len(body.decisions) != len(pending["action_requests"]):
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                f"Expected {len(pending['action_requests'])} decisions, one per pending "
+                f"tool call; got {len(body.decisions)}",
+            )
+        logger.info(
+            "decisions: %s",
+            ", ".join(
+                f"{a['name']}={d.type}"
+                for a, d in zip(pending["action_requests"], body.decisions, strict=True)
+            ),
+        )
+        decisions = [d.model_dump(exclude_none=True) for d in body.decisions]
+        for d in decisions:
+            if d["type"] == "reject" and d.get("message"):
+                # The middleware sends "User rejected the tool call ... with reason: <message>".
+                # A bare reason like "no" reads as the tool failing; say it was a choice.
+                d["message"] += ". It was not run; don't retry it, and answer without it."
+        return config, Command(resume={"decisions": decisions})
+    if body.decisions:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Nothing in this thread needs approval")
+    if not state.next:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Nothing to resume: the run finished")
+    logger.info(
+        "resuming from checkpoint %s (step %s, next: %s)",
+        state.config["configurable"]["checkpoint_id"],
+        state.metadata.get("step") if state.metadata else None,
+        ", ".join(state.next),
+    )
+    return config, None
+
+
 @router.post("/{thread_id}/resume")
 async def resume_thread(
     thread_id: UUID,
@@ -135,30 +201,32 @@ async def resume_thread(
     callbacks: Callbacks,
     body: ResumeRequest | None = None,
 ) -> ChatResponse:
-    """Continue a run that stopped before finishing (crash, disconnect, timeout).
+    """Continue a paused or interrupted run.
 
-    With `checkpoint_id`, replay from that earlier checkpoint instead. The new steps fork
-    from it and become the thread's latest state; the old branch stays in the history.
+    - Waiting for approval: send `decisions`, one per pending tool call, in order.
+    - Stopped before finishing (crash, disconnect, timeout): send nothing.
+    - With `checkpoint_id`, replay from that earlier checkpoint instead. The new steps fork
+      from it and become the thread's latest state; the old branch stays in the history.
     """
     await owned_thread(thread_id, user_id, threads)
-    config = run_config(thread_id, callbacks, body.checkpoint_id if body else None)
-    state = await graph.aget_state(config)
-    if state.created_at is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Checkpoint not found")
-    if not state.next:
-        raise HTTPException(status.HTTP_409_CONFLICT, "Nothing to resume: the run finished")
-    logger.info(
-        "resuming from checkpoint %s (step %s, next: %s)",
-        state.config["configurable"]["checkpoint_id"],
-        state.metadata.get("step") if state.metadata else None,
-        ", ".join(state.next),
-    )
-    result = await graph.ainvoke(None, config=config)
-    return ChatResponse(
-        reply=result["messages"][-1].text,
-        thread_id=thread_id,
-        sources=collect_sources(result["messages"]),
-    )
+    config, graph_input = await prepare_resume(thread_id, body, graph, callbacks)
+    result = await graph.ainvoke(graph_input, config=config)
+    return await chat_response(graph, result, thread_id)
+
+
+@router.post("/{thread_id}/resume/stream")
+async def resume_thread_stream(
+    thread_id: UUID,
+    graph: Graph,
+    threads: Threads,
+    user_id: UserId,
+    callbacks: Callbacks,
+    body: ResumeRequest | None = None,
+) -> EventSourceResponse:
+    """Same as POST .../resume, streamed like /chat/stream."""
+    await owned_thread(thread_id, user_id, threads)
+    config, graph_input = await prepare_resume(thread_id, body, graph, callbacks)
+    return EventSourceResponse(stream_run(graph, graph_input, config, thread_id))
 
 
 @router.delete("/{thread_id}", status_code=status.HTTP_204_NO_CONTENT)

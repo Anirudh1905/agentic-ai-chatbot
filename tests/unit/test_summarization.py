@@ -4,20 +4,18 @@ from fakes import (
     FactKeepingSummarizer,
     ScriptedChatModel,
     make_flaky_lookup_tool,
+    make_lookup_tool,
     tool_call,
 )
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, ToolMessage
 from langchain_core.messages.utils import count_tokens_approximately
 from langchain_core.runnables import RunnableConfig
+from langchain_core.tools import tool
 from langgraph.checkpoint.memory import InMemorySaver
 
+from chatbot.agent.builder import build_graph
+from chatbot.agent.middleware import close_dangling_tool_calls, summary_text
 from chatbot.config import Settings
-from chatbot.graph.builder import build_graph
-from chatbot.memory.short_term import (
-    close_dangling_tool_calls,
-    render_transcript,
-    split_for_summary,
-)
 
 
 def turn(i: int, words: int = 50) -> list[AnyMessage]:
@@ -38,58 +36,29 @@ def config(thread: str = "t") -> RunnableConfig:
     return {"configurable": {"thread_id": thread}}
 
 
-def test_split_keeps_everything_under_budget() -> None:
-    messages = [m for i in range(3) for m in turn(i)]
-    assert split_for_summary(messages, max_tokens=10_000, keep_turns=2) == 0
+async def test_summarizing_never_separates_a_tool_call_from_its_result() -> None:
+    turns = 12
+    responses: list[AIMessage] = []
+    for i in range(turns):
+        responses += [tool_call("lookup", call_id=f"c{i}", query=f"q{i}"), AIMessage(f"a{i}")]
+    llm = ScriptedChatModel(responses=responses)
+    graph = build_graph(
+        Settings(context_max_tokens=200),
+        tools=[make_lookup_tool()],
+        llm=llm,
+        summarizer=FactKeepingSummarizer(),
+        checkpointer=InMemorySaver(),
+    )
 
+    for i in range(turns):
+        await graph.ainvoke({"messages": [HumanMessage(f"question {i}")]}, config())
 
-def test_split_keeps_last_n_turns() -> None:
-    messages = [m for i in range(10) for m in turn(i)]
-    budget = count_tokens_approximately(messages) - 1
-
-    cut = split_for_summary(messages, max_tokens=budget, keep_turns=3)
-
-    assert cut == 14
-    assert messages[cut].text.startswith("question 7")
-
-
-def test_split_drops_more_turns_when_the_tail_is_too_big() -> None:
-    messages = [m for i in range(10) for m in turn(i, words=200)]
-    one_turn = count_tokens_approximately(turn(0, words=200))
-
-    # Half the budget fits two turns, so only two are kept even though keep_turns is 6.
-    cut = split_for_summary(messages, max_tokens=int(one_turn * 4.5), keep_turns=6)
-
-    assert len(messages) - cut == 4
-
-
-def test_split_never_separates_a_tool_call_from_its_result() -> None:
-    messages = [m for i in range(8) for m in tool_turn(i)]
-
-    for budget in range(100, count_tokens_approximately(messages), 97):
-        cut = split_for_summary(messages, max_tokens=budget, keep_turns=3)
-        assert cut == 0 or isinstance(messages[cut], HumanMessage)
-
-
-def test_split_keeps_an_oversized_current_turn() -> None:
-    messages = [*turn(0), *turn(1, words=5000)]
-
-    assert split_for_summary(messages, max_tokens=100, keep_turns=3) == 2
-
-
-def test_split_needs_at_least_two_turns() -> None:
-    assert split_for_summary(turn(0, words=5000), max_tokens=10, keep_turns=3) == 0
-
-
-def test_transcript_truncates_tool_results() -> None:
-    messages = tool_turn(1)
-    messages[2] = ToolMessage("x" * 5000, tool_call_id="c1", name="lookup")
-
-    text = render_transcript(messages)
-
-    assert 'Assistant called lookup({"query": "q1"})' in text
-    assert f"Tool result (lookup): {'x' * 1500} […]" in text
-    assert text.endswith("Assistant: answer 1")
+    # Whatever was summarized away, every model call saw each tool call with its result.
+    for sent in llm.calls:
+        for j, m in enumerate(sent):
+            if isinstance(m, ToolMessage):
+                earlier = [x for x in sent[:j] if isinstance(x, AIMessage) and x.tool_calls]
+                assert earlier and m.tool_call_id in {c["id"] for c in earlier[-1].tool_calls}
 
 
 def test_close_dangling_tool_calls_inserts_placeholder_after_the_call() -> None:
@@ -174,7 +143,7 @@ async def test_new_message_after_a_crash_gets_a_placeholder_tool_result() -> Non
 
 
 async def test_long_thread_is_summarized_and_stays_under_budget() -> None:
-    settings = Settings(context_max_tokens=1500, context_keep_turns=3)
+    settings = Settings(context_max_tokens=1500)
     turns = 200
     llm = ScriptedChatModel(responses=[AIMessage(f"Noted, item {i}.") for i in range(turns)])
     summarizer = FactKeepingSummarizer()
@@ -189,10 +158,11 @@ async def test_long_thread_is_summarized_and_stays_under_budget() -> None:
     assert max(count_tokens_approximately(c[1:]) for c in llm.calls) <= 1500
     assert summarizer.calls > 1
     state = await graph.aget_state(config())
-    assert len(state.values["messages"]) < 20
+    assert count_tokens_approximately(state.values["messages"]) <= 1500
     # The first turn is long gone from the messages but survived every re-summarization.
-    assert "fact: my locker code is 4417" in state.values["summary"]
-    assert "fact: my locker code is 4417" in llm.calls[-1][0].text
+    summaries = [t for m in state.values["messages"] if (t := summary_text(m))]
+    assert len(summaries) == 1 and "fact: my locker code is 4417" in summaries[0]
+    assert any("fact: my locker code is 4417" in m.text for m in llm.calls[-1])
 
 
 async def test_summarizer_failure_keeps_full_history() -> None:
@@ -200,7 +170,7 @@ async def test_summarizer_failure_keeps_full_history() -> None:
         def _generate(self, *args, **kwargs):  # type: ignore[no-untyped-def]
             raise RuntimeError("down")
 
-    settings = Settings(context_max_tokens=50, context_keep_turns=1)
+    settings = Settings(context_max_tokens=50)
     llm = ScriptedChatModel(responses=[AIMessage("a " * 100), AIMessage("b")])
     graph = build_graph(
         settings, llm=llm, summarizer=BrokenSummarizer(), checkpointer=InMemorySaver()
@@ -210,4 +180,35 @@ async def test_summarizer_failure_keeps_full_history() -> None:
     result = await graph.ainvoke({"messages": [HumanMessage("two")]}, config())
 
     assert len(result["messages"]) == 4
-    assert "summary" not in result
+    assert not any(summary_text(m) for m in result["messages"])
+
+
+async def test_summarizing_keeps_the_current_question_and_runs_once_per_turn() -> None:
+    # Big tool results, so the history passes the limit in the middle of every turn.
+    @tool
+    async def big_lookup(query: str) -> str:
+        """Look something up."""
+        return f"result for {query}: " + "detail " * 300
+
+    turns = 6
+    responses: list[AIMessage] = []
+    for i in range(turns):
+        responses += [tool_call("big_lookup", call_id=f"c{i}", query=f"q{i}"), AIMessage(f"a{i}")]
+    llm = ScriptedChatModel(responses=responses)
+    summarizer = FactKeepingSummarizer()
+    graph = build_graph(
+        Settings(context_max_tokens=500),
+        tools=[big_lookup],
+        llm=llm,
+        summarizer=summarizer,
+        checkpointer=InMemorySaver(),
+    )
+
+    for i in range(turns):
+        await graph.ainvoke({"messages": [HumanMessage(f"question {i}")]}, config())
+        # Both model calls of this turn, including the one after the tool ran, see the question.
+        for sent in llm.calls[-2:]:
+            asked = [m.text for m in sent if isinstance(m, HumanMessage) and not summary_text(m)]
+            assert asked[-1] == f"question {i}"
+
+    assert 0 < summarizer.calls <= turns

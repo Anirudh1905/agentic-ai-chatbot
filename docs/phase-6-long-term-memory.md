@@ -29,13 +29,13 @@ Start with semantic memory only. Add episodic once retrieval quality is proven.
 
 ```mermaid
 flowchart TB
-    START((START)) --> InG[pii_input_guard]
-    InG --> Recall[recall_memories<br/>semantic search on<br/>user's namespace]
-    Recall --> Ctx[manage_context]
-    Ctx --> LLM[llm_node<br/>memories in system prompt]
-    LLM -->|tool_calls| Gate[approval_gate → pii_tool_guard → tools]
-    Gate --> LLM
-    LLM -->|final| OutG[pii_output_guard]
+    START((START)) --> InG[PII input guard<br/>before_agent]
+    InG --> Recall[recall memories<br/>before_agent: semantic search<br/>on the user's namespace]
+    Recall --> Ctx[summarization<br/>before_model]
+    Ctx --> LLM[model<br/>dynamic_prompt adds memories]
+    LLM -->|tool_calls| Gate[approval → PII tool guard → tools]
+    Gate --> Ctx
+    LLM -->|final| OutG[PII output guard<br/>after_model]
     OutG --> END((END))
 
     LLM -.->|explicit: 'remember that...'| MemTool[save_memory tool]
@@ -83,10 +83,10 @@ store = AsyncPostgresStore.from_conn_string(
     index={"dims": 1024, "embed": embed_fn, "fields": ["text"]},
 )
 await store.setup()
-graph = build_graph(settings, checkpointer=checkpointer, store=store)
+agent = build_graph(settings, checkpointer=checkpointer, store=store)   # → create_agent(store=store)
 ```
 
-Nodes access it through the injected `store` parameter. `user_id` comes from the run config (`config["configurable"]["user_id"]`), set by the API from the authenticated session and never from the request body.
+`create_agent` takes the store directly. Middleware reaches it as `runtime.store` (and `request.runtime.store` in `@dynamic_prompt`), and tools through LangChain's `ToolRuntime` argument. Pass `user_id` as the agent's runtime context (`create_agent(context_schema=...)`, `invoke(..., context={"user_id": ...})`), set by the API from `X-User-Id` today and the authenticated session in Phase 7, never from the request body.
 
 ### Memory record
 
@@ -112,7 +112,7 @@ Nodes access it through the injected `store` parameter. `user_id` comes from the
 
 ```python
 @tool
-async def save_memory(text: str, *, config, store) -> str:
+async def save_memory(text: str, runtime: ToolRuntime) -> str:   # runtime.store, runtime.context
     """Save something the user explicitly asked you to remember."""
 ```
 
@@ -138,10 +138,10 @@ Never store third-party PII (people the user mentions) in long-term memory.
 
 ## Implementation steps
 
-1. Init `AsyncPostgresStore` with a vector index in the app lifespan; pass it to the graph.
-2. Implement `recall_memories` node and system-prompt injection.
+1. Init `AsyncPostgresStore` with a vector index alongside the checkpointer (`api/dependencies.py`); pass it to `create_agent(store=...)`.
+2. Implement memory recall as middleware: search before the turn, add the results in the `@dynamic_prompt` system prompt.
 3. Implement `save_memory` / `forget_memory` tools.
-4. Build the extractor prompt with ADD/UPDATE/DELETE/NONE output (structured output), and run it in a background worker (e.g. `arq`, Celery, or a simple asyncio task queue to start).
+4. Build the extractor prompt with ADD/UPDATE/DELETE/NONE output (structured output), and run it in a background worker (e.g. `arq`, Celery, or a simple asyncio task queue to start), queued from an `after_agent` middleware hook so it never delays the reply.
 5. Add the consent flow for storing user-owned PII.
 6. Add memory management endpoints and UI.
 7. Add retention rules (e.g. decay confidence for memories not recalled in 180 days).

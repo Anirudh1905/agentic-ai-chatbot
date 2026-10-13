@@ -3,7 +3,7 @@ from enum import StrEnum
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class ChatRequest(BaseModel):
@@ -18,10 +18,14 @@ class ChatResponse(BaseModel):
     thread_id: UUID
     # Knowledge base chunks and web pages the tools returned for this answer.
     sources: list[dict[str, Any]] = Field(default_factory=list)
+    # Set when the run paused for approval (HumanInTheLoopMiddleware's request:
+    # `action_requests` and `review_configs`); `reply` is then empty. Answer it with
+    # POST /threads/{thread_id}/resume.
+    pending: dict[str, Any] | None = None
 
 
 class StreamEvent(StrEnum):
-    """SSE event types. INTERRUPT is emitted from Phase 4."""
+    """SSE event types. INTERRUPT means the run paused for approval (DONE follows)."""
 
     TOKEN = "token"
     TOOL_START = "tool_start"
@@ -55,6 +59,8 @@ class ThreadMessages(BaseModel):
     # Set once older messages have been condensed; they are no longer in `messages`.
     summary: str | None = None
     messages: list[ChatMessage]
+    # Tool calls waiting for approval, if the thread is paused.
+    pending: dict[str, Any] | None = None
 
 
 class CheckpointInfo(BaseModel):
@@ -70,6 +76,29 @@ class CheckpointInfo(BaseModel):
     last_message: str | None
 
 
+class EditedAction(BaseModel):
+    name: str
+    args: dict[str, Any]
+
+
+class Decision(BaseModel):
+    """One decision for HumanInTheLoopMiddleware, in the order of `action_requests`."""
+
+    type: Literal["approve", "edit", "reject"]
+    # For "edit": the call to run instead.
+    edited_action: EditedAction | None = None
+    # For "reject": why, passed to the model.
+    message: str | None = None
+
+    @model_validator(mode="after")
+    def _edit_has_action(self) -> "Decision":
+        if self.type == "edit" and self.edited_action is None:
+            raise ValueError("an edit needs edited_action")
+        return self
+
+
 class ResumeRequest(BaseModel):
+    # For a thread waiting for approval: one decision per pending tool call, in order.
+    decisions: list[Decision] | None = None
     # Resume from (and fork at) an earlier checkpoint instead of the latest one.
     checkpoint_id: str | None = None

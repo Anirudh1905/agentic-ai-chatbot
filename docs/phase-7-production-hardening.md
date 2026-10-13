@@ -63,7 +63,7 @@ Add real (masked, consented) production conversations that went wrong to the gol
 
 ### Security and access
 - [ ] Authentication (OIDC/JWT); `user_id` taken only from the token
-- [ ] Ownership checks on threads, memories, interrupts
+- [ ] Ownership checks on threads, memories, interrupts (threads and interrupts done since Phase 3/4, keyed on `X-User-Id` until real auth)
 - [ ] Rate limits per user and per IP; token budget per user per day
 - [ ] Secrets in a secret manager; vault keys in KMS
 - [ ] Prompt-injection defenses reviewed (tool output delimiters, no side-effect tools without HITL)
@@ -75,14 +75,15 @@ Add real (masked, consented) production conversations that went wrong to the gol
 
 ### Cost and latency
 - [ ] Prompt caching on system prompt + tool definitions
-- [ ] Small model for summarization, extraction and query rewriting
-- [ ] Cap on tool loop iterations (`recursion_limit`) and on retrieved context size
+- [x] Small model for summarization (`gpt-5-nano`, Phase 3); use it for extraction and query rewriting too
+- [x] Cap on model/tool round trips (`ModelCallLimitMiddleware`, `MAX_MODEL_CALLS`; `ToolCallLimitMiddleware` if a single tool needs its own cap)
+- [ ] Cap on retrieved context size
 - [ ] Cache frequent web search queries (short TTL)
 
 ### Reliability
-- [ ] Retries with backoff and circuit breakers on the LLM, web search and embedding calls
-- [ ] Fallback model on provider outage
-- [ ] Graceful degradation: web search down → answer from RAG and say so
+- [ ] Retries with backoff and circuit breakers on the LLM, web search and embedding calls (searches: `ToolRetryMiddleware`, done; LLM: `ModelRetryMiddleware` or the client's `max_retries`; circuit breakers still to add)
+- [ ] Fallback model on provider outage (`ModelFallbackMiddleware`)
+- [x] Graceful degradation: web search down → answer from RAG and say so (`ToolRetryMiddleware` returns an error result the model relays)
 - [ ] DB migrations (Alembic) run as a separate deploy step
 - [ ] Backups and restore tested for Postgres
 
@@ -97,3 +98,5 @@ Add real (masked, consented) production conversations that went wrong to the gol
 - [ ] Load test: target concurrent users at p95 latency target with no errors
 - [ ] Dashboards and alerts live
 - [ ] Runbook for common incidents (provider outage, stuck interrupts, PII leak report)
+
+Most of the reliability and cost items above have LangChain middleware equivalents (`ModelRetryMiddleware`, `ModelFallbackMiddleware`, `ToolCallLimitMiddleware`, `PIIMiddleware`). Check `langchain.agents.middleware` before building one.

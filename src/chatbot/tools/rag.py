@@ -146,11 +146,8 @@ def build_knowledge_base_tool(
             query: A short search query in plain words, e.g. "refund window for sale items".
         """
         start = time.monotonic()
-        try:
-            hits = await retrieve(pool, embeddings, settings, query, reranker)
-        except Exception:
-            logger.exception("knowledge base search failed")
-            return "Knowledge base search failed. Tell the user it is unavailable right now.", []
+        # Errors propagate to ToolRetryMiddleware, which retries once, then tells the model.
+        hits = await retrieve(pool, embeddings, settings, query, reranker)
         logger.info(
             "knowledge base search %r: %d hits in %.1fs (top: %s)",
             query,

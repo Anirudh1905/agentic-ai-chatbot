@@ -1,65 +1,30 @@
 import asyncio
-import json
 import logging
 import uuid
 from collections.abc import Iterator
-from contextlib import contextmanager
 from typing import Any
 
 import pytest
+from apiclient import BOB, client_for, parse_sse, scripted
 from fakes import (
     Crash,
-    InMemoryThreadStore,
     ScriptedChatModel,
     make_flaky_lookup_tool,
     make_lookup_tool,
     tool_call,
 )
 from fastapi.testclient import TestClient
-from langchain_core.language_models import BaseChatModel
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage, HumanMessage
-from langchain_core.tools import BaseTool
-from langgraph.checkpoint.memory import InMemorySaver
 
 from chatbot.api.dependencies import (
-    get_callbacks,
     get_checkpointer,
     get_graph,
-    get_threads,
 )
 from chatbot.api.main import app
-from chatbot.config import Settings
-from chatbot.graph.builder import build_graph
 from chatbot.observability import ContextFilter
 
-ALICE = {"X-User-Id": "alice"}
-BOB = {"X-User-Id": "bob"}
 SOURCE = {"type": "kb", "cite_as": "Doc › Section", "doc_id": "d"}
-
-
-@contextmanager
-def client_for(
-    llm: BaseChatModel, tools: list[BaseTool] | None = None, **settings: Any
-) -> Iterator[TestClient]:
-    checkpointer = InMemorySaver()
-    graph = build_graph(Settings(**settings), tools=tools or [], llm=llm, checkpointer=checkpointer)
-    threads = InMemoryThreadStore()
-    app.dependency_overrides[get_graph] = lambda: graph
-    app.dependency_overrides[get_checkpointer] = lambda: checkpointer
-    app.dependency_overrides[get_threads] = lambda: threads
-    app.dependency_overrides[get_callbacks] = lambda: []
-    try:
-        with TestClient(app, headers=ALICE) as client:
-            yield client
-    finally:
-        app.dependency_overrides.clear()
-
-
-def scripted(*replies: AIMessage | str) -> ScriptedChatModel:
-    return ScriptedChatModel(
-        responses=[r if isinstance(r, AIMessage) else AIMessage(r) for r in replies]
-    )
 
 
 def tool_llm() -> ScriptedChatModel:
@@ -73,14 +38,6 @@ def client() -> Iterator[TestClient]:
         yield c
 
 
-def parse_sse(body: str) -> list[tuple[str, dict[str, object]]]:
-    events = []
-    for block in body.replace("\r\n", "\n").strip().split("\n\n"):
-        fields = dict(line.split(": ", 1) for line in block.splitlines() if ": " in line)
-        events.append((fields["event"], json.loads(fields["data"])))
-    return events
-
-
 def test_healthz(client: TestClient) -> None:
     assert client.get("/healthz").json() == {"status": "ok"}
 
@@ -91,7 +48,12 @@ def test_chat_returns_reply(client: TestClient) -> None:
     resp = client.post("/chat", json={"message": "hi", "thread_id": thread_id})
 
     assert resp.status_code == 200
-    assert resp.json() == {"reply": "hello from the bot", "thread_id": thread_id, "sources": []}
+    assert resp.json() == {
+        "reply": "hello from the bot",
+        "thread_id": thread_id,
+        "sources": [],
+        "pending": None,
+    }
 
 
 def test_chat_without_thread_id_starts_a_new_thread(client: TestClient) -> None:
@@ -120,7 +82,7 @@ def test_chat_stream_emits_tokens_then_done(client: TestClient) -> None:
     resp = client.post("/chat/stream", json={"message": "hi"})
 
     events = parse_sse(resp.text)
-    assert events[-1][0] == "done"
+    assert events[-1][0] == "done" and events[-1][1]["pending"] is False
     uuid.UUID(str(events[-1][1]["thread_id"]))
     tokens = [data["token"] for name, data in events if name == "token"]
     assert len(tokens) > 1
@@ -155,7 +117,7 @@ def test_chat_stream_emits_tool_events() -> None:
 
 def test_chat_stream_does_not_stream_the_summary() -> None:
     llm = scripted("first " * 50, "SUMMARY", "second reply")
-    with client_for(llm, context_max_tokens=60, context_keep_turns=1) as c:
+    with client_for(llm, context_max_tokens=60) as c:
         thread_id = c.post("/chat", json={"message": "one"}).json()["thread_id"]
         resp = c.post("/chat/stream", json={"message": "two", "thread_id": thread_id})
         messages = c.get(f"/threads/{thread_id}/messages").json()
@@ -285,7 +247,7 @@ def test_resume_from_an_earlier_checkpoint_forks_the_thread() -> None:
         thread_id = c.post("/chat", json={"message": "refunds?"}).json()["thread_id"]
         history = c.get(f"/threads/{thread_id}/history").json()
         # The checkpoint right after the tool ran, before the final answer.
-        before_answer = next(h for h in history if h["next"] == ["llm"] and h["message_count"] == 3)
+        before_answer = next(h for h in history if h["next"] and h["message_count"] == 3)
 
         resp = c.post(
             f"/threads/{thread_id}/resume", json={"checkpoint_id": before_answer["checkpoint_id"]}
@@ -303,7 +265,7 @@ def test_messages_of_an_empty_thread(client: TestClient) -> None:
 
     body = client.get(f"/threads/{thread_id}/messages").json()
 
-    assert body == {"thread_id": thread_id, "summary": None, "messages": []}
+    assert body == {"thread_id": thread_id, "summary": None, "messages": [], "pending": None}
 
 
 def test_requests_are_logged_with_request_and_thread_ids(
@@ -318,7 +280,7 @@ def test_requests_are_logged_with_request_and_thread_ids(
     thread = resp.json()["thread_id"][:8]
     lines = [f"{r.name}{r.ctx}: {r.getMessage()}" for r in caplog.records]  # type: ignore[attr-defined]
     assert any(
-        line.startswith(f"chatbot.graph.builder [req=abc123 thread={thread}]: model replied")
+        line.startswith(f"chatbot.agent.middleware [req=abc123 thread={thread}]: model replied")
         for line in lines
     )
     assert any(

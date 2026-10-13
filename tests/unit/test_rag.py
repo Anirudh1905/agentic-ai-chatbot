@@ -1,4 +1,17 @@
-from chatbot.tools.rag import SearchHit, format_hits, reciprocal_rank_fusion
+import pytest
+from fakes import ScriptedChatModel, tool_call
+from langchain_core.embeddings import Embeddings
+from langchain_core.messages import AIMessage, HumanMessage
+
+from chatbot.agent.builder import build_graph
+from chatbot.config import Settings
+from chatbot.tools import web_search
+from chatbot.tools.rag import (
+    SearchHit,
+    build_knowledge_base_tool,
+    format_hits,
+    reciprocal_rank_fusion,
+)
 
 
 def hit(**overrides: object) -> SearchHit:
@@ -45,3 +58,31 @@ def test_format_hits_wraps_results_and_escapes_attributes() -> None:
 
 def test_format_hits_with_no_results() -> None:
     assert "No documents" in format_hits("anything", [])
+
+
+async def test_failed_search_is_retried_once_then_reported_to_the_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(web_search, "RETRY_DELAY_SECONDS", 0)
+    attempts: list[str] = []
+
+    class DownEmbeddings(Embeddings):
+        def embed_documents(self, texts: list[str]) -> list[list[float]]:
+            raise NotImplementedError
+
+        def embed_query(self, text: str) -> list[float]:
+            attempts.append(text)
+            raise ConnectionError("embeddings endpoint down")
+
+    tool = build_knowledge_base_tool(None, DownEmbeddings(), Settings())  # type: ignore[arg-type]
+    llm = ScriptedChatModel(
+        responses=[tool_call("search_knowledge_base", query="refunds"), AIMessage("It's down.")]
+    )
+    graph = build_graph(Settings(), tools=[tool], llm=llm)
+
+    result = await graph.ainvoke({"messages": [HumanMessage("refunds?")]})
+
+    assert attempts == ["refunds", "refunds"]
+    tool_message = result["messages"][2]
+    assert tool_message.status == "error"
+    assert "This search failed (ConnectionError)" in tool_message.text

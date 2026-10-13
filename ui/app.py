@@ -47,6 +47,7 @@ def load_thread(thread_id: str) -> None:
     st.session_state.thread_id = thread_id
     st.session_state.messages = []
     st.session_state.summary = None
+    st.session_state.pending = None
     st.query_params["thread"] = thread_id
     try:
         with api() as client:
@@ -57,6 +58,7 @@ def load_thread(thread_id: str) -> None:
         body = resp.json()
         st.session_state.messages = body["messages"]
         st.session_state.summary = body["summary"]
+        st.session_state.pending = body["pending"]
 
 
 def new_thread() -> None:
@@ -64,13 +66,8 @@ def new_thread() -> None:
     load_thread(str(uuid.uuid4()))
 
 
-def stream_events(message: str, thread_id: str) -> Iterator[tuple[str, dict[str, Any]]]:
-    with (
-        api() as client,
-        connect_sse(
-            client, "POST", "/chat/stream", json={"message": message, "thread_id": thread_id}
-        ) as source,
-    ):
+def stream_events(path: str, body: dict[str, Any]) -> Iterator[tuple[str, dict[str, Any]]]:
+    with api() as client, connect_sse(client, "POST", path, json=body) as source:
         for sse in source.iter_sse():
             data = json.loads(sse.data)
             if sse.event == "error":
@@ -143,24 +140,18 @@ if st.session_state.summary:
     with st.expander("Earlier messages were condensed into a summary"):
         st.markdown(st.session_state.summary)
 
-for msg in st.session_state.messages:
-    with st.chat_message(msg["role"]):
-        st.markdown(msg["content"])
-        render_sources(msg.get("sources", []), msg["content"])
 
-if prompt := st.chat_input("Ask something"):
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
-        st.markdown(prompt)
-
+def run_assistant(path: str, body: dict[str, Any]) -> None:
+    """Stream one assistant turn (a new message, or a resume after approval) into the page."""
     with st.chat_message("assistant"):
         status_slot = st.empty()
         status = status_slot.status("Thinking…")
         sources: list[dict[str, Any]] = []
         tools_used: list[str] = []
+        pending: dict[str, Any] = {}
 
         def tokens() -> Iterator[str]:
-            for event, data in stream_events(prompt, st.session_state.thread_id):
+            for event, data in stream_events(path, body):
                 if event == "tool_start":
                     tools_used.append(data["name"])
                     label = TOOL_LABELS.get(data["name"], f"Running {data['name']}")
@@ -169,6 +160,8 @@ if prompt := st.chat_input("Ask something"):
                     status.write(f"{label}: “{query}”" if query else label)
                 elif event == "tool_end":
                     sources.extend(data["sources"])
+                elif event == "interrupt":
+                    pending.update(data)
                 elif event == "token":
                     yield data["token"]
 
@@ -176,6 +169,10 @@ if prompt := st.chat_input("Ask something"):
             stream = tokens()
             # Wait for the first token under the status spinner (tools run before it).
             first = next(stream, "")
+            if pending:
+                # Paused for approval; the card below takes over.
+                st.session_state.pending = pending
+                st.rerun()
             if tools_used:
                 status.update(label="Searched", state="complete", expanded=False)
             else:
@@ -194,3 +191,77 @@ if prompt := st.chat_input("Ask something"):
             )
             # Refresh the sidebar so a new thread shows up in the list.
             st.rerun()
+
+
+def approval_card(pending: dict[str, Any]) -> list[dict[str, Any]] | None:
+    """Ask about each pending tool call. Returns the decisions, in order, once submitted."""
+    actions = pending["action_requests"]
+    with st.chat_message("assistant"):
+        st.markdown(
+            "I'd like to run this, but it needs your OK first."
+            if len(actions) == 1
+            else f"I'd like to run these {len(actions)} steps, but they need your OK first."
+        )
+        with st.form("approval"):
+            for i, action in enumerate(actions):
+                st.markdown(f"**{TOOL_LABELS.get(action['name'], action['name'])}**")
+                st.warning(action.get("description", ""), icon=":material/shield:")
+                if list(action["args"]) == ["query"]:
+                    st.text_input(
+                        "Query (edit it to search for something else)",
+                        value=action["args"]["query"],
+                        key=f"query-{i}",
+                    )
+                else:
+                    st.text_area(
+                        "Arguments (JSON)",
+                        value=json.dumps(action["args"], indent=2),
+                        key=f"args-{i}",
+                    )
+                st.radio("Decision", ["Approve", "Reject"], horizontal=True, key=f"action-{i}")
+                st.text_input("Reason, if rejecting (optional; the bot sees it)", key=f"why-{i}")
+            if not st.form_submit_button("Submit", type="primary"):
+                return None
+
+    decisions: list[dict[str, Any]] = []
+    for i, action in enumerate(actions):
+        if st.session_state[f"action-{i}"] == "Reject":
+            reason = st.session_state[f"why-{i}"]
+            decisions.append({"type": "reject", **({"message": reason} if reason else {})})
+            continue
+        if f"query-{i}" in st.session_state:
+            args = {"query": st.session_state[f"query-{i}"]}
+        else:
+            try:
+                args = json.loads(st.session_state[f"args-{i}"])
+            except json.JSONDecodeError:
+                st.error(f"The arguments for {action['name']} aren't valid JSON.")
+                return None
+        if args == action["args"]:
+            decisions.append({"type": "approve"})
+        else:
+            decisions.append(
+                {"type": "edit", "edited_action": {"name": action["name"], "args": args}}
+            )
+    return decisions
+
+
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
+        render_sources(msg.get("sources", []), msg["content"])
+
+pending = st.session_state.pending
+if pending and (decisions := approval_card(pending)):
+    st.session_state.pending = None
+    run_assistant(f"/threads/{st.session_state.thread_id}/resume/stream", {"decisions": decisions})
+
+prompt = st.chat_input(
+    "Approve or reject the step above first" if pending else "Ask something",
+    disabled=bool(pending),
+)
+if prompt:
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    with st.chat_message("user"):
+        st.markdown(prompt)
+    run_assistant("/chat/stream", {"message": prompt, "thread_id": st.session_state.thread_id})

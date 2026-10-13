@@ -14,24 +14,26 @@ class Settings(BaseSettings):
     openai_api_key: SecretStr | None = None
     # Unset means api.openai.com; set it to route through an OpenAI-compatible gateway.
     openai_base_url: str | None = None
-    model: str = "gpt-5-mini"
-    # Only sent to reasoning models (gpt-5.x, o-series). Leave unset for gpt-4.x. At "minimal",
-    # gpt-5-mini answered terse questions like "president of USA" from stale memory instead of
-    # searching; "low" routed them correctly at about the same latency.
+    # gpt-5.4 over gpt-5-mini: better answers, and faster through the gateway (1.5 s vs 2.4 s
+    # median on a routing probe), at roughly 10x the token price. gpt-5-mini still works.
+    model: str = "gpt-5.4"
+    # Only sent to reasoning models (gpt-5.x, o-series). Leave unset for gpt-4.x. Below "low",
+    # models answered terse questions like "president of USA" from stale memory instead of
+    # searching (gpt-5-mini at "minimal": 9/16 on a routing probe; gpt-5.4 at "none": 15/16).
     reasoning_effort: ReasoningEffort | None = "low"
     max_tokens: int | None = None
     request_timeout: float = 120.0
 
-    # Cap on LLM <-> tool round trips per request, so a confused model can't loop forever.
-    max_agent_steps: int = 12
+    # Cap on model calls per request (each is followed by a round of tool calls), so a
+    # confused model can't loop forever.
+    max_model_calls: int = 6
 
     # Cheap model for side tasks such as summarizing old turns. Same endpoint as `model`.
     summary_model: str = "gpt-5-nano"
-    # Once a thread's messages pass this many tokens (local estimate), older turns are folded
-    # into a running summary. Well under the model's window: every turn resends the history.
+    # Once a thread's messages pass this many tokens (local estimate), older messages are
+    # folded into a running summary, keeping the most recent half verbatim. Well under the
+    # model's window: every turn resends the history.
     context_max_tokens: int = 32_000
-    # Most recent user turns (with their tool calls and replies) that are always kept verbatim.
-    context_keep_turns: int = 6
     # The retention job keeps only the latest checkpoint of threads idle this many days.
     checkpoint_retention_days: int = 30
 
@@ -56,6 +58,20 @@ class Settings(BaseSettings):
     web_search_enabled: bool = True
     web_search_max_results: int = 5
     web_search_timeout: float = 15.0
+
+    # Human approval before risky tool calls (see hitl/policy.py).
+    hitl_enabled: bool = True
+    # Web searches mentioning any of these (whole words, any case) wait for approval, since the
+    # query goes to a third-party search engine. Emails, phone and order numbers always do.
+    hitl_sensitive_terms: list[str] = [
+        "confidential",
+        "internal",
+        "codename",
+        "Project Falcon",
+        "salary",
+        "payroll",
+        "password",
+    ]
 
     langfuse_public_key: str | None = None
     langfuse_secret_key: SecretStr | None = None
