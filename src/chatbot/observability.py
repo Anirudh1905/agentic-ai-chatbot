@@ -25,14 +25,20 @@ class ContextFilter(logging.Filter):
         return True
 
 
+class AppHandler(logging.StreamHandler):  # type: ignore[type-arg]
+    """Our console handler, so configure_logging can replace it without removing others."""
+
+
 def configure_logging(settings: Settings) -> None:
-    handler = logging.StreamHandler()
+    handler = AppHandler()
     handler.addFilter(ContextFilter())
     handler.setFormatter(
         logging.Formatter("%(asctime)s %(levelname)-7s %(name)s%(ctx)s: %(message)s")
     )
     root = logging.getLogger()
-    root.handlers[:] = [handler]
+    # Replace only our own handler (it's set up again on each app start), and leave the
+    # ones others added, such as a deployment's log shipper or pytest's capture.
+    root.handlers = [h for h in root.handlers if not isinstance(h, AppHandler)] + [handler]
     root.setLevel(settings.log_level)
     # LOG_LEVEL=DEBUG shows everything, including these.
     if root.level > logging.DEBUG:

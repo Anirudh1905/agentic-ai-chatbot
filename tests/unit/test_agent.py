@@ -1,8 +1,11 @@
+import logging
+
+import pytest
 from fakes import ScriptedChatModel, make_lookup_tool, tool_call
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
-from chatbot.agent.builder import build_graph, build_llm
+from chatbot.agent.builder import RECURSION_LIMIT, build_graph, build_llm
 from chatbot.config import Settings
 
 
@@ -72,3 +75,20 @@ async def test_system_prompt_includes_todays_date() -> None:
     await graph.ainvoke({"messages": [HumanMessage("hi")]})
 
     assert date.today().isoformat() in llm.calls[0][0].text
+
+
+async def test_hitting_the_model_call_limit_is_logged(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.WARNING)
+    calls = [tool_call("lookup", call_id=f"c{i}", query=str(i)) for i in range(5)]
+    graph = build_graph(
+        Settings(max_model_calls=2),
+        tools=[make_lookup_tool()],
+        llm=ScriptedChatModel(responses=calls),
+    )
+
+    result = await graph.ainvoke(
+        {"messages": [HumanMessage("loop")]}, {"recursion_limit": RECURSION_LIMIT}
+    )
+
+    assert "Model call limits exceeded" in result["messages"][-1].text
+    assert "stopped the run: Model call limits exceeded: run limit (2/2)" in caplog.text

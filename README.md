@@ -2,7 +2,7 @@
 
 An agentic chatbot with RAG and web search tools, human-in-the-loop approvals, PII detection and masking, and short-term plus long-term memory.
 
-See the phased build plan in [docs/README.md](docs/README.md). Phases 1 (foundation), 2 (RAG and web search tools), 3 (short-term memory and checkpointing) and 4 (human-in-the-loop approvals) are implemented. The agent is LangChain's `create_agent` with middleware, using the built-ins wherever LangChain has one.
+See the phased build plan in [docs/README.md](docs/README.md). Phases 1 (foundation), 2 (RAG and web search tools), 3 (short-term memory and checkpointing), 4 (human-in-the-loop approvals) and 5 (PII redaction) are implemented. The agent is LangChain's `create_agent` with middleware, using the built-ins wherever LangChain has one.
 
 ## Quickstart
 
@@ -62,7 +62,7 @@ Each step adds a checkpoint, so `make retention` (run it nightly) keeps only the
 
 ### Approvals (human-in-the-loop)
 
-The agent is LangChain's `create_agent` with middleware, and approvals use its `HumanInTheLoopMiddleware`. Some tool calls wait for a person before they run. A web search sends its query to an outside search engine, so it pauses when the query mentions an internal term (`HITL_SENSITIVE_TERMS`: "confidential", "internal", "Project Falcon", ...) or contains an email address, phone number or order number. Knowledge base searches never pause. Any other tool always pauses, so new tools with side effects are safe by default. The rules are in `src/chatbot/agent/approvals.py`.
+The agent is LangChain's `create_agent` with middleware, and approvals use its `HumanInTheLoopMiddleware`. Some tool calls wait for a person before they run. A web search sends its query to an outside search engine, so it pauses when the query mentions an internal term (`HITL_SENSITIVE_TERMS`: "confidential", "internal", "Project Falcon", ...) or contains an order number. (Emails, cards and phone numbers can't reach a query: they're redacted first, see below.) Knowledge base searches never pause. Any other tool always pauses, so new tools with side effects are safe by default. The rules are in `src/chatbot/agent/approvals.py`.
 
 When a run pauses, the chat UI shows an approval card: approve, edit the query, or reject with a reason the bot sees. The thread waits in Postgres for as long as it takes, across restarts. Over the API, `/chat` returns `pending` (and `/chat/stream` sends an `interrupt` event). `POST /threads/{id}/resume` takes one decision per pending call, in the order of `pending.action_requests`:
 
@@ -73,18 +73,40 @@ curl localhost:8000/threads/$THREAD/resume -H 'content-type: application/json' -
 
 Decision types are `approve`, `edit` (with `edited_action`) and `reject` (with an optional `message`). Each decision is logged (`decisions: web_search=edit`).
 
+### PII redaction
+
+Emails, card numbers, IP addresses and phone numbers in the user's messages are replaced as soon as the API receives them: `my email is jane@x.com` becomes `my email is [REDACTED_EMAIL]`. The redaction uses LangChain's `RedactionRule` detectors (`src/chatbot/pii.py`) and runs before the agent is invoked, so the model, the summarizer, web search queries, every checkpoint, the trace, the logs and the thread title only get the redacted text. Reviewer edits and reject reasons on approvals are redacted too. Order numbers are kept, since the bot needs them.
+
+Third-party PII in search results and in the model's replies is redacted as well, by LangChain's `PIIMiddleware` inside the agent (tool results before the model reads them, the stored reply after) and by a small redactor on the SSE stream. Emails at `PII_ALLOWED_EMAIL_DOMAINS` (Acme's own) are kept, so the bot can still give out the support address.
+
+Redaction is one-way: the bot can't repeat the user's email back. The user's message isn't redacted with `PIIMiddleware` because LangGraph checkpoints the raw input before any middleware runs, and the stream isn't redacted with its built-in transformer because that needs LangGraph's experimental v3 streaming, which currently drops tool calls. Set `PII_ENABLED=false` to turn it off. Details in [the Phase 5 doc](docs/phase-5-pii-detection-masking.md).
+
 ### Logs
 
 The API logs one line per request, plus what each turn did: context size and summarizing, each model call (time, tokens, tool calls), and each search (query, hit count, time). Every line carries the request ID and thread, so one conversation can be followed with `grep thread=<first 8 chars>`. Responses return the ID in an `X-Request-Id` header; send your own to correlate with a client.
 
-```
-INFO chatbot.graph.builder [req=9f4574e3 thread=46695ac5]: context: 9 messages, ~1262/1000 tokens
-INFO chatbot.graph.builder [req=9f4574e3 thread=46695ac5]: over the limit: summarizing the oldest 8 of 9 messages
-INFO chatbot.tools.rag [req=e7bb1e9a thread=46695ac5]: knowledge base search 'express shipping time': 6 hits in 2.6s
-INFO chatbot.api [req=e7bb1e9a thread=46695ac5]: POST /chat -> 200 in 6.94s (user=log-check)
+```text
+INFO    chatbot.api.runs         [req=59a1dee8 thread=598b8934]: redacted PII from the message: credit_card, email
+INFO    chatbot.api.routes.chat  [req=59a1dee8 thread=598b8934]: new thread, message of 120 chars
+INFO    chatbot.agent.middleware [req=59a1dee8 thread=598b8934]: context: 1 messages, ~39 tokens
+INFO    chatbot.agent.middleware [req=59a1dee8 thread=598b8934]: model replied in 3.0s (855 tokens in, 27 out): tool calls: search_knowledge_base
+INFO    chatbot.tools.rag        [req=59a1dee8 thread=598b8934]: knowledge base search 'refund timing': 6 hits in 2.2s (top: Refund Policy › Refund Timing)
+INFO    chatbot.pii              [req=59a1dee8 thread=598b8934]: redacted PII from a tool result: email
+INFO    chatbot.pii              [req=59a1dee8 thread=598b8934]: redacted PII from the reply: phone
+INFO    chatbot.api              [req=59a1dee8 thread=598b8934]: POST /chat/stream -> 200 in 6.94s (user=me)
 ```
 
-HTTP client, OpenAI SDK, uvicorn access and `/healthz` lines are hidden unless `LOG_LEVEL=DEBUG`. Search queries are logged as-is, so they can contain personal data until PII masking lands in Phase 5.
+What's logged:
+
+| Area | Lines |
+|------|-------|
+| API | every request (method, path, status, time, user); new or continuing thread; ownership denials (warning) |
+| Agent | context size and summarizing, every model call (time, tokens, tool calls or answer length), placeholder results for interrupted tool calls, a summarizer failure, and a warning when `MAX_MODEL_CALLS` stops a run |
+| Tools | every search (query, hits, time, top result), web search backend failures, a search that failed after retrying, reranker load and fallback |
+| Approvals | paused for approval (tool and args), the decisions, resume and delete |
+| PII | each redaction, by type only, from the message, a tool result or the reply |
+
+HTTP client, OpenAI SDK, uvicorn access and `/healthz` lines are hidden unless `LOG_LEVEL=DEBUG`. PII values are never logged: messages are logged by length, search queries are written by the model from redacted text, and redactions are logged by type.
 
 ### Tracing
 
@@ -134,6 +156,8 @@ Set in `.env` (see `.env.example`):
 | `SUMMARY_MODEL` | `gpt-5-nano` | Summarizes older turns of long threads |
 | `CONTEXT_MAX_TOKENS` | `32000` | Summarize older turns once a thread's messages pass this (estimated) |
 | `CHECKPOINT_RETENTION_DAYS` | `30` | `make retention` prunes checkpoint history of threads idle this long |
+| `PII_ENABLED` | `true` | Redact emails, cards, IPs and phone numbers from user messages, tool results and replies |
+| `PII_ALLOWED_EMAIL_DOMAINS` | `["acme-outfitters.example"]` | JSON list. Emails at these domains are never redacted |
 | `HITL_ENABLED` | `true` | Pause risky tool calls for approval |
 | `HITL_SENSITIVE_TERMS` | see `config.py` | JSON list. Web searches mentioning these wait for approval |
 | `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` | local dev keys | Tracing turns on when both are set |

@@ -158,12 +158,12 @@ The system prompt (`prompts/system.md`) adds routing by topic rather than wordin
 ```python
 agent = create_agent(model, tools=[search_knowledge_base, web_search], middleware=[
     ...,
-    ModelCallLimitMiddleware(run_limit=settings.max_model_calls, exit_behavior="end"),
+    ModelCallLimit(run_limit=settings.max_model_calls, exit_behavior="end"),
     ToolRetryMiddleware(max_retries=1, tools=["search_knowledge_base", "web_search"], ...),
 ])
 ```
 
-`ModelCallLimitMiddleware` (`MAX_MODEL_CALLS`, default 6) stops a confused model from looping forever. It ends the run with a short message instead of raising, unlike a plain `recursion_limit`.
+`ModelCallLimit` (LangChain's `ModelCallLimitMiddleware`, plus a warning in the log when it fires; `MAX_MODEL_CALLS`, default 6) stops a confused model from looping forever. It ends the run with a short message instead of raising. LangGraph's `recursion_limit` is set too, in every run's config, but only as a backstop (`RECURSION_LIMIT` in `agent/builder.py`, 200): each round is many graph steps, one per middleware hook.
 
 ## Implementation steps
 

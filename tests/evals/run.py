@@ -17,7 +17,7 @@ from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage
 
-from chatbot.agent.builder import build_graph
+from chatbot.agent.builder import RECURSION_LIMIT, build_graph
 from chatbot.config import get_settings
 from chatbot.db import open_pool
 from chatbot.embeddings import build_embeddings
@@ -91,7 +91,10 @@ async def eval_routing(cases: list[Case]) -> float:
 
     async def called_tools(case: Case) -> set[str]:
         async with semaphore:
-            result = await graph.ainvoke({"messages": [HumanMessage(case.question)]})
+            result = await graph.ainvoke(
+                {"messages": [HumanMessage(case.question)]},
+                config={"recursion_limit": RECURSION_LIMIT},
+            )
         return {
             tc["name"]
             for m in result["messages"]

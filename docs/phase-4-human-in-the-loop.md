@@ -40,10 +40,9 @@ This phase builds **tool approval**. Clarification and low-confidence pauses can
 | Check | Example | Reason shown |
 |-------|---------|--------------|
 | A term from `HITL_SENSITIVE_TERMS`, whole word, any case | `Project Falcon launch date` | `The query mentions "Project Falcon", which may be internal information.` |
-| Email address (LangChain's `detect_email`) | `jane.doe@example.com` | `The query contains an email address.` |
-| Card number (LangChain's `detect_credit_card`, Luhn-checked) | `4111 1111 1111 1111` | `The query contains a card number.` |
 | Acme order number (`AC-` + 4 or more digits) | `order AC-55821` | `The query contains an order number.` |
-| Phone number | `+1 (303) 555-0142` | `The query contains a phone number.` |
+
+Emails, card numbers and phone numbers used to be checks here too. Since Phase 5 they're redacted from the user's message before the model writes a query (`chatbot/pii.py`, applied by the API before the agent runs), so they can't reach a search and the checks were removed. Order numbers aren't redacted, so they still pause.
 
 `interrupt_on(tools, terms)` turns that into the middleware's config, one entry per tool:
 
@@ -79,10 +78,11 @@ flowchart TB
 ```python
 # src/chatbot/agent/builder.py
 middleware = [
+    *output_middleware(),                     # PIIMiddleware: tool results + replies (Phase 5)
     summarization(settings, summary_model),   # SummarizationMiddleware, adjusted (Phase 3)
     system_prompt,                            # @dynamic_prompt: today's date
     ModelCallMiddleware(),                    # dangling tool calls, logging
-    ModelCallLimitMiddleware(run_limit=settings.max_model_calls, exit_behavior="end"),
+    ModelCallLimit(run_limit=settings.max_model_calls, exit_behavior="end"),  # logs when it stops a run
 ]
 if retry := tool_retry(tools):                # ToolRetryMiddleware for the two searches
     middleware.append(retry)

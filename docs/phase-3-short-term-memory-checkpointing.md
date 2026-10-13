@@ -159,10 +159,10 @@ Checkpoints pile up quickly (one per step, several per turn). Two mechanisms:
 
   ```text
   chatbot.api.routes.chat  [req=daf6ce1f thread=ee996bd2]: continuing thread, message of 28 chars
-  chatbot.graph.middleware [req=daf6ce1f thread=ee996bd2]: context: 9 messages, ~1262 tokens
-  chatbot.graph.middleware [req=daf6ce1f thread=ee996bd2]: summarized older messages in 7.1s; thread now 6 messages, ~1196 tokens
+  chatbot.agent.middleware [req=daf6ce1f thread=ee996bd2]: context: 9 messages, ~1262 tokens
+  chatbot.agent.middleware [req=daf6ce1f thread=ee996bd2]: summarized older messages in 7.1s; thread now 6 messages, ~1196 tokens
   chatbot.tools.rag        [req=daf6ce1f thread=ee996bd2]: knowledge base search 'express shipping': 6 hits in 2.3s
-  chatbot.graph.middleware [req=daf6ce1f thread=ee996bd2]: model replied in 2.2s (1080 tokens in, 60 out): answer of 236 chars
+  chatbot.agent.middleware [req=daf6ce1f thread=ee996bd2]: model replied in 2.2s (1080 tokens in, 60 out): answer of 236 chars
   chatbot.api              [req=daf6ce1f thread=ee996bd2]: POST /chat -> 200 in 9.01s (user=log-check)
   ```
 

@@ -22,9 +22,10 @@ CONFIG: RunnableConfig = {"configurable": {"thread_id": "t"}}
         ("Project Falcon launch date", '"Project Falcon"'),
         ("acme INTERNAL roadmap", '"internal"'),
         ("international shipping rates", None),
-        ("jane.doe@example.com order status", "email address"),
+        # Redacted from the user message before the model writes a query (test_pii.py).
+        ("jane.doe@example.com order status", None),
         ("where is order AC-55821", "order number"),
-        ("call +1 (303) 555-0142 about returns", "phone number"),
+        ("call +1 (303) 555-0142 about returns", None),
         ("best tents of 2026", None),
     ],
 )

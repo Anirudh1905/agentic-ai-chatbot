@@ -5,14 +5,14 @@ from collections.abc import Sequence
 from typing import Any
 
 from langchain.agents.middleware import AgentState, InterruptOnConfig, ToolCallRequest
-from langchain.agents.middleware.pii import detect_credit_card, detect_email
 from langchain_core.messages import ToolCall
 from langchain_core.tools import BaseTool
 from langgraph.runtime import Runtime
 from langgraph.types import StateSnapshot
 
-# Phone and order numbers have no built-in LangChain detector.
-PHONE = re.compile(r"(?<!\w)\+?\d[\d ().-]{7,}\d(?!\w)")
+# Order numbers aren't redacted (the bot needs them to help with an order), so a web search
+# containing one asks first. Emails, cards, IPs and phones never get this far: they're
+# redacted from the user's message before the agent runs (chatbot/pii.py).
 ORDER_NUMBER = re.compile(r"\bAC-\d{4,}\b", re.IGNORECASE)
 
 # Tools that never need approval: they only read Acme's own data.
@@ -20,19 +20,12 @@ AUTO_APPROVED = {"search_knowledge_base"}
 
 
 def sensitive_reason(query: str, terms: Sequence[str]) -> str | None:
-    """Why a web query could leak internal or personal information, or None if it's fine."""
+    """Why a web query could leak internal information or an order number, or None."""
     for term in terms:
         if re.search(rf"\b{re.escape(term)}\b", query, re.IGNORECASE):
             return f'The query mentions "{term}", which may be internal information.'
-    # LangChain's PII detectors (Phase 5 builds on the same middleware module).
-    if detect_email(query):
-        return "The query contains an email address."
-    if detect_credit_card(query):
-        return "The query contains a card number."
     if ORDER_NUMBER.search(query):
         return "The query contains an order number."
-    if PHONE.search(query):
-        return "The query contains a phone number."
     return None
 
 

@@ -12,11 +12,11 @@ The work is split into phases. Each phase ends with something that runs and can 
 | 2 | [Tools: RAG + Web Search](phase-2-tools-rag-web-search.md) | Document ingestion, vector retrieval tool, web search tool, tool routing | 1 | Built |
 | 3 | [Short-Term Memory & Checkpointing](phase-3-short-term-memory-checkpointing.md) | Per-thread state saved to Postgres, resume, summarization of old turns | 1 | Built |
 | 4 | [Human-in-the-Loop](phase-4-human-in-the-loop.md) | Approval on risky tool calls, interrupt and resume, edit or reject flows | 3 | Built (audit table deferred) |
-| 5 | [PII Detection & Masking](phase-5-pii-detection-masking.md) | Input/output guardrails, reversible masking, PII-safe tools, logs and checkpoints | 2, 3 | Planned |
+| 5 | [PII Detection & Masking](phase-5-pii-detection-masking.md) | Redaction of PII in user messages, tool results and replies | 2, 3 | Built (lean: one-way) |
 | 6 | [Long-Term Memory](phase-6-long-term-memory.md) | Cross-thread user memory, extraction, semantic recall | 3, 5 | Planned |
 | 7 | [Production Hardening](phase-7-production-hardening.md) | Evals, observability, auth, rate limits, deployment | All | Planned |
 
-The agent is LangChain's `create_agent` (a LangGraph graph) with middleware. Each feature is a middleware hook around the model call, built-in wherever LangChain has one: `SummarizationMiddleware` (Phase 3), `HumanInTheLoopMiddleware` (Phase 4), `ModelCallLimitMiddleware` and `ToolRetryMiddleware`, and later `PIIMiddleware` (Phase 5).
+The agent is LangChain's `create_agent` (a LangGraph graph) with middleware. Each feature is a middleware hook around the model call, built-in wherever LangChain has one: `SummarizationMiddleware` (Phase 3), `HumanInTheLoopMiddleware` (Phase 4), `ModelCallLimitMiddleware` and `ToolRetryMiddleware`. PII redaction (Phase 5) uses LangChain's detectors: the user's message is redacted in the API before the agent runs (so raw values never reach a checkpoint), and `PIIMiddleware` redacts tool results and replies.
 
 ### Why this order
 
@@ -39,24 +39,23 @@ flowchart LR
 
 ## Target architecture (end state)
 
-Solid boxes exist today; dashed ones (PII guards, long-term memory) arrive in Phases 5 and 6.
+Solid boxes exist today; dashed ones (long-term memory) arrive in Phase 6.
 
 ```mermaid
 flowchart TB
     User([User]) <--> UI[Chat UI]
-    UI <-->|HTTP / SSE| API[FastAPI service]
+    UI <-->|HTTP / SSE| API[FastAPI service<br/>redacts PII first]
 
     subgraph Agent["create_agent + middleware"]
         direction TB
-        PIIin[PII guard: input<br/>before_agent] -.-> LoadMem[Recall long-term memory<br/>before_agent]
-        LoadMem -.-> Sum[Summarization<br/>before_model]
+        LoadMem[Recall long-term memory<br/>before_agent] -.-> Sum[Summarization<br/>before_model]
         Sum --> LLM[model<br/>system prompt, call limit]
         LLM -->|tool calls| HITL{HumanInTheLoopMiddleware<br/>needs approval?}
         HITL -->|yes| Interrupt[[interrupt: wait for human]]
         Interrupt --> Tools
         HITL -->|no| Tools[tools<br/>retried once on failure]
         Tools --> Sum
-        LLM -->|final answer| PIIout[PII guard: output<br/>after_model]
+        LLM -->|final answer| PIIout[PIIMiddleware: output<br/>after_model]
         PIIout -.-> SaveMem[Extract + save memories<br/>after_agent]
     end
 
@@ -68,13 +67,11 @@ flowchart TB
     Agent <-->|checkpoints| CP[(Postgres<br/>checkpointer)]
     LoadMem -.- LTM[(Postgres store<br/>long-term memory)]
     SaveMem -.- LTM
-    PIIin -.- Vault[(PII vault<br/>encrypted)]
-    PIIout -.- Vault
     Agent -.traces.-> Obs[Langfuse]
     API --> Threads[(threads table)]
 
     classDef planned stroke-dasharray: 5 5
-    class PIIin,LoadMem,PIIout,SaveMem,LTM,Vault planned
+    class LoadMem,SaveMem,LTM planned
 ```
 
 ## Default tech stack
@@ -106,8 +103,8 @@ agentic-ai-chatbot/
 │   ├── tools/                 # rag.py, web_search.py, rerank.py, registry.py
 │   ├── ingestion/             # loaders, chunking, indexing CLI
 │   ├── memory/                # threads.py (thread metadata), retention.py; Phase 6: long-term memory
-│   ├── pii/                   # Phase 5: detector, vault, recognizers
 │   ├── prompts/               # system.md, summarize.md
+│   ├── pii.py                 # PII redaction, applied by the API before the agent runs
 │   ├── config.py
 │   └── observability.py
 ├── migrations/                # Alembic: chunks, threads
