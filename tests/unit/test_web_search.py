@@ -1,8 +1,11 @@
 from typing import Any
 
 import pytest
+from fakes import ScriptedChatModel, tool_call
+from langchain_core.messages import AIMessage, HumanMessage
 
 from chatbot.config import Settings
+from chatbot.graph.builder import build_graph
 from chatbot.tools import web_search as web_search_module
 from chatbot.tools.web_search import build_web_search_tool, format_results
 
@@ -92,14 +95,14 @@ async def test_falls_back_when_duckduckgo_returns_only_ads(fake_ddgs: type[FakeD
     assert "REI Returns" in message.content
 
 
-async def test_reports_failure_when_every_backend_fails(fake_ddgs: type[FakeDDGS]) -> None:
+async def test_raises_when_every_backend_fails(fake_ddgs: type[FakeDDGS]) -> None:
+    # ToolRetryMiddleware turns this into a retry, then a message for the model.
     fake_ddgs.responses = {"duckduckgo": TimeoutError(), "auto": TimeoutError()}
 
-    message = await run()
+    with pytest.raises(TimeoutError):
+        await run()
 
-    assert fake_ddgs.calls == ["duckduckgo", "auto", "duckduckgo", "auto"]
-    assert "unavailable" in message.content
-    assert message.artifact == []
+    assert fake_ddgs.calls == ["duckduckgo", "auto"]
 
 
 async def test_no_results_is_not_an_error(fake_ddgs: type[FakeDDGS]) -> None:
@@ -114,7 +117,13 @@ def test_format_results_empty() -> None:
     assert "no results" in format_results("q", [])
 
 
-async def test_retries_after_a_delay_when_rate_limited(fake_ddgs: type[FakeDDGS]) -> None:
+def agent(llm_replies: list[Any]) -> Any:
+    tool = build_web_search_tool(Settings())
+    assert tool is not None
+    return build_graph(Settings(), tools=[tool], llm=ScriptedChatModel(responses=llm_replies))
+
+
+async def test_agent_retries_a_rate_limited_search_once(fake_ddgs: type[FakeDDGS]) -> None:
     class Flaky(FakeDDGS):
         def text(self, query: str, max_results: int, backend: str) -> list[dict[str, Any]]:
             FakeDDGS.calls.append(backend)
@@ -123,8 +132,24 @@ async def test_retries_after_a_delay_when_rate_limited(fake_ddgs: type[FakeDDGS]
             return [RESULT]
 
     web_search_module.DDGS = Flaky  # type: ignore[misc]
+    graph = agent([tool_call("web_search", query="rei returns"), AIMessage("Done.")])
 
-    message = await run()
+    result = await graph.ainvoke({"messages": [HumanMessage("rei returns?")]})
 
     assert FakeDDGS.calls == ["duckduckgo", "auto", "duckduckgo"]
-    assert "REI Returns" in message.content
+    tool_message = result["messages"][2]
+    assert "REI Returns" in tool_message.text
+    assert tool_message.artifact[0]["url"] == RESULT["href"]
+
+
+async def test_agent_tells_the_model_when_search_keeps_failing(fake_ddgs: type[FakeDDGS]) -> None:
+    fake_ddgs.responses = {"duckduckgo": TimeoutError(), "auto": TimeoutError()}
+    graph = agent([tool_call("web_search", query="rei returns"), AIMessage("Sorry.")])
+
+    result = await graph.ainvoke({"messages": [HumanMessage("rei returns?")]})
+
+    assert fake_ddgs.calls == ["duckduckgo", "auto"] * 2
+    tool_message = result["messages"][2]
+    assert tool_message.status == "error"
+    assert "This search failed (TimeoutError)" in tool_message.text
+    assert result["messages"][-1].text == "Sorry."

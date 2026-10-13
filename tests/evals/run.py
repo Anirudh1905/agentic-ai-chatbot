@@ -91,10 +91,7 @@ async def eval_routing(cases: list[Case]) -> float:
 
     async def called_tools(case: Case) -> set[str]:
         async with semaphore:
-            result = await graph.ainvoke(
-                {"messages": [HumanMessage(case.question)]},
-                config={"recursion_limit": settings.max_agent_steps},
-            )
+            result = await graph.ainvoke({"messages": [HumanMessage(case.question)]})
         return {
             tc["name"]
             for m in result["messages"]

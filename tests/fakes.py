@@ -126,7 +126,8 @@ class FactKeepingSummarizer(BaseChatModel):
         **kwargs: Any,
     ) -> ChatResult:
         self.calls += 1
-        facts = re.findall(r"fact: [^\n]*", messages[-1].text)
+        # Stop at "<" and "&": the summary middleware sends messages as XML.
+        facts = re.findall(r"fact: [^\n<&]*", messages[-1].text)
         summary = "\n".join(f"- {f}" for f in dict.fromkeys(facts))
         return ChatResult(generations=[ChatGeneration(message=AIMessage(summary))])
 

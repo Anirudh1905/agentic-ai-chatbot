@@ -32,17 +32,17 @@
 flowchart TB
     User([User]) -->|raw text| InG
 
-    subgraph Graph["LangGraph agent"]
+    subgraph Graph["create_agent graph (middleware)"]
         direction TB
-        InG[pii_input_guard<br/>detect + mask] --> Ctx[manage_context]
-        Ctx --> LLM[llm_node<br/>sees only placeholders]
-        LLM -->|tool_calls| Gate[approval_gate]
-        Gate --> TG[pii_tool_guard]
+        InG["input guard<br/>before_agent: detect + mask"] --> Ctx[summarization<br/>before_model]
+        Ctx --> LLM[model<br/>sees only placeholders]
+        LLM -->|tool_calls| Gate[HumanInTheLoopMiddleware<br/>after_model]
+        Gate --> TG["tool guard<br/>wrap_tool_call"]
         TG -->|internal tool| KB[search_knowledge_base<br/>unmask args]
         TG -->|external tool| WS[web_search<br/>args stay masked<br/>or HITL]
-        KB --> LLM
-        WS --> LLM
-        LLM -->|final| OutG[pii_output_guard<br/>scan new PII,<br/>unmask user's own]
+        KB --> Ctx
+        WS --> Ctx
+        LLM -->|final| OutG["output guard<br/>after_model: scan new PII,<br/>unmask user's own"]
     end
 
     OutG -->|display text| User
@@ -122,11 +122,19 @@ CREATE TABLE pii_vault (
 
 ### The three guards
 
-| Guard | Position | Behaviour |
-|-------|----------|-----------|
-| `pii_input_guard` | Before anything stores or sends the message | Mask the new HumanMessage in place, so the checkpoint only ever sees the masked version |
-| `pii_tool_guard` | Between `approval_gate` and `tool_node` | **Internal tools:** unmask args just before execution if the tool needs real values. **External tools:** keep masked; if the query is meaningless without the PII, raise a Phase 4 interrupt |
-| `pii_output_guard` | After the final LLM message, before streaming to user | Detect *new* PII (e.g. from RAG docs about other people) and mask it; unmask placeholders that the user supplied |
+Since Phase 4 the agent is `create_agent`, so the guards are middleware hooks, not graph nodes:
+
+| Guard | Hook | Behaviour |
+|-------|------|-----------|
+| Input guard | `before_agent` (runs once per invocation, before anything else) | Mask the new HumanMessage in place, so the checkpoint only ever sees the masked version |
+| Tool guard | `wrap_tool_call` (around each tool execution, after the Phase 4 approval) | **Internal tools:** unmask args just before execution if the tool needs real values. **External tools:** keep masked; if the query is meaningless without the PII, it pauses for approval (Phase 4) |
+| Output guard | `after_model` on the final message, before streaming to user | Detect *new* PII (e.g. from RAG docs about other people) and mask it; unmask placeholders that the user supplied |
+
+### LangChain built-ins to start from
+
+- **`PIIMiddleware`** (`langchain.agents.middleware`) covers detection and one-way masking: one instance per PII type, with `strategy` `block` / `redact` / `mask` / `hash`, applied to input, output and/or tool results (`apply_to_input`, `apply_to_output`, `apply_to_tool_results`). It has built-in detectors for email, credit card, IP, MAC address and URL, and takes a custom `detector` callable, so Presidio can plug in for names, phone numbers and IDs.
+- **What it doesn't do** is the reversible part: the per-thread vault and turning `<PERSON_1>` back into "Jane Doe" for the user. That stays custom, as a small middleware that shares the vault.
+- **Already in place:** Phase 4's approval rule uses LangChain's `detect_email` and `detect_credit_card`, plus phone and order-number patterns, so a web search containing those already waits for a human. Phase 5 changes that from "ask" to "mask, then ask only if the query needs the real value".
 
 ### Should the LLM see raw PII?
 
@@ -142,10 +150,10 @@ The output guard needs whole placeholders to unmask, but tokens arrive in fragme
 
 1. Add `presidio-analyzer`, `presidio-anonymizer`, spaCy model; build `pii/detector.py` with custom recognizers.
 2. Build `pii/vault.py` with encryption and the consistent-placeholder logic.
-3. Add the three guard nodes; insert them into the graph.
+3. Add the three guards as middleware: `PIIMiddleware` instances (with a Presidio `detector`) for detection, plus a small vault middleware for reversible placeholders.
 4. Add a tracing callback that redacts before export.
 5. Add the stream buffer for placeholder unmasking.
-6. Hook PII-in-external-tool-args into the Phase 4 approval gate.
+6. Hook PII-in-external-tool-args into the Phase 4 approval rule (`hitl/policy.py`).
 7. Add the PII config (entity types, thresholds, `PII_MASK_FOR_LLM`).
 
 ## Evaluation

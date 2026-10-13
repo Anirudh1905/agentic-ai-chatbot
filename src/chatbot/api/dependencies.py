@@ -14,6 +14,7 @@ from chatbot.db import Pool, open_pool
 from chatbot.embeddings import build_embeddings
 from chatbot.graph.builder import build_graph
 from chatbot.graph.state import AgentState
+from chatbot.hitl.policy import interrupt_on
 from chatbot.memory.threads import PostgresThreadStore, ThreadStore
 from chatbot.observability import build_callbacks
 from chatbot.tools.registry import build_tools
@@ -50,13 +51,22 @@ class Resources:
             tools = build_tools(settings, self.pool, build_embeddings(settings), reranker)
             self.checkpointer = checkpointer
             self.threads = PostgresThreadStore(self.pool)
-            self.graph = build_graph(settings, tools=tools, checkpointer=checkpointer)
+            self.graph = build_graph(
+                settings,
+                tools=tools,
+                checkpointer=checkpointer,
+                interrupt_on=interrupt_on(tools, settings.hitl_sensitive_terms)
+                if settings.hitl_enabled
+                else None,
+            )
             logger.info(
-                "agent ready: model=%s, summary_model=%s, tools=[%s], context limit %d tokens",
+                "agent ready: model=%s, summary_model=%s, tools=[%s], context limit %d tokens, "
+                "approvals %s",
                 settings.model,
                 settings.summary_model,
                 ", ".join(t.name for t in tools),
                 settings.context_max_tokens,
+                "on" if settings.hitl_enabled else "off",
             )
 
     async def close(self) -> None:

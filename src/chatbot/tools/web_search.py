@@ -14,8 +14,8 @@ logger = logging.getLogger(__name__)
 SNIPPET_CHARS = 800
 # DuckDuckGo alone is fastest but sometimes returns nothing; "auto" queries several engines.
 BACKENDS = ("duckduckgo", "auto")
-# Keyless search is rate-limited; when every backend comes back empty, wait and try once more.
-PASSES = 2
+# Keyless search is rate-limited (ddgs raises "No results found."). When every backend fails,
+# ToolRetryMiddleware waits this long and runs the tool once more (see tools/registry.py).
 RETRY_DELAY_SECONDS = 1.5
 
 
@@ -35,31 +35,28 @@ def format_results(query: str, results: list[dict[str, Any]]) -> str:
 
 
 async def search(query: str, settings: Settings) -> list[dict[str, Any]]:
-    """Try each backend in turn, twice; raise only if every attempt fails."""
+    """Try each backend in turn; raise only if every one fails."""
     last_error: Exception | None = None
-    for attempt in range(PASSES):
-        if attempt:
-            await asyncio.sleep(RETRY_DELAY_SECONDS)
-        for backend in BACKENDS:
-            try:
-                # ddgs is synchronous; run it in a thread so the event loop keeps serving.
-                results = await asyncio.wait_for(
-                    asyncio.to_thread(
-                        DDGS(timeout=int(settings.web_search_timeout)).text,
-                        query,
-                        max_results=settings.web_search_max_results,
-                        backend=backend,
-                    ),
-                    timeout=settings.web_search_timeout,
-                )
-            except Exception as e:
-                logger.warning("web search (%s) failed: %r", backend, e)
-                last_error = e
-                continue
-            results = [r for r in results if not is_ad(r)]
-            if results:
-                logger.debug("web search (%s) returned %d results", backend, len(results))
-                return results
+    for backend in BACKENDS:
+        try:
+            # ddgs is synchronous; run it in a thread so the event loop keeps serving.
+            results = await asyncio.wait_for(
+                asyncio.to_thread(
+                    DDGS(timeout=int(settings.web_search_timeout)).text,
+                    query,
+                    max_results=settings.web_search_max_results,
+                    backend=backend,
+                ),
+                timeout=settings.web_search_timeout,
+            )
+        except Exception as e:
+            logger.warning("web search (%s) failed: %r", backend, e)
+            last_error = e
+            continue
+        results = [r for r in results if not is_ad(r)]
+        if results:
+            logger.debug("web search (%s) returned %d results", backend, len(results))
+            return results
     if last_error is not None:
         raise last_error
     return []
@@ -81,15 +78,8 @@ def build_web_search_tool(settings: Settings) -> BaseTool | None:
             query: A search engine query, e.g. "REI return policy 2026".
         """
         start = time.monotonic()
-        try:
-            results = await search(query, settings)
-        except Exception:
-            logger.exception("web search %r failed on every backend", query)
-            return (
-                "Web search is unavailable right now. Answer from other sources if you "
-                "can, and tell the user you couldn't search the web.",
-                [],
-            )
+        # Errors propagate to ToolRetryMiddleware, which retries once, then tells the model.
+        results = await search(query, settings)
         logger.info(
             "web search %r: %d results in %.1fs", query, len(results), time.monotonic() - start
         )

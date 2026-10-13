@@ -14,7 +14,7 @@ def test_empty_env_values_fall_back_to_defaults(monkeypatch: pytest.MonkeyPatch)
     assert settings.max_tokens is None
     assert settings.openai_base_url is None
     assert settings.openai_api_key is None
-    assert settings.model == "gpt-5-mini"
+    assert settings.model == Settings.model_fields["model"].default
 
 
 def test_empty_reranker_model_disables_reranking(monkeypatch: pytest.MonkeyPatch) -> None:

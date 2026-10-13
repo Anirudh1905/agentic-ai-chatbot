@@ -7,9 +7,9 @@
 ## Scope
 
 **In scope**
-- Project setup: `uv`, `pyproject.toml`, lint/format (ruff), type checks (mypy or pyright), pytest
+- Project setup: `uv`, `pyproject.toml`, lint/format (ruff), type checks (mypy), pytest
 - Typed config loaded from env vars (`pydantic-settings`)
-- A LangGraph `StateGraph` with a single LLM node
+- An agent built with LangChain's `create_agent` (a LangGraph graph). In this phase it has no tools, so it is just a model call
 - FastAPI service with a non-streaming `/chat` and a streaming `/chat/stream` (SSE) endpoint
 - Tracing for every LLM call
 - Docker Compose with Postgres + pgvector (unused until Phase 2/3, but set up now)
@@ -18,22 +18,24 @@
 
 **Out of scope:** tools, persistence, memory, guardrails.
 
+> **Built differently from the first plan.** Phase 1 started as a hand-written `StateGraph` with one `llm_node`. Since Phase 4 the agent is `create_agent`, and the extras later phases need (system prompt, summarization, approvals, limits) are middleware around the model call. Its builder still takes its dependencies as arguments, so tests build it with fakes.
+
 ## Architecture
 
 ```mermaid
 flowchart LR
     Client([Streamlit UI / curl]) -->|POST /chat/stream| API[FastAPI]
-    API -->|astream_events| Graph
+    API -->|astream_events| Agent
 
-    subgraph Graph["LangGraph StateGraph"]
-        START((START)) --> LLM[llm_node]
-        LLM --> END((END))
+    subgraph Agent["create_agent graph (no tools yet)"]
+        START((START)) --> Model["model<br/>system_prompt middleware<br/>adds the prompt + today's date"]
+        Model --> END((END))
     end
 
-    LLM <-->|Chat Completions API| OpenAI[OpenAI model]
-    LLM -.trace.-> Obs[Langfuse / LangSmith]
+    Model <-->|Chat Completions API| OpenAI[OpenAI model<br/>gpt-5.4]
+    Model -.trace.-> Obs[Langfuse]
     Config[config.py<br/>pydantic-settings] -.-> API
-    Config -.-> Graph
+    Config -.-> Agent
 ```
 
 ## Request flow
@@ -43,74 +45,66 @@ sequenceDiagram
     autonumber
     participant C as Client
     participant A as FastAPI
-    participant G as Graph
+    participant G as Agent
     participant L as OpenAI model
 
     C->>A: POST /chat/stream {message}
     A->>G: astream_events({messages:[HumanMessage]})
-    G->>L: messages + system prompt
+    G->>L: system prompt + messages
     L-->>G: token stream
-    G-->>A: on_chat_model_stream events
-    A-->>C: SSE: data: {"token": "..."}
+    G-->>A: on_chat_model_stream events (node "model")
+    A-->>C: SSE: event: token {"token": "..."}
     A-->>C: SSE: event: done
 ```
 
 ## Components
 
-### State
+### Agent
 
 ```python
-# src/chatbot/graph/state.py
-from typing import Annotated, TypedDict
-from langchain_core.messages import AnyMessage
-from langgraph.graph.message import add_messages
+# src/chatbot/graph/builder.py (Phase 1 subset)
+def build_llm(settings: Settings) -> ChatOpenAI:
+    return ChatOpenAI(
+        model=settings.model,
+        base_url=settings.openai_base_url or None,
+        reasoning_effort=settings.reasoning_effort,
+        streaming=True,
+        stream_usage=True,          # token counts on streamed responses, for logs and traces
+    )
 
-class AgentState(TypedDict):
-    messages: Annotated[list[AnyMessage], add_messages]
+def build_graph(settings, tools=(), llm=None, ...):
+    model = llm or build_llm(settings)
+    return create_agent(model, tools=list(tools), middleware=[system_prompt, ...])
 ```
-
-Keep the state small and typed from day one. Later phases add fields (`summary`, `pii_map_id`, `user_id`), and a typed state makes those additions easy to review.
-
-### Graph builder
 
 ```python
-# src/chatbot/graph/builder.py
-from langgraph.graph import StateGraph, START, END
-from langchain_openai import ChatOpenAI
-
-def build_graph(settings):
-    llm = ChatOpenAI(model=settings.model, base_url=settings.openai_base_url, streaming=True)
-
-    async def llm_node(state: AgentState):
-        msgs = [SystemMessage(settings.system_prompt), *state["messages"]]
-        return {"messages": [await llm.ainvoke(msgs)]}
-
-    g = StateGraph(AgentState)
-    g.add_node("llm", llm_node)
-    g.add_edge(START, "llm")
-    g.add_edge("llm", END)
-    return g.compile()
+# src/chatbot/graph/middleware.py
+@dynamic_prompt
+def system_prompt(_request: ModelRequest) -> str:
+    return load_prompt("system").replace("{today}", date.today().isoformat())
 ```
 
-Write `build_graph` as a factory that takes its dependencies (settings, and later the checkpointer, store and tools). Tests can then build the graph with fakes.
+- `build_graph` is a factory that takes its dependencies (settings, and later tools, a checkpointer and approval rules). Tests pass a fake chat model.
+- The state is `create_agent`'s `AgentState`: the message list, plus internal keys its middleware uses (`graph/state.py`).
+- The system prompt lives in `src/chatbot/prompts/system.md`, not in code.
 
 ### API
 
 | Endpoint | Purpose |
 |----------|---------|
 | `POST /chat` | Returns the full reply as JSON (simple, good for tests) |
-| `POST /chat/stream` | SSE token stream |
+| `POST /chat/stream` | SSE stream: `token` events, then `done` (or `error`) |
 | `GET /healthz` | Liveness |
 
-Request schema: `{ "message": str, "thread_id": str | None }`. Accept `thread_id` now even though it does nothing until Phase 3, so the API contract doesn't change later.
+`stream_run` (`api/streaming.py`) forwards `on_chat_model_stream` events from the `model` node as `token` events. The SSE event types were defined up front (`token`, `tool_start`, `tool_end`, `interrupt`, `done`, `error`), so later phases added events without changing the contract.
 
 ### Config
 
-```
+```dotenv
 OPENAI_API_KEY=
 OPENAI_BASE_URL=        # optional, for an OpenAI-compatible gateway
-MODEL=gpt-5-mini
-REASONING_EFFORT=minimal
+MODEL=gpt-5.4
+REASONING_EFFORT=low
 DATABASE_URL=postgresql://chatbot:chatbot@localhost:5433/chatbot
 LANGFUSE_PUBLIC_KEY=pk-lf-local-dev
 LANGFUSE_SECRET_KEY=sk-lf-local-dev
@@ -118,23 +112,33 @@ LANGFUSE_HOST=http://localhost:3000
 LOG_LEVEL=INFO
 ```
 
+`MODEL` was `gpt-5-mini` until Phase 4. `gpt-5.4` routed short questions to the right tool more reliably and was faster through the gateway (1.5 s vs 2.4 s median), at about ten times the token price. `REASONING_EFFORT` below `low` made both models answer questions like "president of USA" from stale memory instead of searching.
+
+### Local stack
+
+`tilt up` runs Postgres, the self-hosted Langfuse stack, migrations, the API and the Streamlit UI, plus pgweb (<http://localhost:8081>) for browsing the database. Without Tilt: `make up`, `make migrate`, then `make dev` and `make ui`.
+
+### Logging
+
+Every log line carries the request ID and thread (`observability.py`, `api/middleware.py`), and each model call logs its time and token counts. HTTP client and access logs only show with `LOG_LEVEL=DEBUG`.
+
 ## Implementation steps
 
-1. `uv init`, add deps: `langgraph`, `langchain-openai`, `fastapi`, `uvicorn`, `sse-starlette`, `pydantic-settings`, `langfuse`.
+1. `uv init`, add deps: `langchain`, `langgraph`, `langchain-openai`, `fastapi`, `uvicorn`, `sse-starlette`, `pydantic-settings`, `langfuse`.
 2. Add `docker-compose.yml` with `pgvector/pgvector:pg16`, plus a self-hosted Langfuse stack (`docker-compose.langfuse.yml`).
-3. Write `config.py`, `graph/state.py`, `graph/builder.py`.
-4. Write `api/main.py` with the three endpoints; stream with `graph.astream_events(..., version="v2")` and forward `on_chat_model_stream` chunks.
+3. Write `config.py`, `graph/builder.py`, `graph/middleware.py`.
+4. Write the API with the three endpoints; stream with `agent.astream_events(..., version="v2")` and forward `on_chat_model_stream` chunks from the `model` node.
 5. Wire up the tracing callback handler.
-6. Add a `Makefile` or `justfile` with `dev`, `test`, `lint`, `up`.
+6. Add a `Makefile` with `dev`, `test`, `lint`, `up`, and a Tiltfile.
 
 ## Exit criteria
 
-- [ ] `curl -N localhost:8000/chat/stream -d '{"message":"hi"}'` streams tokens
-- [ ] Every request shows up as a trace with token counts
-- [ ] Unit test runs the graph with a fake chat model (`GenericFakeChatModel`) and no network
-- [ ] CI runs lint, type check and tests
+- [x] `curl -N localhost:8000/chat/stream -H 'X-User-Id: me' -d '{"message":"hi"}'` streams tokens (`test_chat_stream_emits_tokens_then_done`)
+- [x] Every request shows up as a trace with token counts (Langfuse; token counts also in the API log)
+- [x] Unit test runs the agent with a fake chat model and no network (`tests/unit/test_graph.py`)
+- [x] CI runs lint, type check and tests (`.github/workflows/ci.yml`)
 
 ## Risks and notes
 
-- **Streaming plumbing breaks later.** Once tools and interrupts arrive, the event stream carries more than tokens. Define the SSE event types now (`token`, `tool_start`, `tool_end`, `interrupt`, `done`, `error`) even if only two are used.
+- **Streaming plumbing breaks later.** Once tools and interrupts arrive, the event stream carries more than tokens. The SSE event types were defined from the start, and only the `model` node's tokens are forwarded, so the summarizer (Phase 3) never leaks into the reply.
 - **Prompt sprawl.** Keep the system prompt in a versioned file (`prompts/system.md`), not inline strings.
