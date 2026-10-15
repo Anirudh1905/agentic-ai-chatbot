@@ -8,6 +8,8 @@ from langchain_core.callbacks import BaseCallbackHandler
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.graph.state import CompiledStateGraph
+from langgraph.store.base import BaseStore
+from langgraph.store.postgres.aio import AsyncPostgresStore
 
 from chatbot.agent.approvals import interrupt_on
 from chatbot.agent.builder import AgentState, build_graph
@@ -31,6 +33,7 @@ class Resources:
         self.graph: CompiledStateGraph[AgentState] | None = None
         self.checkpointer: AsyncPostgresSaver | None = None
         self.threads: PostgresThreadStore | None = None
+        self.store: AsyncPostgresStore | None = None
         self._lock = asyncio.Lock()
 
     async def ensure(self) -> None:
@@ -43,29 +46,45 @@ class Resources:
             checkpointer = AsyncPostgresSaver(self.pool)
             # Creates and migrates the checkpoint tables; a no-op once they're current.
             await checkpointer.setup()
+            embeddings = build_embeddings(settings)
+            # Long-term memory (memory/long_term.py), searched by meaning. Creates and migrates
+            # its own tables, including the vector index, too.
+            store = AsyncPostgresStore(
+                self.pool,
+                index={
+                    "dims": settings.embedding_dimensions,
+                    "embed": embeddings,
+                    "fields": ["content"],
+                },
+            )
+            await store.setup()
             reranker = build_reranker(settings)
             if reranker:
                 # Load the model now rather than during the first search.
                 await asyncio.to_thread(reranker.load)
-            tools = build_tools(settings, self.pool, build_embeddings(settings), reranker)
+            tools = build_tools(settings, self.pool, embeddings, reranker)
             self.checkpointer = checkpointer
             self.threads = PostgresThreadStore(self.pool)
+            self.store = store
             self.graph = build_graph(
                 settings,
                 tools=tools,
                 checkpointer=checkpointer,
+                store=store,
                 interrupt_on=interrupt_on(tools, settings.hitl_sensitive_terms)
                 if settings.hitl_enabled
                 else None,
             )
             logger.info(
                 "agent ready: model=%s, summary_model=%s, tools=[%s], context limit %d tokens, "
-                "approvals %s",
+                "approvals %s, memory %s (%s)",
                 settings.model,
                 settings.summary_model,
                 ", ".join(t.name for t in tools),
                 settings.context_max_tokens,
                 "on" if settings.hitl_enabled else "off",
+                "on" if settings.memory_enabled else "off",
+                settings.memory_model,
             )
 
     async def close(self) -> None:
@@ -86,6 +105,12 @@ async def get_checkpointer() -> BaseCheckpointSaver[Any]:
     await resources.ensure()
     assert resources.checkpointer is not None
     return resources.checkpointer
+
+
+async def get_store() -> BaseStore:
+    await resources.ensure()
+    assert resources.store is not None
+    return resources.store
 
 
 async def get_threads() -> ThreadStore:
@@ -110,5 +135,6 @@ def get_callbacks() -> list[BaseCallbackHandler]:
 Graph = Annotated[CompiledStateGraph[AgentState], Depends(get_graph)]
 Checkpointer = Annotated[BaseCheckpointSaver[Any], Depends(get_checkpointer)]
 Threads = Annotated[ThreadStore, Depends(get_threads)]
+Store = Annotated[BaseStore, Depends(get_store)]
 UserId = Annotated[str, Depends(get_user_id)]
 Callbacks = Annotated[list[BaseCallbackHandler], Depends(get_callbacks)]

@@ -13,7 +13,7 @@ The work is split into phases. Each phase ends with something that runs and can 
 | 3 | [Short-Term Memory & Checkpointing](phase-3-short-term-memory-checkpointing.md) | Per-thread state saved to Postgres, resume, summarization of old turns | 1 | Built |
 | 4 | [Human-in-the-Loop](phase-4-human-in-the-loop.md) | Approval on risky tool calls, interrupt and resume, edit or reject flows | 3 | Built (audit table deferred) |
 | 5 | [PII Detection & Masking](phase-5-pii-detection-masking.md) | Redaction of PII in user messages, tool results and replies | 2, 3 | Built (lean: one-way) |
-| 6 | [Long-Term Memory](phase-6-long-term-memory.md) | Cross-thread user memory, extraction, semantic recall | 3, 5 | Planned |
+| 6 | [Long-Term Memory](phase-6-long-term-memory.md) | Per-fact memories per user across threads, updated at token breaches, recalled when a thread starts | 3, 5 | Built |
 | 7 | [Production Hardening](phase-7-production-hardening.md) | Evals, observability, auth, rate limits, deployment | All | Planned |
 
 The agent is LangChain's `create_agent` (a LangGraph graph) with middleware. Each feature is a middleware hook around the model call, built-in wherever LangChain has one: `SummarizationMiddleware` (Phase 3), `HumanInTheLoopMiddleware` (Phase 4), `ModelCallLimitMiddleware` and `ToolRetryMiddleware`. PII redaction (Phase 5) uses LangChain's detectors: the user's message is redacted in the API before the agent runs (so raw values never reach a checkpoint), and `PIIMiddleware` redacts tool results and replies.
@@ -37,41 +37,38 @@ flowchart LR
     P6 --> P7
 ```
 
-## Target architecture (end state)
+## Architecture
 
-Solid boxes exist today; dashed ones (long-term memory) arrive in Phase 6.
+Phases 1–6 as built. Phase 7 hardens it for production rather than adding boxes.
 
 ```mermaid
 flowchart TB
-    User([User]) <--> UI[Chat UI]
+    User([User]) <--> UI[Chat UI<br/>threads, approval card,<br/>memory panel]
     UI <-->|HTTP / SSE| API[FastAPI service<br/>redacts PII first]
 
     subgraph Agent["create_agent + middleware"]
         direction TB
-        LoadMem[Recall long-term memory<br/>before_agent] -.-> Sum[Summarization<br/>before_model]
-        Sum --> LLM[model<br/>system prompt, call limit]
+        LoadMem["LongTermMemory<br/>before_agent: recall memories<br/>(new threads only)"] --> Sum["Summarization<br/>before_model: short-term memory"]
+        Sum --> LLM["model<br/>system prompt + memories,<br/>call limit"]
         LLM -->|tool calls| HITL{HumanInTheLoopMiddleware<br/>needs approval?}
         HITL -->|yes| Interrupt[[interrupt: wait for human]]
         Interrupt --> Tools
         HITL -->|no| Tools[tools<br/>retried once on failure]
         Tools --> Sum
-        LLM -->|final answer| PIIout[PIIMiddleware: output<br/>after_model]
-        PIIout -.-> SaveMem[Extract + save memories<br/>after_agent]
+        LLM -->|final answer| PIIout[PIIMiddleware<br/>tool results + reply]
     end
 
     API <--> Agent
+    Sum -. "token breach: summary,<br/>written in the background" .-> Writer[MemoryWriter<br/>facts → add / update / delete]
 
     Tools --> RAG[Knowledge base search<br/>hybrid + rerank]
     Tools --> Web[Web search<br/>DuckDuckGo]
     RAG --> VDB[(pgvector<br/>chunks)]
     Agent <-->|checkpoints| CP[(Postgres<br/>checkpointer)]
-    LoadMem -.- LTM[(Postgres store<br/>long-term memory)]
-    SaveMem -.- LTM
+    LoadMem --- LTM[(AsyncPostgresStore<br/>per-fact memories, vector index)]
+    Writer --> LTM
     Agent -.traces.-> Obs[Langfuse]
     API --> Threads[(threads table)]
-
-    classDef planned stroke-dasharray: 5 5
-    class LoadMem,SaveMem,LTM planned
 ```
 
 ## Default tech stack
@@ -102,8 +99,8 @@ agentic-ai-chatbot/
 │   ├── api/                   # routes/, runs.py, streaming.py (SSE), schemas.py, request_logging.py
 │   ├── tools/                 # rag.py, web_search.py, rerank.py, registry.py
 │   ├── ingestion/             # loaders, chunking, indexing CLI
-│   ├── memory/                # threads.py (thread metadata), retention.py; Phase 6: long-term memory
-│   ├── prompts/               # system.md, summarize.md
+│   ├── memory/                # short_term.py (summarization), long_term.py (user memories), threads.py, retention.py
+│   ├── prompts/               # system.md, summarize.md, memory_extract.md, memory_decide.md
 │   ├── pii.py                 # PII redaction, applied by the API before the agent runs
 │   ├── config.py
 │   └── observability.py

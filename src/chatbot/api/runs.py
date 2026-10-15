@@ -20,9 +20,13 @@ logger = logging.getLogger(__name__)
 
 
 def run_config(
-    thread_id: UUID, callbacks: list[BaseCallbackHandler], checkpoint_id: str | None = None
+    thread_id: UUID,
+    user_id: str,
+    callbacks: list[BaseCallbackHandler],
+    checkpoint_id: str | None = None,
 ) -> RunnableConfig:
-    configurable: dict[str, Any] = {"thread_id": str(thread_id)}
+    # user_id tells long-term memory whose memories to read and update (memory/long_term.py).
+    configurable: dict[str, Any] = {"thread_id": str(thread_id), "user_id": user_id}
     if checkpoint_id:
         configurable["checkpoint_id"] = checkpoint_id
     return {

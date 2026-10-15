@@ -76,6 +76,20 @@ class CheckpointInfo(BaseModel):
     last_message: str | None
 
 
+class Memory(BaseModel):
+    id: str
+    content: str
+    # "user" (about the user themselves) or "other" (an order, a trip, an open issue).
+    scope: str
+    topic: str
+    updated_at: datetime
+
+
+class MemoryList(BaseModel):
+    # Newest first. Empty when the bot doesn't remember anything about the user yet.
+    memories: list[Memory]
+
+
 class EditedAction(BaseModel):
     name: str
     args: dict[str, Any]

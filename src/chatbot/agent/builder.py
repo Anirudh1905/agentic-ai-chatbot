@@ -13,14 +13,12 @@ from langchain_core.tools import BaseTool
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph.state import CompiledStateGraph
+from langgraph.store.base import BaseStore
 
-from chatbot.agent.middleware import (
-    ModelCallLimit,
-    ModelCallMiddleware,
-    summarization,
-    system_prompt,
-)
+from chatbot.agent.middleware import ModelCallLimit, ModelCallMiddleware, system_prompt
 from chatbot.config import Settings
+from chatbot.memory.long_term import LongTermMemory, MemoryWriter
+from chatbot.memory.short_term import summarization
 from chatbot.pii import output_middleware
 from chatbot.tools.registry import tool_retry
 
@@ -59,19 +57,28 @@ def build_graph(
     summarizer: BaseChatModel | None = None,
     checkpointer: BaseCheckpointSaver[Any] | None = None,
     interrupt_on: dict[str, bool | InterruptOnConfig] | None = None,
+    store: BaseStore | None = None,
+    memory_model: BaseChatModel | None = None,
 ) -> CompiledStateGraph[AgentState]:
     """The agent: LangChain's create_agent loop (model ↔ tools) plus middleware.
 
     Without a checkpointer every call starts a new conversation. `summarizer` defaults to
     SUMMARY_MODEL, or to `llm` when one is injected (tests). With `interrupt_on` (see
-    hitl/policy.py), matching tool calls pause for a human; this needs a checkpointer.
+    agent/approvals.py), matching tool calls pause for a human; this needs a checkpointer. With
+    a `store` (and MEMORY_ENABLED), the agent keeps long-term memories of each user
+    (memory/long_term.py), written by `memory_model` (default MEMORY_MODEL).
     """
     model = llm or build_llm(settings)
     summary_model = summarizer or llm or build_llm(settings, settings.summary_model, False)
+    writer = None
+    if store is not None and settings.memory_enabled:
+        writer = MemoryWriter(memory_model or build_llm(settings, settings.memory_model, False))
     middleware: list[AgentMiddleware[Any, Any]] = [
+        # Recalls the user's long-term memories when a thread starts.
+        *([LongTermMemory(settings.memory_recall_limit)] if writer else []),
         # PII in tool results and replies (user messages are redacted earlier, by the API).
         *(output_middleware() if settings.pii_enabled else []),
-        summarization(settings, summary_model),
+        summarization(settings, summary_model, on_summary=writer.schedule if writer else None),
         system_prompt,
         ModelCallMiddleware(),
         # Ends the run with a short message rather than an error if the model keeps going.
@@ -81,5 +88,7 @@ def build_graph(
         middleware.append(retry)
     if interrupt_on:
         middleware.append(HumanInTheLoopMiddleware(interrupt_on))
-    agent = create_agent(model, tools=list(tools), middleware=middleware, checkpointer=checkpointer)
+    agent = create_agent(
+        model, tools=list(tools), middleware=middleware, checkpointer=checkpointer, store=store
+    )
     return cast(CompiledStateGraph[AgentState], agent)

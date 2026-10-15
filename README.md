@@ -2,7 +2,7 @@
 
 An agentic chatbot with RAG and web search tools, human-in-the-loop approvals, PII detection and masking, and short-term plus long-term memory.
 
-See the phased build plan in [docs/README.md](docs/README.md). Phases 1 (foundation), 2 (RAG and web search tools), 3 (short-term memory and checkpointing), 4 (human-in-the-loop approvals) and 5 (PII redaction) are implemented. The agent is LangChain's `create_agent` with middleware, using the built-ins wherever LangChain has one.
+See the phased build plan in [docs/README.md](docs/README.md). Phases 1 (foundation), 2 (RAG and web search tools), 3 (short-term memory and checkpointing), 4 (human-in-the-loop approvals), 5 (PII redaction) and 6 (long-term memory) are implemented. The agent is LangChain's `create_agent` with middleware, using the built-ins wherever LangChain has one.
 
 ## Quickstart
 
@@ -73,6 +73,15 @@ curl localhost:8000/threads/$THREAD/resume -H 'content-type: application/json' -
 
 Decision types are `approve`, `edit` (with `edited_action`) and `reject` (with an optional `message`). Each decision is logged (`decisions: web_search=edit`).
 
+### Long-term memory
+
+Short-term memory is the current thread. Long-term memory is what the bot knows about you across threads: small memories, one fact each, in LangGraph's `AsyncPostgresStore` with a vector index (`src/chatbot/memory/long_term.py`).
+
+- **Written** when a thread passes `CONTEXT_MAX_TOKENS` (10k by default), in the background, so the reply doesn't wait. `MEMORY_MODEL` (`gpt-5-mini`) splits the summary Phase 3 already makes into facts, each tagged with a scope (about you, or about an order, trip or issue) and a topic. For each fact it finds the closest memories you already have and decides what changes: add it, update the memory it corrects, or delete the ones it makes obsolete. Say your favourite colour is pink in one chat and red in a later one, and the pink memory becomes red. One write per user at a time, across API processes too (a Postgres advisory lock).
+- **Read** once, when a new thread starts: the memories closest to your first message (up to `MEMORY_RECALL_LIMIT`) go into the system prompt, dated, to be used only when relevant.
+
+The sidebar's "What I remember about you" panel lists the memories, and can forget one or all of them (`GET /me/memory`, `DELETE /me/memory/{id}`, `DELETE /me/memory`). Only threads that pass `CONTEXT_MAX_TOKENS` are remembered; lower it (the local `.env` uses 1000) to see it work sooner. Set `MEMORY_ENABLED=false` to turn it off.
+
 ### PII redaction
 
 Emails, card numbers, IP addresses and phone numbers in the user's messages are replaced as soon as the API receives them: `my email is jane@x.com` becomes `my email is [REDACTED_EMAIL]`. The redaction uses LangChain's `RedactionRule` detectors (`src/chatbot/pii.py`) and runs before the agent is invoked, so the model, the summarizer, web search queries, every checkpoint, the trace, the logs and the thread title only get the redacted text. Reviewer edits and reject reasons on approvals are redacted too. Order numbers are kept, since the bot needs them.
@@ -105,6 +114,7 @@ What's logged:
 | Tools | every search (query, hits, time, top result), web search backend failures, a search that failed after retrying, reranker load and fallback |
 | Approvals | paused for approval (tool and args), the decisions, resume and delete |
 | PII | each redaction, by type only, from the message, a tool result or the reply |
+| Memory | memories recalled (or none yet) when a thread starts, what each write changed (`2 add, 1 update, 1 delete`), a failed write, the user deleting a memory or all of them. Never the memories themselves |
 
 HTTP client, OpenAI SDK, uvicorn access and `/healthz` lines are hidden unless `LOG_LEVEL=DEBUG`. PII values are never logged: messages are logged by length, search queries are written by the model from redacted text, and redactions are logged by type.
 
@@ -133,6 +143,9 @@ curl -N localhost:8000/chat/stream \
 | `POST /threads/{id}/resume` | Send approval `decisions`, finish an interrupted run, or replay from `checkpoint_id` |
 | `POST /threads/{id}/resume/stream` | The same, streamed like `/chat/stream` |
 | `DELETE /threads/{id}` | Delete the thread and all its checkpoints |
+| `GET /me/memory` | What the bot remembers about you across threads (your long-term memories), newest first |
+| `DELETE /me/memory/{id}` | Forget one memory |
+| `DELETE /me/memory` | Forget everything |
 | `GET /healthz` | Liveness |
 
 All endpoints except `/healthz` need an `X-User-Id` header.
@@ -154,8 +167,11 @@ Set in `.env` (see `.env.example`):
 | `RERANKER_MODEL` | `BAAI/bge-reranker-v2-m3-int8` | Local cross-encoder that reorders the top `RERANK_CANDIDATES` (8) results. Empty turns it off |
 | `MAX_MODEL_CALLS` | `6` | Model calls per request (`ModelCallLimitMiddleware`); each can be followed by tool calls |
 | `SUMMARY_MODEL` | `gpt-5-nano` | Summarizes older turns of long threads |
-| `CONTEXT_MAX_TOKENS` | `32000` | Summarize older turns once a thread's messages pass this (estimated) |
+| `CONTEXT_MAX_TOKENS` | `10000` | Summarize older turns once a thread's messages pass this (estimated) |
 | `CHECKPOINT_RETENTION_DAYS` | `30` | `make retention` prunes checkpoint history of threads idle this long |
+| `MEMORY_ENABLED` | `true` | Long-term memory: updated at token breaches, recalled when a thread starts |
+| `MEMORY_MODEL` | `gpt-5-mini` | Splits summaries into memories and decides what each one changes |
+| `MEMORY_RECALL_LIMIT` | `10` | Memories recalled into a new thread |
 | `PII_ENABLED` | `true` | Redact emails, cards, IPs and phone numbers from user messages, tool results and replies |
 | `PII_ALLOWED_EMAIL_DOMAINS` | `["acme-outfitters.example"]` | JSON list. Emails at these domains are never redacted |
 | `HITL_ENABLED` | `true` | Pause risky tool calls for approval |

@@ -75,7 +75,7 @@ With the Phase 4 middleware there are a few more steps per round trip (one per m
 
 ## Context-window management
 
-Messages grow without limit, but the context window doesn't. Older turns are folded into a running summary by LangChain's `SummarizationMiddleware`, configured and slightly adjusted in `src/chatbot/agent/middleware.py`:
+Messages grow without limit, but the context window doesn't. Older turns are folded into a running summary by LangChain's `SummarizationMiddleware`, configured and slightly adjusted in `src/chatbot/memory/short_term.py`:
 
 ```mermaid
 flowchart LR
@@ -98,7 +98,7 @@ Summarization(                       # subclass of SummarizationMiddleware
 )
 ```
 
-- **Threshold:** `CONTEXT_MAX_TOKENS` (default 32k), measured with LangChain's local estimate (`count_tokens_approximately`). That's far below the model's window on purpose: every turn and every tool round trip resends the history, so cost and latency grow long before the window fills.
+- **Threshold:** `CONTEXT_MAX_TOKENS` (default 10k), measured with LangChain's local estimate (`count_tokens_approximately`). That's far below the model's window on purpose: every turn and every tool round trip resends the history, so cost and latency grow long before the window fills.
 - **What's kept:** about the most recent half of the budget, so the next few turns don't trigger another summary straight away.
 - **Rolling summary:** the summary is one message in the thread, marked `lc_source: "summarization"` and starting "Here is a summary of the conversation to date". The next summarization folds it in with the newly dropped messages, so it doesn't drift. `GET /threads/{id}/messages` returns it as `summary` and leaves it out of `messages`.
 - **What the summarizer is told** (`prompts/summarize.md`): keep names, numbers, dates, order IDs and decisions verbatim, keep answers with their citations, and treat the messages as data.

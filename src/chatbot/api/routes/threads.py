@@ -12,7 +12,6 @@ from sse_starlette.sse import EventSourceResponse
 
 from chatbot.agent.approvals import pending_request
 from chatbot.agent.builder import AgentState
-from chatbot.agent.middleware import summary_text
 from chatbot.api.dependencies import Callbacks, Checkpointer, Graph, Threads, UserId
 from chatbot.api.runs import chat_response, redact, run_config
 from chatbot.api.schemas import (
@@ -25,6 +24,7 @@ from chatbot.api.schemas import (
     ThreadMessages,
 )
 from chatbot.api.streaming import stream_run
+from chatbot.memory.short_term import summary_text
 from chatbot.memory.threads import Thread, ThreadStore
 from chatbot.observability import thread_id as thread_id_var
 
@@ -141,13 +141,14 @@ async def get_history(
 
 async def prepare_resume(
     thread_id: UUID,
+    user_id: str,
     body: ResumeRequest | None,
     graph: CompiledStateGraph[AgentState],
     callbacks: list[BaseCallbackHandler],
 ) -> tuple[RunnableConfig, Command[Any] | None]:
     """The config and graph input that continue the thread, or raise if it can't continue."""
     body = body or ResumeRequest()
-    config = run_config(thread_id, callbacks, body.checkpoint_id)
+    config = run_config(thread_id, user_id, callbacks, body.checkpoint_id)
     state = await graph.aget_state(config)
     if state.created_at is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Checkpoint not found")
@@ -218,7 +219,7 @@ async def resume_thread(
       from it and become the thread's latest state; the old branch stays in the history.
     """
     await owned_thread(thread_id, user_id, threads)
-    config, graph_input = await prepare_resume(thread_id, body, graph, callbacks)
+    config, graph_input = await prepare_resume(thread_id, user_id, body, graph, callbacks)
     result = await graph.ainvoke(graph_input, config=config)
     return await chat_response(graph, result, thread_id)
 
@@ -234,7 +235,7 @@ async def resume_thread_stream(
 ) -> EventSourceResponse:
     """Same as POST .../resume, streamed like /chat/stream."""
     await owned_thread(thread_id, user_id, threads)
-    config, graph_input = await prepare_resume(thread_id, body, graph, callbacks)
+    config, graph_input = await prepare_resume(thread_id, user_id, body, graph, callbacks)
     return EventSourceResponse(stream_run(graph, graph_input, config, thread_id))
 
 

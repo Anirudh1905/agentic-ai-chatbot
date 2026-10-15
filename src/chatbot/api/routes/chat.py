@@ -53,7 +53,7 @@ async def chat(
 ) -> ChatResponse:
     thread_id, message = await open_thread(body, user_id, threads, graph)
     result = await graph.ainvoke(
-        {"messages": [HumanMessage(message)]}, config=run_config(thread_id, callbacks)
+        {"messages": [HumanMessage(message)]}, config=run_config(thread_id, user_id, callbacks)
     )
     return await chat_response(graph, result, thread_id)
 
@@ -67,7 +67,7 @@ async def chat_stream(
         stream_run(
             graph,
             {"messages": [HumanMessage(message)]},
-            run_config(thread_id, callbacks),
+            run_config(thread_id, user_id, callbacks),
             thread_id,
         )
     )

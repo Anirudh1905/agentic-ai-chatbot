@@ -32,8 +32,9 @@ class Settings(BaseSettings):
     summary_model: str = "gpt-5-nano"
     # Once a thread's messages pass this many tokens (local estimate), older messages are
     # folded into a running summary, keeping the most recent half verbatim. Well under the
-    # model's window: every turn resends the history.
-    context_max_tokens: int = 32_000
+    # model's window: every turn resends the history. Each summary also updates the user's
+    # long-term memory.
+    context_max_tokens: int = 10_000
     # The retention job keeps only the latest checkpoint of threads idle this many days.
     checkpoint_retention_days: int = 30
 
@@ -65,6 +66,16 @@ class Settings(BaseSettings):
     # Emails at these domains are never redacted: Acme's own contact addresses must reach
     # customers. JSON list in .env.
     pii_allowed_email_domains: list[str] = ["acme-outfitters.example"]
+
+    # Long-term memory: small per-user memories, updated from thread summaries and recalled when
+    # a new thread starts (memory/long_term.py).
+    memory_enabled: bool = True
+    # Splits summaries into memories and decides what each one changes. gpt-5-mini over
+    # gpt-5-nano: on a 24-run memory spike, nano left outdated or forbidden facts behind (32/36
+    # removed vs 36/36) and stored other people's details and health facts.
+    memory_model: str = "gpt-5-mini"
+    # Memories recalled into a new thread, closest to its first message.
+    memory_recall_limit: int = 10
 
     # Human approval before risky tool calls (see hitl/policy.py).
     hitl_enabled: bool = True

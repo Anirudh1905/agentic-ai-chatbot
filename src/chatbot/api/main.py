@@ -5,7 +5,7 @@ from fastapi import FastAPI
 
 from chatbot.api.dependencies import resources
 from chatbot.api.request_logging import RequestLoggingMiddleware
-from chatbot.api.routes import chat, health, threads
+from chatbot.api.routes import chat, health, memory, threads
 from chatbot.config import get_settings
 from chatbot.observability import configure_logging
 
@@ -22,3 +22,4 @@ app.add_middleware(RequestLoggingMiddleware)
 app.include_router(health.router)
 app.include_router(chat.router)
 app.include_router(threads.router)
+app.include_router(memory.router)

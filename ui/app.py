@@ -91,6 +91,34 @@ def render_sources(sources: list[dict[str, Any]], reply: str) -> None:
                 st.markdown(f"- 📄 {s['cite_as']}  \n  `{s['doc_id']}`")
 
 
+def memory_panel() -> None:
+    """What the bot remembers about this user across conversations (long-term memory)."""
+    try:
+        with api() as client:
+            memories = client.get("/me/memory").json()["memories"]
+    except httpx.HTTPError:
+        return
+    with st.expander(f"What I remember about you ({len(memories)})"):
+        if not memories:
+            st.caption(
+                "Nothing yet. I learn from long conversations, and use it when a new chat starts."
+            )
+            return
+        for memory in memories:
+            text, delete = st.columns([6, 1], vertical_alignment="center")
+            text.markdown(f"{memory['content']}  \n:gray[{memory['topic']}]")
+            if delete.button(
+                "", icon=":material/close:", key=f"forget-{memory['id']}", help="Forget this"
+            ):
+                with api() as client:
+                    client.delete(f"/me/memory/{memory['id']}")
+                st.rerun()
+        if st.button("Forget everything", icon=":material/delete_forever:", width="stretch"):
+            with api() as client:
+                client.delete("/me/memory")
+            st.rerun()
+
+
 st.set_page_config(page_title="Agentic AI Chatbot", page_icon="💬")
 st.title("Agentic AI Chatbot")
 
@@ -134,6 +162,7 @@ with st.sidebar:
                 client.delete(f"/threads/{st.session_state.thread_id}")
             new_thread()
             st.rerun()
+    memory_panel()
     st.caption(f"API: `{API_URL}` · thread `{st.session_state.thread_id[:8]}`")
 
 if st.session_state.summary:

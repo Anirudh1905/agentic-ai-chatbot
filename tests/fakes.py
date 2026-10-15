@@ -12,8 +12,10 @@ from langchain_core.callbacks import CallbackManagerForLLMRun
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
+from langchain_core.runnables import Runnable, RunnableLambda
 from langchain_core.tools import BaseTool, tool
 
+from chatbot.memory.long_term import Change, Changes, Fact, Facts
 from chatbot.memory.threads import Thread
 
 
@@ -110,7 +112,8 @@ def make_flaky_lookup_tool(failures: int = 1) -> BaseTool:
 
 class FactKeepingSummarizer(BaseChatModel):
     """Summarizes by keeping every line that contains "fact:", from the old summary and the
-    transcript alike. Lets tests check that facts survive repeated summarization."""
+    transcript alike. Lets tests check that facts survive repeated summarization. A fact
+    written as "fact: key=value" replaces an earlier one with the same key."""
 
     calls: int = 0
 
@@ -127,9 +130,59 @@ class FactKeepingSummarizer(BaseChatModel):
     ) -> ChatResult:
         self.calls += 1
         # Stop at "<" and "&": the summary middleware sends messages as XML.
-        facts = re.findall(r"fact: [^\n<&]*", messages[-1].text)
-        summary = "\n".join(f"- {f}" for f in dict.fromkeys(facts))
+        facts: dict[str, str] = {}
+        for fact in re.findall(r"fact: [^\n<&]*", messages[-1].text):
+            facts[fact.split("=", 1)[0]] = fact.strip()
+        summary = "\n".join(f"- {f}" for f in facts.values())
         return ChatResult(generations=[ChatGeneration(message=AIMessage(summary))])
+
+
+class FactMemoryModel(BaseChatModel):
+    """Stands in for the memory model, with "fact: key=value" lines (see FactKeepingSummarizer).
+
+    Every such line in a summary is a memory; "fact: key=forget" asks to forget `key`. A new
+    memory updates the existing one with the same key (or deletes it, for a forget request),
+    and is added otherwise."""
+
+    @property
+    def _llm_type(self) -> str:
+        return "fact-memory"
+
+    def _generate(self, *args: Any, **kwargs: Any) -> ChatResult:
+        raise NotImplementedError("only used through with_structured_output")
+
+    def with_structured_output(self, schema: Any, **kwargs: Any) -> Runnable[Any, Any]:
+        return RunnableLambda(self._extract if schema is Facts else self._decide)
+
+    @staticmethod
+    def _key(text: str) -> str:
+        return text.split("=", 1)[0]
+
+    def _extract(self, messages: list[BaseMessage]) -> Facts:
+        facts = re.findall(r"fact: [^\n<]*", messages[-1].text)
+        return Facts(
+            memories=[
+                Fact(
+                    content=f.strip(),
+                    scope="user",
+                    topic="preferences",
+                    forget=f.endswith("=forget"),
+                )
+                for f in facts
+            ]
+        )
+
+    def _decide(self, messages: list[BaseMessage]) -> Changes:
+        request = messages[-1].text
+        new = re.search(r"fact: [^\n<]*", request.split("<existing_memories>")[0])
+        assert new
+        fact = new.group().strip()
+        for memory_id, content in re.findall(r"\[(\w+)\] (fact: [^\n]*)", request):
+            if self._key(content) == self._key(fact):
+                if "FORGET REQUEST" in request:
+                    return Changes(changes=[Change(action="DELETE", memory_id=memory_id)])
+                return Changes(changes=[Change(action="UPDATE", memory_id=memory_id, content=fact)])
+        return Changes(changes=[Change(action="ADD")])
 
 
 class InMemoryThreadStore:
