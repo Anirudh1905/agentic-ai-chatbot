@@ -32,10 +32,10 @@ first two never push the same turns twice. Each push:
      corrects, delete the ones it makes obsolete (one fact can make several obsolete).
   One push per user at a time, across API processes too (a Postgres advisory lock), and at
   most MEMORY_WRITE_CONCURRENCY at once per process, since each holds a pooled connection.
-- **Read** at a thread's first turn, and again whenever the user's memories have changed
-  (a per-user version at `("memory_version", user_id)`): `LongTermMemory` searches them with
-  the latest message and puts the closest ones in the thread's state, where the system
-  prompt picks them up.
+- **Read** every turn: `LongTermMemory` searches them with the latest message and adds the
+  closest ones the thread hasn't recalled yet to its state, where the system prompt picks
+  them up. When the user's memories change (a per-user version at
+  `("memory_version", user_id)`), the thread recalls them afresh.
 
 Everything is pushed from messages the API and PIIMiddleware have already redacted
 (Phase 5), so no raw PII reaches the store.

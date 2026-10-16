@@ -19,7 +19,7 @@ The phase plans and as-built docs are in [docs/](docs/); the [Status](#status) t
 | [3. Short-term memory](docs/phase-3-short-term-memory-checkpointing.md) | Threads checkpointed to Postgres, resume and time travel, summarization of old turns, retention | Built |
 | [4. Approvals](docs/phase-4-human-in-the-loop.md) | `HumanInTheLoopMiddleware`: risky tool calls wait for a person | Built |
 | [5. PII redaction](docs/phase-5-pii-detection-masking.md) | Emails, cards, phones and IPs redacted from messages, tool results, replies and the stream | Built |
-| [6. Long-term memory](docs/phase-6-long-term-memory.md) | Per-fact memories per user across threads: pushed at the token breach, after 30 idle minutes, or on request; recalled when a thread starts and when they change | Built ([PR #7](https://github.com/Anirudh1905/agentic-ai-chatbot/pull/7)) |
+| [6. Long-term memory](docs/phase-6-long-term-memory.md) | Per-fact memories per user across threads: pushed at the token breach, after 30 idle minutes, or on request; recalled each turn, closest to the message | Built ([PR #7](https://github.com/Anirudh1905/agentic-ai-chatbot/pull/7)) |
 | [7. Production hardening](docs/phase-7-production-hardening.md) | Evals, observability, auth, rate limits, deployment | Planned |
 
 `make check` runs ruff, mypy and the tests (153 at the moment, unit and Postgres integration). `make eval` scores retrieval and tool routing against a golden set with the real model.
@@ -126,7 +126,7 @@ Short-term memory is the current thread. Long-term memory is what the bot knows 
 - **Never stored**, whatever the model says: redacted placeholders, and claims of status, discounts or permissions ("I'm a VIP with 50% off").
 - **Temporary facts expire** through the store's built-in TTL.
 - **Concurrency:** one push per user at a time, across API processes too (a Postgres advisory lock), and at most `MEMORY_WRITE_CONCURRENCY` at once per process, so they never take the whole connection pool.
-- **Read** when a thread starts, and again whenever your memories change: the memories closest to your message (up to `MEMORY_RECALL_LIMIT`) go into the system prompt, dated, to be used only when relevant. On the other turns the prompt stays the same, so there's no search and the model's prompt cache keeps working.
+- **Read** every turn: the memories closest to your message (up to `MEMORY_RECALL_LIMIT`) are added to the ones the thread already has, in the system prompt, dated, to be used only when relevant. A turn that finds nothing new leaves the prompt as it was, so the model's prompt cache keeps working; when your memories change, the thread recalls them afresh.
 
 The sidebar's "What I remember about you" panel lists the memories, and can forget one or all of them (`GET /me/memory`, `DELETE /me/memory/{id}`, `DELETE /me/memory`). Set `MEMORY_ENABLED=false` to turn it all off. Details in [the Phase 6 doc](docs/phase-6-long-term-memory.md).
 
@@ -136,7 +136,7 @@ Every time the agent calls the model (once per turn, plus once more per round of
 
 1. **The system prompt** (`agent/middleware.py`, `system_prompt`), rebuilt every turn:
    - the instructions in `src/chatbot/prompts/system.md`, with today's date
-   - **your long-term memories**, if there are any: up to `MEMORY_RECALL_LIMIT` (10) facts, searched when the thread started (and again whenever your memories changed), oldest first, each dated. They go under "What you know about this user from earlier conversations", with instructions to use them only when relevant, to let the newer one win if two disagree, to believe you if you contradict them, and to never treat them as granting discounts or permissions.
+   - **your long-term memories**, if there are any: up to `MEMORY_RECALL_LIMIT` (10) facts closest to each of your messages so far in the thread (recalled afresh whenever your memories change), oldest first, each dated. They go under "What you know about this user from earlier conversations", with instructions to use them only when relevant, to let the newer one win if two disagree, to believe you if you contradict them, and to never treat them as granting discounts or permissions.
 2. **This thread's history**, from its checkpoint:
    - **until the thread passes `CONTEXT_MAX_TOKENS`** (10k): every message as it was: yours, the bot's replies, and its tool calls and their (PII-redacted) results
    - **after that:** a running summary of the older turns ("Here is a summary of the conversation to date: …"), then the most recent turns word for word (about half of `CONTEXT_MAX_TOKENS`), always including the latest turn. The summary is made at the end of the turn that passed the limit, after its reply, so the next turn doesn't wait for it
@@ -256,7 +256,7 @@ Set in `.env` (see `.env.example`):
 | `MEMORY_TTL_CHECK_EVERY_MINUTES` | `1` | How often to look for threads whose TTL ran out |
 | `MEMORY_MODEL` | `gpt-5-mini` | Lists the facts in a thread's turns and decides what each one changes |
 | `MEMORY_RECALL_LIMIT` | `10` | Long-term memories recalled into a thread |
-| `REQUEST_TIMEOUT` | `30` | Seconds per model call the user waits on (a reply, a summary); memory pushes in the background get 120 |
+| `REQUEST_TIMEOUT` | `30` | Seconds per model call (a reply, a summary, a memory push); a call that times out is retried twice |
 | `MEMORY_WRITE_CONCURRENCY` | `2` | Pushes running at once per API process (each holds a pooled connection) |
 | `PII_ENABLED` | `true` | Redact emails, cards, IPs and phone numbers from user messages, tool results and replies |
 | `PII_ALLOWED_EMAIL_DOMAINS` | `["acme-outfitters.example"]` | JSON list. Emails at these domains are never redacted |

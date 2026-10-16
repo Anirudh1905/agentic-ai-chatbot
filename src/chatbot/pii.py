@@ -29,12 +29,15 @@ logger = logging.getLogger(__name__)
 
 # No built-in phone detector. 8+ digits with optional spaces, dots, dashes and brackets.
 PHONE = re.compile(r"(?<!\w)\+?\d[\d ().-]{7,}\d(?!\w)")
+# Dates look like that too ("arrived on 2026-10-16" became "arrived on [REDACTED_PHONE]").
+DATE = re.compile(r"\d{4}-\d{2}-\d{2}|\d{2}[.-]\d{2}[.-]\d{4}")
 
 
 def detect_phone(content: str) -> list[PIIMatch]:
     return [
         PIIMatch(type="phone", value=m.group(), start=m.start(), end=m.end())
         for m in PHONE.finditer(content)
+        if not DATE.fullmatch(m.group())
     ]
 
 

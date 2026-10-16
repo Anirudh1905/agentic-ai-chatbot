@@ -221,4 +221,5 @@ class InMemoryThreadStore:
         return [t.id for t in self.rows.values() if t.updated_at < cutoff]
 
     async def idle_between(self, since: datetime, until: datetime) -> list[Thread]:
-        return [t for t in self.rows.values() if since <= t.updated_at < until]
+        rows = [t for t in self.rows.values() if since <= t.updated_at < until]
+        return sorted(rows, key=lambda t: t.updated_at)

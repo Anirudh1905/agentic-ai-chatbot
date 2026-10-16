@@ -23,8 +23,9 @@ class Settings(BaseSettings):
     # searching (gpt-5-mini at "minimal": 9/16 on a routing probe; gpt-5.4 at "none": 15/16).
     reasoning_effort: ReasoningEffort | None = "low"
     max_tokens: int | None = None
-    # Per model call the user waits on (the reply, a summary). A stuck gateway call fails after
-    # this instead of holding the reply for minutes (one summary hung for 126 s at 120).
+    # Per model call (the reply, a summary, a memory push). The gateway sometimes stalls gpt-5
+    # calls until the timeout; this fails them sooner so the retry can go through (one summary
+    # hung for 126 s at 120).
     request_timeout: float = 30.0
 
     # Cap on model calls per request (each is followed by a round of tool calls), so a

@@ -1,7 +1,7 @@
 """Long-term memory over the API, with an in-memory store. A thread's turns are pushed into
 memories at its token breach, when its TTL runs out (idle), or when the user presses
-"Remember this"; every turn recalls the closest memories. The fake memory model turns each
-"fact: key=value" line into a memory, updating the one with the same key."""
+"Remember this"; each turn recalls the memories closest to its message. The fake memory
+model turns each "fact: key=value" line into a memory, updating the one with the same key."""
 
 import asyncio
 from collections.abc import Iterator
@@ -120,6 +120,18 @@ def test_only_turns_not_yet_pushed_are_pushed_again() -> None:
     assert memories(store) == ["fact: city=Pune"]
 
 
+def test_idle_threads_are_pushed_for_every_user_in_the_order_they_happened() -> None:
+    with memory_client(replies=3) as (client, store, llm, writer):
+        chat(client, "fact: city=Pune")
+        chat(client, "fact: colour=green", headers=BOB)
+        chat(client, "fact: city=Bangalore")
+
+        assert push_idle(client, store, writer) == 3
+
+    assert memories(store) == ["fact: city=Bangalore"]
+    assert memories(store, "bob") == ["fact: colour=green"]
+
+
 def test_remember_this_pushes_the_question_and_the_reply_together() -> None:
     store = InMemoryStore()
     llm = scripted("fact: tent=Basecamp 3P")  # the reply carries a fact too
@@ -175,27 +187,42 @@ def test_a_memory_saved_mid_thread_is_recalled_on_the_next_turn() -> None:
     assert ") fact: colour=pink" in system_prompt(llm.calls[-1]).split("<user_memories>")[1]
 
 
-def test_memories_are_searched_again_only_when_they_change(
+def test_memories_for_a_new_topic_are_added_as_the_thread_turns_to_it(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    searches: list[str] = []
-    real = middleware.recall
+    # Stands in for the vector search: each memory matches one word of the message.
+    found = {
+        "ship": "- (2026-01-02) User lives in Pune",
+        "meal": "- (2026-01-01) User is vegetarian",
+    }
 
-    async def counting(store: Any, user_id: str, query: str, limit: int) -> str:
-        searches.append(query)
-        return await real(store, user_id, query, limit)
+    async def search(store: Any, user_id: str, query: str, limit: int) -> str:
+        return "\n".join(line for word, line in found.items() if word in query)
 
-    monkeypatch.setattr(middleware, "recall", counting)
-    with memory_client(replies=4) as (client, store, llm, writer):
+    monkeypatch.setattr(middleware, "recall", search)
+    with memory_client(replies=3) as (client, store, llm, writer):
+        thread = chat(client, "where do you ship?")
+        chat(client, "any trail meals?", thread)
+        chat(client, "do you ship fast?", thread)
+
+    first, second, third = (system_prompt(c) for c in llm.calls)
+    assert "vegetarian" not in first and "Pune" in first
+    # Added, oldest first, and the earlier one stays.
+    assert second.split("<user_memories>")[1].index("vegetarian") < second.index("Pune")
+    # Nothing new: the prompt stays exactly the same, so the prompt cache holds.
+    assert third == second
+
+
+def test_a_forgotten_memory_leaves_open_threads() -> None:
+    with memory_client(replies=3) as (client, store, llm, writer):
+        chat(client, "fact: colour=pink")
+        push_idle(client, store, writer)
         thread = chat(client, "hello")
-        chat(client, "still here", thread)  # nothing changed: no new search
-        other = chat(client, "fact: colour=pink")
-        client.post(f"/threads/{other}/messages/1/remember")
-        settle(client)
-        chat(client, "pick a colour", thread)  # a memory was added: search again
+        client.delete("/me/memory")
+        chat(client, "pick a colour", thread)
 
-    assert searches == ["hello", "fact: colour=pink", "pick a colour"]
-    assert ") fact: colour=pink" in system_prompt(llm.calls[-1])
+    assert "colour=pink" in system_prompt(llm.calls[1])
+    assert "colour=pink" not in system_prompt(llm.calls[2])
 
 
 def test_a_newer_fact_updates_its_memory_and_keeps_the_others() -> None:
@@ -236,6 +263,26 @@ def test_a_failed_push_is_retried_by_the_next_trigger() -> None:
 
     assert memories(store) == ["fact: colour=pink"]
     assert llm.calls
+
+
+def test_turns_the_content_filter_rejects_are_not_retried() -> None:
+    class Filtered(Exception):
+        code = "content_filter"  # what the OpenAI client's 400 carries
+
+    class Rejecting:
+        calls = 0
+
+        async def ainvoke(self, *args: Any) -> Any:
+            self.calls += 1
+            raise Filtered("The response was filtered")
+
+    with memory_client(replies=1) as (client, store, llm, writer):
+        chat(client, "fact: colour=pink")
+        writer.extract = rejecting = Rejecting()  # type: ignore[assignment]
+        assert push_idle(client, store, writer) == 1
+        assert push_idle(client, store, writer) == 0  # given up, not retried
+
+    assert rejecting.calls == 1
 
 
 def test_memories_are_per_user() -> None:

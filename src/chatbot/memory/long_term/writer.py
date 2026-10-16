@@ -21,7 +21,7 @@ from chatbot.config import RunContext
 from chatbot.memory.long_term.facts import Changes, Fact, Facts, apply_changes, rejected
 from chatbot.memory.long_term.store import cursor_namespace, namespace
 from chatbot.memory.short_term import summary_text
-from chatbot.memory.threads import ThreadStore
+from chatbot.memory.threads import Thread, ThreadStore
 from chatbot.prompts import load_prompt
 
 logger = logging.getLogger(__name__)
@@ -35,9 +35,9 @@ TTL_LOOKBACK = timedelta(days=7)
 # Tells the memory model the user asked for this message to be remembered.
 REMEMBER_THIS = (
     "The user asked to remember the exchange below. Extract facts from both their question and "
-    "the assistant's answer: what they said about themselves, and what the answer told them "
-    "(a recommendation, a decision, a detail they'll want later), written as facts about the "
-    'user ("User was recommended …"). The other rules still apply.'
+    "the assistant's answer: what they said about themselves, and the specific answer they'll "
+    "want later (a product, size, rating, date or price; at most two, never general tips), "
+    'written as facts about the user ("User was recommended …"). The other rules still apply.'
 )
 
 
@@ -131,23 +131,28 @@ class MemoryWriter:
         ttl: timedelta,
     ) -> int:
         """Push every thread idle for `ttl` that has changed since it was last pushed. Returns
-        how many threads that was."""
+        how many threads that was. Users are pushed side by side (up to the write slots), so
+        one slow push doesn't hold up everyone else's; each user's threads go in order."""
         now = datetime.now(UTC)
-        due = []
+        due: dict[str, list[Thread]] = defaultdict(list)
         for thread in await threads.idle_between(now - TTL_LOOKBACK, now - ttl):
             cursor = await store.aget(cursor_namespace(thread.user_id), str(thread.id))
             if cursor and cursor.value.get("thread_updated_at") == thread.updated_at.isoformat():
                 continue  # nothing new since the last push
-            due.append(thread)
-        for thread in due:
-            await self.push(
-                store,
-                thread.user_id,
-                str(thread.id),
-                await messages_of(str(thread.id)),
-                thread_updated_at=thread.updated_at.isoformat(),
-            )
-        return len(due)
+            due[thread.user_id].append(thread)
+
+        async def push_user(user_threads: list[Thread]) -> None:
+            for thread in user_threads:
+                await self.push(
+                    store,
+                    thread.user_id,
+                    str(thread.id),
+                    await messages_of(str(thread.id)),
+                    thread_updated_at=thread.updated_at.isoformat(),
+                )
+
+        await asyncio.gather(*(push_user(t) for t in due.values()))
+        return sum(len(t) for t in due.values())
 
     async def push(
         self,
@@ -188,7 +193,8 @@ class MemoryWriter:
         task.add_done_callback(_pending.discard)
 
     async def _write(self, store: BaseStore, user_id: str, conversation: str) -> str | None:
-        """Extract facts from `conversation` and apply them. None if extraction failed."""
+        """Extract facts from `conversation` and apply them. None if extraction failed (the
+        next trigger retries it)."""
         today = datetime.now(UTC).date()
         try:
             facts = cast(
@@ -200,7 +206,12 @@ class MemoryWriter:
                     ]
                 ),
             )
-        except Exception:
+        except Exception as e:
+            if getattr(e, "code", None) == "content_filter":
+                # The gateway's content filter rejected these turns. The same turns get the same
+                # answer, so retrying would fail on every TTL check for days: give them up.
+                logger.warning("long-term memory: the content filter rejected these turns")
+                return "skipped (content filter)"
             logger.exception("updating long-term memory failed")
             return None
         done: Counter[str] = Counter()

@@ -45,7 +45,8 @@ class ThreadStore(Protocol):
     async def idle_since(self, cutoff: datetime) -> list[UUID]: ...
 
     async def idle_between(self, since: datetime, until: datetime) -> list[Thread]:
-        """Threads last active between `since` and `until`."""
+        """Threads last active between `since` and `until`, oldest first (so a user's are
+        pushed in the order they happened)."""
         ...
 
 
@@ -115,7 +116,8 @@ class PostgresThreadStore:
     async def idle_between(self, since: datetime, until: datetime) -> list[Thread]:
         async with self.pool.connection() as conn:
             cur = await conn.execute(
-                f"SELECT {COLUMNS} FROM threads WHERE updated_at >= %s AND updated_at < %s",
+                f"SELECT {COLUMNS} FROM threads WHERE updated_at >= %s AND updated_at < %s "
+                "ORDER BY updated_at",
                 (since, until),
             )
             rows = await cur.fetchall()

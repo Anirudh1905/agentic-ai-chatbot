@@ -13,7 +13,7 @@
 | Storage | Checkpointer (`AsyncPostgresSaver`) | LangGraph store (`AsyncPostgresStore`) at `("memories", user_id)`, vector index on `content` |
 | Contents | The thread's messages and running summary | Small facts ("User likes pink cats"), each with a scope and a topic |
 | Written | Every graph step | When a thread's turns are pushed: at its token breach, when its TTL runs out, or when the user asks |
-| Read | Always (it is the thread) | On a thread's first turn, and again whenever the user's memories change: the closest to their message, in the system prompt |
+| Read | Always (it is the thread) | Every turn: the closest to the user's message, added to those the thread already recalled, in the system prompt |
 
 LangGraph keeps per-thread state in the checkpointer and anything shared between threads in the store ([Persistence](https://docs.langchain.com/oss/python/langgraph/persistence)). A thread's own history never leaves the thread; only extracted facts are shared, through the store.
 
@@ -61,10 +61,10 @@ sequenceDiagram
 3. **"Remember this" button.** Every one of the bot's replies in the chat UI has one. It calls `POST /threads/{id}/messages/{index}/remember`, which looks the reply up in the caller's own thread and pushes it **together with the question it answered** (your message just before it), marked as something the user asked to remember. Someone else's thread or a bad index is a 404, and a user message (which has no button) a 422.
 4. **The `remember` tool.** When the user says "remember that I'm vegetarian", the agent calls `remember(what)` (`tools/memory.py`). It reads the store and the user from LangGraph's tool runtime and goes through the same push as the button. It's auto-approved, since it isn't in the approval rules and only writes the user's own memories.
 
-**The cursor.** The token-breach and TTL pushes read a thread's turns from its checkpoint. A per-thread cursor at `("memory_cursor", user_id)` records the last message pushed, so neither sends the same turns twice. If that message was since summarized away, everything still in the thread is new. A failed push doesn't move the cursor, so the next trigger retries it. Deleting a thread deletes its cursor; the memories made from it stay.
+**The cursor.** The token-breach and TTL pushes read a thread's turns from its checkpoint. A per-thread cursor at `("memory_cursor", user_id)` records the last message pushed, so neither sends the same turns twice. If that message was since summarized away, everything still in the thread is new. A failed push doesn't move the cursor, so the next trigger retries it, except when the gateway's content filter rejected the turns: the same turns would be rejected on every check, so they're given up and logged. Deleting a thread deletes its cursor; the memories made from it stay.
 
 **One push:**
-1. **Extract** (`prompts/memory_extract.md`): the turns become a list of facts the user stated, each one short sentence about one subject, stating the current state. The input is `User:` and `Assistant:` lines: no tool output, no running summary, and replies cut to 500 characters. The assistant's lines are only context, not facts, except when the user asked to remember the exchange: then facts come from both the question and the answer, including what the answer told them ("User was recommended a sleeping bag rated -10°C to -15°C for the trek"). Each fact has:
+1. **Extract** (`prompts/memory_extract.md`): the turns become a list of facts the user stated, each one short sentence about one subject, stating the current state. The input is `User:` and `Assistant:` lines: no tool output, no running summary, and replies cut to 500 characters. The assistant's lines are only context, not facts, except when the user asked to remember the exchange: then facts come from both the question and the answer: at most two specific answers they'll want later ("User was recommended a sleeping bag rated -10°C to -15°C for the trek"), never the answer's general tips or how-to steps. Relative times become dates ("died last week" becomes "died around 2026-10-09"), since a memory is read weeks later. Each fact has:
    - a `scope`: `user` (about the user) or `other` (an order, trip or issue they're dealing with)
    - a `topic`: `personal`, `preferences`, `communication`, `orders`, `plans` or `issues`
    - a `forget` flag, for "forget my jacket size"
@@ -86,16 +86,16 @@ The topic is stored for display, not used to narrow the search. The same subject
 ```mermaid
 flowchart LR
     Turn([each turn]) --> LTM["LongTermMemory<br/>before_agent"]
-    LTM -->|"aget(('memory_version', user)):<br/>changed since this thread recalled?"| St[(AsyncPostgresStore)]
-    LTM -->|"first turn, or changed:<br/>asearch(('memories', user),<br/>query=latest message, limit=10)"| St
-    St --> State["thread state:<br/>recalled_memories"]
+    LTM -->|"asearch(('memories', user),<br/>query=latest message, limit=10)"| St[(AsyncPostgresStore)]
+    LTM -->|"aget(('memory_version', user)):<br/>changed since this thread recalled?"| St
+    St --> State["thread state:<br/>recalled_memories<br/>(new ones added; recalled afresh<br/>if the memories changed)"]
     State --> Prompt["@dynamic_prompt adds<br/>'What you know about this user<br/>from earlier conversations'"]
     Prompt --> Model[model]
 ```
 
-`LongTermMemory.abefore_agent` runs at the start of every turn, but it searches only on a thread's first turn, or when the user's memories have changed since the thread last did. Every write and delete of a memory bumps a per-user version (`("memory_version", user_id)`), so the check is one key lookup. When it does search, it uses the user's latest message and puts the closest `MEMORY_RECALL_LIMIT` (10) in the thread's state (`recalled_memories`), dated and oldest first, along with the version they were recalled at.
+`LongTermMemory.abefore_agent` runs at the start of every turn. It searches the user's memories with their latest message for the closest `MEMORY_RECALL_LIMIT` (10), and adds the ones the thread hasn't recalled yet to its state (`recalled_memories`), dated and oldest first. So a thread that opens on returns and turns to trail meals still finds "User is vegetarian" (in the end-to-end test below, these follow-up questions went from 8/15 to 15/15 correct). When a turn finds nothing new, the system prompt is identical to the last turn's, so the model provider's prompt cache keeps working.
 
-So a memory saved mid-thread (by the tool, the button, or another thread) shows up on the next turn. Between changes, the system prompt is identical from turn to turn, so the model provider's prompt cache keeps working, and a turn makes no embedding call or vector search. The system prompt adds them under a heading that tells the model:
+Every write and delete of a memory bumps a per-user version (`("memory_version", user_id)`). When it has changed since the thread last recalled, the set is recalled afresh instead of added to, so a corrected or forgotten memory leaves open threads too, and a memory saved mid-thread (by the tool, the button, or another thread) shows up on the next turn. The system prompt adds them under a heading that tells the model:
 - use them only when relevant
 - the newer one holds if two disagree
 - believe the user if they contradict them
@@ -212,6 +212,28 @@ The stored memories are much cleaner, but answers didn't improve:
 
 
 A later end-to-end run (real conversations through the API, 3 × 15 questions) found one more problem: **health information** ("I have asthma") was stored as a memory in 2 of 3 runs. In the earlier stress test the gateway's content filter had happened to block that thread, so its zero was luck. The prompt's sensitive-data rule alone isn't enough; see Trade-offs.
+
+### End-to-end test of the final design
+
+Everything through the API, on an empty database: 3 users, one after another, each telling the bot ~11 facts over 20 threads (with corrections, a death, a forget request, a prompt injection, a health condition), including a "remember this" (the tool), a "Remember this" button press and a thread long enough for a token breach. The test API ran with a 12-second thread TTL, and each thread's push landed before the next began. Then 15 questions, each in a new thread, and 5 more asked as the second turn of a thread that opened on returns (topic drift). A judge graded the answers and labelled every memory.
+
+|                                                        | Before the fixes    | After               |
+| ------------------------------------------------------ | ------------------- | ------------------- |
+| Questions in a new thread                              | 38/45 (84%)         | **40/45 (89%)**     |
+| Questions after the thread changed topic               | 8/15 (53%)          | **15/15**           |
+| Memories that are current (of all stored)              | 29/44               | **27/35**           |
+| Noise: the assistant's advice, one-off details          | 12                  | 5                   |
+| Outdated                                               | 3                   | 3                   |
+| Forbidden (asthma, brother, jacket size after forget, VIP) | 0               | 0                   |
+
+The fixes: recall on every turn, adding new memories to the thread's set; from a "Remember this" reply, only specific answers and never general tips (9 of the 12 noise memories were tips like "stake the tent taut"); relative times stored as dates ("died around 2026-10-09", not "last week"); and the phone detector no longer redacts dates ("arrived on 2026-10-16" had come back as `[REDACTED_PHONE]`).
+
+What's still wrong:
+- **The gateway's content filter rejected 4 extractions**, most likely the thread about the dog's death. Its facts were lost: in 2 of 3 runs the bot still suggested dog gear. A rejected thread was also retried on every check, though the same input gets the same answer; now it's given up after the first rejection.
+- **"Do I have an open return or exchange?"** failed in 2 runs: the completed exchange wasn't kept, or went with the forgotten jacket size.
+- Sometimes a request is stored as a fact ("User wants future shipments sent to Bangalore", next to "User lives in Bangalore").
+
+The test also found three bugs in the push loop, now fixed: idle threads were pushed one at a time across all users (one stalled call held up everyone's for 6 minutes), a user's idle threads weren't pushed in order, and memory calls waited 120 s on a stalled gateway call before retrying (now `REQUEST_TIMEOUT`, 30 s). The gateway often stalls gpt-5 calls under load (with 6 at once, about half hang until the timeout), so a push still lands 12 s to 4 minutes after a thread goes idle.
 
 ### The store records
 
@@ -342,9 +364,10 @@ A failed push is logged with its traceback (`updating long-term memory failed`).
 
 ## Trade-offs of this design
 
-- **Health facts can still be stored.** The prompt says to leave them out, but in an end-to-end run "User has asthma" was stored in 2 of 3 runs. A code check like the entitlement one (dropping facts that name health conditions) would close this.
+- **Health facts can still be stored.** The prompt says to leave them out, but in one end-to-end run "User has asthma" was stored in 2 of 3 runs (0 of 6 in the two runs since). A code check like the entitlement one (dropping facts that name health conditions) would close this.
 - **Facts reach other threads only after a push.** Something said in a thread is known elsewhere once that thread hits its token breach, goes idle for 30 minutes, or the user saves it. Until then, only that thread knows.
-- **Recall doesn't follow the topic within a thread.** Memories are searched with the message that started the thread (or the one after a memory changed), not every message. If a thread drifts to a new subject, memories about it come in only when something changes. That's the price of a stable, cacheable prompt and no search per turn.
+- **A search on every turn.** One embedding call and one vector search per turn (tens of milliseconds against Postgres, plus the embedding). Recalling only when a thread starts was cheaper, but missed what a thread turned to later.
+- **A long thread's recalled set only grows** until the user's memories change. It's bounded by the user's memories, but a thread that wanders over many subjects carries all of them.
 - **An expired temporary memory stays in an open thread** until the user's memories next change. Expiry happens in the store's TTL, which doesn't bump the version. New threads don't see it.
 - **The TTL check runs in the API process.** It's durable: pending turns stay in the thread's checkpoint, and the cursor only moves after a successful push. It's safe across replicas thanks to the advisory lock. But every replica runs the check; with many replicas, a single worker (or LangGraph Platform crons) would be cleaner.
 - **Pushes are slow and cost a model call per fact.** One extraction per push, then one `gpt-5-mini` decision per fact, one after another (they must see each other's changes): about 10–20 s per fact, in the background.
