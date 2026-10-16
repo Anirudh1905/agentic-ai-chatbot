@@ -10,7 +10,7 @@
       "url": "https://github.com/Anirudh1905/agentic-ai-chatbot.git",
       "provider": "github",
       "link_mode": "web",
-      "revision": "c400ea161f7509951e09f0adba171bbbf3027da3"
+      "revision": "1a992d5c01c1cc76642ec93f968e5ab2b226e196"
     }
   },
   "components": [
@@ -30,7 +30,7 @@
       "sources": [
         {
           "path": "ui/app.py",
-          "line": 29,
+          "line": 30,
           "label": "X-User-Id header"
         }
       ]
@@ -39,7 +39,7 @@
       "id": "ui",
       "type": "frontend",
       "label": "Streamlit UI",
-      "sublabel": "chat \u00b7 approvals \u00b7 memory",
+      "sublabel": "chat · approvals · memory",
       "pos": [
         220,
         348
@@ -51,14 +51,20 @@
       "sources": [
         {
           "path": "ui/app.py",
-          "line": 94,
-          "end_line": 117,
+          "line": 95,
+          "end_line": 120,
           "label": "memory panel"
         },
         {
           "path": "ui/app.py",
           "line": 286,
-          "end_line": 296,
+          "end_line": 291,
+          "label": "Remember this"
+        },
+        {
+          "path": "ui/app.py",
+          "line": 312,
+          "end_line": 322,
           "label": "resume + /chat/stream"
         }
       ]
@@ -67,7 +73,7 @@
       "id": "api",
       "type": "backend",
       "label": "FastAPI API",
-      "sublabel": "/chat \u00b7 /threads \u00b7 /me/memory",
+      "sublabel": "/chat · /threads · /me/memory",
       "pos": [
         490,
         348
@@ -86,14 +92,14 @@
         {
           "path": "src/chatbot/api/routes/chat.py",
           "line": 50,
-          "end_line": 70,
+          "end_line": 76,
           "label": "chat routes"
         },
         {
-          "path": "src/chatbot/api/routes/memory.py",
-          "line": 16,
-          "end_line": 50,
-          "label": "memory routes"
+          "path": "src/chatbot/api/routes/threads.py",
+          "line": 119,
+          "end_line": 145,
+          "label": "remember route"
         }
       ]
     },
@@ -101,7 +107,7 @@
       "id": "pii",
       "type": "security",
       "label": "PII redaction",
-      "sublabel": "email \u00b7 card \u00b7 phone \u00b7 IP",
+      "sublabel": "email · card · phone · IP",
       "pos": [
         490,
         184
@@ -112,15 +118,15 @@
       ],
       "sources": [
         {
-          "path": "src/chatbot/api/routes/chat.py",
-          "line": 26,
-          "end_line": 29,
+          "path": "src/chatbot/api/runs.py",
+          "line": 74,
+          "end_line": 81,
           "label": "redact before invoke"
         },
         {
           "path": "src/chatbot/pii.py",
-          "line": 52,
-          "end_line": 66,
+          "line": 55,
+          "end_line": 69,
           "label": "RULES, redact_pii"
         }
       ]
@@ -141,14 +147,20 @@
       "sources": [
         {
           "path": "src/chatbot/agent/builder.py",
-          "line": 53,
-          "end_line": 94,
+          "line": 65,
+          "end_line": 115,
           "label": "build_graph"
         },
         {
+          "path": "src/chatbot/memory/short_term.py",
+          "line": 71,
+          "end_line": 93,
+          "label": "summarize after reply"
+        },
+        {
           "path": "src/chatbot/pii.py",
-          "line": 89,
-          "end_line": 102,
+          "line": 92,
+          "end_line": 106,
           "label": "PIIMiddleware on outputs"
         }
       ]
@@ -157,7 +169,7 @@
       "id": "llm",
       "type": "external",
       "label": "OpenAI-compatible API",
-      "sublabel": "chat \u00b7 summary \u00b7 memory",
+      "sublabel": "chat · summary · memory",
       "pos": [
         790,
         184
@@ -169,9 +181,15 @@
       "sources": [
         {
           "path": "src/chatbot/agent/builder.py",
-          "line": 39,
-          "end_line": 50,
-          "label": "ChatOpenAI"
+          "line": 42,
+          "end_line": 62,
+          "label": "build_llm"
+        },
+        {
+          "path": "src/chatbot/api/dependencies.py",
+          "line": 76,
+          "end_line": 80,
+          "label": "memory model"
         }
       ]
     },
@@ -197,8 +215,8 @@
         },
         {
           "path": "src/chatbot/agent/builder.py",
-          "line": 89,
-          "end_line": 90,
+          "line": 105,
+          "end_line": 106,
           "label": "HumanInTheLoopMiddleware"
         }
       ]
@@ -207,7 +225,7 @@
       "id": "web",
       "type": "backend",
       "label": "web_search",
-      "sublabel": "ddgs \u00b7 backend fallback",
+      "sublabel": "ddgs · backend fallback",
       "pos": [
         1405,
         184
@@ -250,7 +268,7 @@
       "id": "kb",
       "type": "backend",
       "label": "search_knowledge_base",
-      "sublabel": "hybrid \u00b7 RRF \u00b7 rerank",
+      "sublabel": "hybrid · RRF · rerank",
       "pos": [
         1130,
         348
@@ -300,9 +318,9 @@
       "id": "threads",
       "type": "database",
       "label": "threads",
-      "sublabel": "owner \u00b7 title \u00b7 activity",
+      "sublabel": "owner · title · activity",
       "pos": [
-        220,
+        140,
         552
       ],
       "size": [
@@ -318,8 +336,8 @@
         },
         {
           "path": "src/chatbot/memory/threads.py",
-          "line": 65,
-          "end_line": 80,
+          "line": 69,
+          "end_line": 84,
           "label": "claim()"
         }
       ]
@@ -330,7 +348,7 @@
       "label": "checkpoints",
       "sublabel": "graph state per thread",
       "pos": [
-        490,
+        380,
         552
       ],
       "size": [
@@ -340,8 +358,8 @@
       "sources": [
         {
           "path": "src/chatbot/api/dependencies.py",
-          "line": 46,
-          "end_line": 47,
+          "line": 49,
+          "end_line": 51,
           "label": "AsyncPostgresSaver"
         }
       ]
@@ -350,7 +368,7 @@
       "id": "memories",
       "type": "database",
       "label": "memories",
-      "sublabel": "store + vector index",
+      "sublabel": "store · vector index · TTL",
       "pos": [
         790,
         552
@@ -362,15 +380,21 @@
       "sources": [
         {
           "path": "src/chatbot/api/dependencies.py",
-          "line": 52,
-          "end_line": 60,
-          "label": "AsyncPostgresStore(index=)"
+          "line": 56,
+          "end_line": 66,
+          "label": "AsyncPostgresStore + TTL"
         },
         {
-          "path": "src/chatbot/memory/long_term.py",
-          "line": 94,
-          "end_line": 101,
+          "path": "src/chatbot/memory/long_term/store.py",
+          "line": 27,
+          "end_line": 35,
           "label": "recall()"
+        },
+        {
+          "path": "src/chatbot/memory/long_term/middleware.py",
+          "line": 39,
+          "end_line": 62,
+          "label": "recall each turn"
         }
       ]
     },
@@ -402,7 +426,7 @@
       "label": "Retention job",
       "sublabel": "nightly CLI",
       "pos": [
-        490,
+        380,
         746
       ],
       "size": [
@@ -422,9 +446,9 @@
       "id": "writer",
       "type": "backend",
       "label": "MemoryWriter",
-      "sublabel": "breach \u00b7 idle TTL \u00b7 remember",
+      "sublabel": "summary · idle · remember",
       "pos": [
-        960,
+        790,
         746
       ],
       "size": [
@@ -433,22 +457,22 @@
       ],
       "sources": [
         {
-          "path": "src/chatbot/memory/long_term.py",
-          "line": 146,
-          "end_line": 209,
-          "label": "extract + decide"
+          "path": "src/chatbot/memory/long_term/writer.py",
+          "line": 79,
+          "end_line": 117,
+          "label": "triggers"
         },
         {
-          "path": "src/chatbot/memory/long_term.py",
-          "line": 210,
-          "end_line": 225,
+          "path": "src/chatbot/memory/long_term/facts.py",
+          "line": 19,
+          "end_line": 27,
+          "label": "never stored"
+        },
+        {
+          "path": "src/chatbot/memory/long_term/writer.py",
+          "line": 249,
+          "end_line": 263,
           "label": "advisory lock"
-        },
-        {
-          "path": "src/chatbot/memory/short_term.py",
-          "line": 70,
-          "end_line": 73,
-          "label": "on_summary hook"
         }
       ]
     },
@@ -456,7 +480,7 @@
       "id": "ingest",
       "type": "backend",
       "label": "Ingestion CLI",
-      "sublabel": "load \u00b7 chunk \u00b7 embed",
+      "sublabel": "load · chunk · embed",
       "pos": [
         1405,
         746
@@ -588,20 +612,25 @@
       "id": "agent-memories",
       "from": "agent",
       "to": "memories",
-      "label": "recall every turn",
-      "labelAt": [
-        887,
-        500
-      ]
+      "label": "recall each turn"
     },
     {
       "id": "agent-writer",
       "from": "agent",
       "to": "writer",
-      "label": "token breach \u00b7 remember tool",
+      "label": "summary · remember tool",
       "variant": "dashed",
       "fromSide": "right",
-      "toSide": "top"
+      "toSide": "right"
+    },
+    {
+      "id": "api-writer",
+      "from": "api",
+      "to": "writer",
+      "label": "idle loop · Remember this",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "left"
     },
     {
       "id": "writer-memories",
@@ -634,7 +663,7 @@
   "cards": [
     {
       "dot": "rose",
-      "title": "Safety (Phases 4\u20135)",
+      "title": "Safety (Phases 4–5)",
       "items": [
         "User messages are redacted in the API before the agent runs; PIIMiddleware redacts tool results and replies, and the SSE stream is redacted too",
         "web_search pauses for approval when the query has sensitive terms or an order number",
@@ -645,11 +674,12 @@
       "dot": "violet",
       "title": "Memory (Phases 3 and 6)",
       "items": [
-        "Short-term: each thread's checkpoints; older turns are summarized past CONTEXT_MAX_TOKENS (10k)",
-        "Long-term pushes: the summarized turns at the token breach, a thread idle for 30 min, the Remember this button, or the remember tool",
-        "MemoryWriter asks gpt-5-mini for the user's facts and decides add / update / delete against the 5 closest memories",
-        "Placeholders and claims of status or discounts are never stored; temporary facts expire through the store's TTL",
-        "One push per user at a time across processes (Postgres advisory lock); every turn recalls the closest memories"
+        "Short-term: each thread's checkpoints; past CONTEXT_MAX_TOKENS (10k) older turns are summarized after the reply, so the user never waits",
+        "Long-term pushes: turns a summary folds away, threads idle for 30 min (a loop in the API), the Remember this button on a reply, or the remember tool",
+        "MemoryWriter (gpt-5-mini) extracts the user's facts and decides add / update / delete against the 5 closest memories; a per-thread cursor stops double pushes",
+        "Placeholders and claims of status or discounts are never stored; temporary facts expire through the store's TTL sweeper",
+        "Recall searches every turn and adds memories the thread hasn't seen; the prompt only changes when one turns up, so the prompt cache keeps working",
+        "One push per user at a time across processes (Postgres advisory lock), at most MEMORY_WRITE_CONCURRENCY per process"
       ]
     },
     {
@@ -658,7 +688,7 @@
       "items": [
         "ModelCallLimitMiddleware ends a run after MAX_MODEL_CALLS",
         "Both search tools retry once, then give the model an error to relay",
-        "A failed memory write is logged and doesn't affect the reply; one failed fact doesn't lose the others"
+        "A failed summary keeps the full history; a memory push that doesn't finish leaves its thread's cursor, so it runs again later (unless the content filter rejected it)"
       ]
     },
     {
