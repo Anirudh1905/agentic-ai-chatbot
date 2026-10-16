@@ -1,6 +1,6 @@
 # Phase 6: Long-Term Memory
 
-**Goal:** The bot remembers useful things about a user across conversations: preferences, facts they've shared, ongoing issues. Every turn uses what it learned in earlier conversations, and the user can see and delete what it remembers.
+**Goal:** The bot remembers useful things about a user across conversations: preferences, facts they've shared, ongoing issues. Each conversation uses what it learned in earlier ones, and the user can see and delete what it remembers.
 
 [← Phase 5](phase-5-pii-detection-masking.md) · [Overview](../README.md) · [Next: Phase 7 →](phase-7-production-hardening.md)
 
@@ -13,7 +13,7 @@
 | Storage | Checkpointer (`AsyncPostgresSaver`) | LangGraph store (`AsyncPostgresStore`) at `("memories", user_id)`, vector index on `content` |
 | Contents | The thread's messages and running summary | Small facts ("User likes pink cats"), each with a scope and a topic |
 | Written | Every graph step | When a thread's turns are pushed: at its token breach, when its TTL runs out, or when the user asks |
-| Read | Always (it is the thread) | Every turn: the memories closest to the user's latest message, in the system prompt |
+| Read | Always (it is the thread) | On a thread's first turn, and again whenever the user's memories change: the closest to their message, in the system prompt |
 
 LangGraph keeps per-thread state in the checkpointer and anything shared between threads in the store ([Persistence](https://docs.langchain.com/oss/python/langgraph/persistence)). A thread's own history never leaves the thread; only extracted facts are shared, through the store.
 
@@ -56,7 +56,7 @@ sequenceDiagram
     W->>St: pg_advisory_unlock(user)
 ```
 
-1. **Token breach.** When a thread passes `CONTEXT_MAX_TOKENS` (10k), `Summarization` folds its older turns into the running summary (Phase 3) and hands those turns to `MemoryWriter.schedule` through its `on_summarize` hook. The push runs in the background, so the reply doesn't wait.
+1. **Token breach.** When a thread passes `CONTEXT_MAX_TOKENS` (10k), `Summarization`, at the end of that turn (after the reply), folds its older turns into the running summary (Phase 3) and hands those turns to `MemoryWriter.schedule` through its `on_summarize` hook. The push runs in the background, so the reply doesn't wait.
 2. **TTL.** A loop in the API checks every `MEMORY_TTL_CHECK_EVERY_MINUTES` (1 min) for threads idle for `MEMORY_THREAD_TTL_MINUTES` (30 min), looking back up to 7 days. It pushes the turns of each that haven't been pushed yet. A short conversation never reaches the token breach, so this is what remembers it. It's the equivalent of the IDD's flush before short-term memory's TTL expires.
 3. **"Remember this" button.** Every one of the bot's replies in the chat UI has one. It calls `POST /threads/{id}/messages/{index}/remember`, which looks the reply up in the caller's own thread and pushes it **together with the question it answered** (your message just before it), marked as something the user asked to remember. Someone else's thread or a bad index is a 404, and a user message (which has no button) a 422.
 4. **The `remember` tool.** When the user says "remember that I'm vegetarian", the agent calls `remember(what)` (`tools/memory.py`). It reads the store and the user from LangGraph's tool runtime and goes through the same push as the button. It's auto-approved, since it isn't in the approval rules and only writes the user's own memories.
@@ -81,18 +81,21 @@ The topic is stored for display, not used to narrow the search. The same subject
 
 **Concurrency.** Pushes are limited to `MEMORY_WRITE_CONCURRENCY` (2) at a time per process. Each holds a pooled connection for its lock while it waits on the model. Without the limit, 12 users at once took all 10 of the pool's connections and 10 pushes failed with `PoolTimeout`, which would also have stalled chat requests sharing the pool. If one fact fails (the gateway's content filter rejected one in the stress test), it's logged and the others are still written.
 
-### Read: every turn
+### Read: at the start of a thread, and when memories change
 
 ```mermaid
 flowchart LR
-    Turn([each turn's latest message]) --> LTM["LongTermMemory<br/>before_agent"]
-    LTM -->|"asearch(('memories', user),<br/>query=latest message, limit=10)"| St[(AsyncPostgresStore)]
+    Turn([each turn]) --> LTM["LongTermMemory<br/>before_agent"]
+    LTM -->|"aget(('memory_version', user)):<br/>changed since this thread recalled?"| St[(AsyncPostgresStore)]
+    LTM -->|"first turn, or changed:<br/>asearch(('memories', user),<br/>query=latest message, limit=10)"| St
     St --> State["thread state:<br/>recalled_memories"]
     State --> Prompt["@dynamic_prompt adds<br/>'What you know about this user<br/>from earlier conversations'"]
     Prompt --> Model[model]
 ```
 
-`LongTermMemory.abefore_agent` runs at the start of every turn. It searches the user's memories with their latest message and puts the closest `MEMORY_RECALL_LIMIT` (10) in the thread's state (`recalled_memories`), dated and oldest first. Recall therefore follows the topic, and a memory saved mid-thread (by the tool, the button, or another thread) shows up on the next turn. The system prompt adds them under a heading that tells the model:
+`LongTermMemory.abefore_agent` runs at the start of every turn, but it searches only on a thread's first turn, or when the user's memories have changed since the thread last did. Every write and delete of a memory bumps a per-user version (`("memory_version", user_id)`), so the check is one key lookup. When it does search, it uses the user's latest message and puts the closest `MEMORY_RECALL_LIMIT` (10) in the thread's state (`recalled_memories`), dated and oldest first, along with the version they were recalled at.
+
+So a memory saved mid-thread (by the tool, the button, or another thread) shows up on the next turn. Between changes, the system prompt is identical from turn to turn, so the model provider's prompt cache keeps working, and a turn makes no embedding call or vector search. The system prompt adds them under a heading that tells the model:
 - use them only when relevant
 - the newer one holds if two disagree
 - believe the user if they contradict them
@@ -128,8 +131,8 @@ Facts that change are updated when they're pushed: "my favourite colour is now r
 |------|--------------|
 | `memory/long_term/writer.py` | `MemoryWriter`: `schedule` (token breach), `start`/`push_idle` (TTL), `remember` (a question and reply from the button, or the tool's words), `push` (cursor, extract, checks, decide), write slots, per-user lock; `transcript`, `after_cursor` |
 | `memory/long_term/facts.py` | What the memory model extracts and decides (`Fact`, `Facts`, `Change`, `Changes`), `rejected` (the checks every fact passes), and `apply_changes` (applies the model's decisions) |
-| `memory/long_term/store.py` | Where memories live (`namespace`, `cursor_namespace`): `list_memories`, `recall`, and `put` (one memory, with TTL) |
-| `memory/long_term/middleware.py` | `LongTermMemory`: recall every turn |
+| `memory/long_term/store.py` | Where memories live (`namespace`, `cursor_namespace`, `version_namespace`): `list_memories`, `recall`, `put` (one memory, with TTL) and `delete`, both of which bump the user's `version` |
+| `memory/long_term/middleware.py` | `LongTermMemory`: recall at a thread's start, and again when the user's memories change |
 | `tools/memory.py` | The `remember(what)` tool |
 | `memory/short_term.py` | `Summarization` (LangChain's `SummarizationMiddleware`, adjusted in Phase 3) with an `on_summarize` hook that gets the turns being folded away |
 | `memory/threads.py` | `idle_between`: threads last active in a window, for the TTL check |
@@ -150,7 +153,7 @@ Facts that change are updated when they're pushed: "my favourite colour is now r
 | Cross-thread storage, per-user namespaces, vector search, timestamps | LangGraph `AsyncPostgresStore` with `index=` |
 | Expiring temporary facts | The store's TTL (`ttl=`, `omit_expired`, `start_ttl_sweeper`) |
 | Deciding when a thread is long, summarizing it | LangChain `SummarizationMiddleware` (Phase 3) |
-| Recalling every turn, adding to the prompt | `create_agent` middleware hooks (`before_agent`, `@dynamic_prompt`), middleware `state_schema` |
+| Recalling, adding to the prompt | `create_agent` middleware hooks (`before_agent`, `@dynamic_prompt`), middleware `state_schema` |
 | A tool that reads the store and the user | LangChain `@tool` with `ToolRuntime` |
 | Knowing whose run it is | LangGraph's runtime context: `create_agent(context_schema=RunContext)` |
 | Structured model output | `with_structured_output` |
@@ -220,6 +223,9 @@ A later end-to-end run (real conversations through the API, 3 × 15 questions) f
 
 # ("memory_cursor", user_id), key: the thread id. No embedding.
 {"message_id": "lc_run--…", "thread_updated_at": "2026-10-16T10:15:02+00:00"}
+
+# ("memory_version", user_id), key "latest". Bumped by every write and delete of a memory.
+{"at": "2026-10-16T10:15:40+00:00"}
 ```
 
 The store keeps `created_at`, `updated_at` and `expires_at`, and indexes memories' `content` for vector search (`store_vectors`, created by `setup()`).
@@ -263,7 +269,7 @@ All are scoped to the caller's `X-User-Id`, like the thread endpoints.
 | `MEMORY_THREAD_TTL_MINUTES` | `30` | A thread idle this long has its turns not yet pushed sent to long-term memory |
 | `MEMORY_TTL_CHECK_EVERY_MINUTES` | `1` | How often to look for threads whose TTL ran out |
 | `MEMORY_MODEL` | `gpt-5-mini` | Extracts facts and decides changes |
-| `MEMORY_RECALL_LIMIT` | `10` | Memories added to each turn |
+| `MEMORY_RECALL_LIMIT` | `10` | Memories recalled into a thread |
 | `MEMORY_WRITE_CONCURRENCY` | `2` | Pushes running at once per API process; keep it well under the pool size (10) |
 | `CONTEXT_MAX_TOKENS` | `10000` | The token breach that triggers a summary, and with it a push (Phase 3) |
 
@@ -298,7 +304,8 @@ A failed push is logged with its traceback (`updating long-term memory failed`).
   - the agent's `remember` tool saves what the user asked for, without waiting for approval
   - a failed push is retried by the next trigger
 - **Memories:**
-  - recalled every turn
+  - a memory saved mid-thread is recalled on the next turn
+  - memories are searched again only when they change
   - a newer fact updates its memory and leaves the others alone
   - a forget request deletes the memory
   - memories are per user
@@ -337,7 +344,8 @@ A failed push is logged with its traceback (`updating long-term memory failed`).
 
 - **Health facts can still be stored.** The prompt says to leave them out, but in an end-to-end run "User has asthma" was stored in 2 of 3 runs. A code check like the entitlement one (dropping facts that name health conditions) would close this.
 - **Facts reach other threads only after a push.** Something said in a thread is known elsewhere once that thread hits its token breach, goes idle for 30 minutes, or the user saves it. Until then, only that thread knows.
-- **Recall runs every turn.** It follows the topic, and picks up memories saved mid-thread. But it's an embedding call and a vector search per turn, and since the memories sit in the system prompt, a changed set invalidates the model's prompt cache for everything after it. Recalling at thread start and searching again only when the user's memories change would keep most of the benefit at less cost.
+- **Recall doesn't follow the topic within a thread.** Memories are searched with the message that started the thread (or the one after a memory changed), not every message. If a thread drifts to a new subject, memories about it come in only when something changes. That's the price of a stable, cacheable prompt and no search per turn.
+- **An expired temporary memory stays in an open thread** until the user's memories next change. Expiry happens in the store's TTL, which doesn't bump the version. New threads don't see it.
 - **The TTL check runs in the API process.** It's durable: pending turns stay in the thread's checkpoint, and the cursor only moves after a successful push. It's safe across replicas thanks to the advisory lock. But every replica runs the check; with many replicas, a single worker (or LangGraph Platform crons) would be cleaner.
 - **Pushes are slow and cost a model call per fact.** One extraction per push, then one `gpt-5-mini` decision per fact, one after another (they must see each other's changes): about 10–20 s per fact, in the background.
 - **Expiry depends on the model's `valid_until`.** A temporary fact it doesn't mark as temporary stays until a later fact updates or deletes it.

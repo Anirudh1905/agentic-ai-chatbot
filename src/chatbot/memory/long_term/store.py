@@ -1,4 +1,5 @@
-"""Where long-term memories live in the store: reading them, and writing one."""
+"""Where long-term memories live in the store: reading them, writing and deleting one, and a
+per-user version that changes whenever they do."""
 
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
@@ -38,6 +39,28 @@ def cursor_namespace(user_id: str) -> tuple[str, ...]:
     return ("memory_cursor", user_id)
 
 
+def version_namespace(user_id: str) -> tuple[str, ...]:
+    return ("memory_version", user_id)
+
+
+async def version(store: BaseStore, user_id: str) -> str | None:
+    """When the user's memories last changed; None if they never have. A key lookup, so a
+    thread can tell cheaply whether it needs to recall again."""
+    item = await store.aget(version_namespace(user_id), "latest")
+    return item.value["at"] if item else None
+
+
+async def touch(store: BaseStore, user_id: str) -> None:
+    """Record that the user's memories just changed."""
+    now = datetime.now(UTC).isoformat()
+    await store.aput(version_namespace(user_id), "latest", {"at": now}, index=False)
+
+
+async def delete(store: BaseStore, user_id: str, key: str) -> None:
+    await store.adelete(namespace(user_id), key)
+    await touch(store, user_id)
+
+
 async def put(
     store: BaseStore,
     user_id: str,
@@ -55,9 +78,10 @@ async def put(
     }
     if not store.supports_ttl:
         await store.aput(namespace(user_id), key, value)
-        return
-    ttl = None
-    if fact.valid_until:
-        end = datetime.combine(fact.valid_until + timedelta(days=1), datetime.min.time(), UTC)
-        ttl = max((end - datetime.now(UTC)).total_seconds() / 60, 1)
-    await store.aput(namespace(user_id), key, value, ttl=ttl)
+    else:
+        ttl = None
+        if fact.valid_until:
+            end = datetime.combine(fact.valid_until + timedelta(days=1), datetime.min.time(), UTC)
+            ttl = max((end - datetime.now(UTC)).total_seconds() / 60, 1)
+        await store.aput(namespace(user_id), key, value, ttl=ttl)
+    await touch(store, user_id)

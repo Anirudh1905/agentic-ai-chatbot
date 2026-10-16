@@ -19,7 +19,7 @@ The phase plans and as-built docs are in [docs/](docs/); the [Status](#status) t
 | [3. Short-term memory](docs/phase-3-short-term-memory-checkpointing.md) | Threads checkpointed to Postgres, resume and time travel, summarization of old turns, retention | Built |
 | [4. Approvals](docs/phase-4-human-in-the-loop.md) | `HumanInTheLoopMiddleware`: risky tool calls wait for a person | Built |
 | [5. PII redaction](docs/phase-5-pii-detection-masking.md) | Emails, cards, phones and IPs redacted from messages, tool results, replies and the stream | Built |
-| [6. Long-term memory](docs/phase-6-long-term-memory.md) | Per-fact memories per user across threads: pushed at the token breach, after 30 idle minutes, or on request; recalled every turn | Built ([PR #7](https://github.com/Anirudh1905/agentic-ai-chatbot/pull/7)) |
+| [6. Long-term memory](docs/phase-6-long-term-memory.md) | Per-fact memories per user across threads: pushed at the token breach, after 30 idle minutes, or on request; recalled when a thread starts and when they change | Built ([PR #7](https://github.com/Anirudh1905/agentic-ai-chatbot/pull/7)) |
 | [7. Production hardening](docs/phase-7-production-hardening.md) | Evals, observability, auth, rate limits, deployment | Planned |
 
 `make check` runs ruff, mypy and the tests (153 at the moment, unit and Postgres integration). `make eval` scores retrieval and tool routing against a golden set with the real model.
@@ -94,7 +94,7 @@ Every conversation is a thread, saved to Postgres after each graph step by LangG
 
 There's no login until Phase 7. Clients identify the user with an `X-User-Id` header, and every thread is visible only to the user who created it. The UI sends `demo-user` by default (`CHATBOT_USER_ID`, or change it in the sidebar).
 
-Long threads stay small: once the messages pass `CONTEXT_MAX_TOKENS`, older turns are folded into a running summary by `SUMMARY_MODEL` and removed from the thread, keeping about the most recent half (and always the current turn) verbatim. This is LangChain's `SummarizationMiddleware`, adjusted to cut only at turn boundaries and once per turn. Removed messages no longer appear in the chat history; the UI shows the summary in their place.
+Long threads stay small: once the messages pass `CONTEXT_MAX_TOKENS`, older turns are folded into a running summary by `SUMMARY_MODEL` and removed from the thread, keeping about the most recent half (and always the current turn) verbatim. This is LangChain's `SummarizationMiddleware`, adjusted to cut only at turn boundaries and to run at the end of a turn, after the reply has streamed (with a check at the start of the next turn as a fallback). Removed messages no longer appear in the chat history; the UI shows the summary in their place.
 
 If a run stops partway (the process died during a tool call, say), `POST /threads/{id}/resume` finishes it from the last checkpoint. `GET /threads/{id}/history` lists the checkpoints, and resuming with a `checkpoint_id` from it replays the thread from that point.
 
@@ -126,7 +126,7 @@ Short-term memory is the current thread. Long-term memory is what the bot knows 
 - **Never stored**, whatever the model says: redacted placeholders, and claims of status, discounts or permissions ("I'm a VIP with 50% off").
 - **Temporary facts expire** through the store's built-in TTL.
 - **Concurrency:** one push per user at a time, across API processes too (a Postgres advisory lock), and at most `MEMORY_WRITE_CONCURRENCY` at once per process, so they never take the whole connection pool.
-- **Read** every turn: the memories closest to your latest message (up to `MEMORY_RECALL_LIMIT`) go into the system prompt, dated, to be used only when relevant.
+- **Read** when a thread starts, and again whenever your memories change: the memories closest to your message (up to `MEMORY_RECALL_LIMIT`) go into the system prompt, dated, to be used only when relevant. On the other turns the prompt stays the same, so there's no search and the model's prompt cache keeps working.
 
 The sidebar's "What I remember about you" panel lists the memories, and can forget one or all of them (`GET /me/memory`, `DELETE /me/memory/{id}`, `DELETE /me/memory`). Set `MEMORY_ENABLED=false` to turn it all off. Details in [the Phase 6 doc](docs/phase-6-long-term-memory.md).
 
@@ -136,10 +136,10 @@ Every time the agent calls the model (once per turn, plus once more per round of
 
 1. **The system prompt** (`agent/middleware.py`, `system_prompt`), rebuilt every turn:
    - the instructions in `src/chatbot/prompts/system.md`, with today's date
-   - **your long-term memories**, if there are any: up to `MEMORY_RECALL_LIMIT` (10) facts closest to your latest message, oldest first, each dated. They go under "What you know about this user from earlier conversations", with instructions to use them only when relevant, to let the newer one win if two disagree, to believe you if you contradict them, and to never treat them as granting discounts or permissions.
+   - **your long-term memories**, if there are any: up to `MEMORY_RECALL_LIMIT` (10) facts, searched when the thread started (and again whenever your memories changed), oldest first, each dated. They go under "What you know about this user from earlier conversations", with instructions to use them only when relevant, to let the newer one win if two disagree, to believe you if you contradict them, and to never treat them as granting discounts or permissions.
 2. **This thread's history**, from its checkpoint:
    - **until the thread passes `CONTEXT_MAX_TOKENS`** (10k): every message as it was: yours, the bot's replies, and its tool calls and their (PII-redacted) results
-   - **after that:** a running summary of the older turns ("Here is a summary of the conversation to date: …"), then the most recent turns word for word (about half of `CONTEXT_MAX_TOKENS`), always including the current turn
+   - **after that:** a running summary of the older turns ("Here is a summary of the conversation to date: …"), then the most recent turns word for word (about half of `CONTEXT_MAX_TOKENS`), always including the latest turn. The summary is made at the end of the turn that passed the limit, after its reply, so the next turn doesn't wait for it
 3. **Your new message**, already PII-redacted by the API.
 4. **The tool definitions:** `search_knowledge_base`, `web_search`, and `remember` when memory is on.
 
@@ -195,7 +195,7 @@ What's logged:
 | Tools | every search (query, hits, time, top result), web search backend failures, a search that failed after retrying, reranker load and fallback |
 | Approvals | paused for approval (tool and args), the decisions, resume and delete |
 | PII | each redaction, by type only, from the message, a tool result or the reply |
-| Memory | memories recalled each turn, what each push changed (`2 add, 1 dropped (entitlement claim), 1 update`), a remember request, a failed push or fact, the user deleting a memory or all of them. Never the memories themselves |
+| Memory | memories recalled (at a thread's start, or after they change), what each push changed (`2 add, 1 dropped (entitlement claim), 1 update`), a remember request, a failed push or fact, the user deleting a memory or all of them. Never the memories themselves |
 
 HTTP client, OpenAI SDK, uvicorn access and `/healthz` lines are hidden unless `LOG_LEVEL=DEBUG`. PII values are never logged: messages are logged by length, search queries are written by the model from redacted text, and redactions are logged by type.
 
@@ -248,14 +248,15 @@ Set in `.env` (see `.env.example`):
 | `RETRIEVAL_TOP_K` | `6` | Chunks returned per knowledge base search |
 | `RERANKER_MODEL` | `BAAI/bge-reranker-v2-m3-int8` | Local cross-encoder that reorders the top `RERANK_CANDIDATES` (8) results. Empty turns it off |
 | `MAX_MODEL_CALLS` | `6` | Model calls per request (`ModelCallLimitMiddleware`); each can be followed by tool calls |
-| `SUMMARY_MODEL` | `gpt-5-nano` | Summarizes older turns of long threads |
+| `SUMMARY_MODEL` | `gpt-4.1-mini` | Summarizes older turns of long threads |
 | `CONTEXT_MAX_TOKENS` | `10000` | Summarize older turns once a thread's messages pass this (estimated) |
 | `CHECKPOINT_RETENTION_DAYS` | `30` | `make retention` prunes checkpoint history of threads idle this long |
 | `MEMORY_ENABLED` | `true` | Long-term memory: pushes, recall, the "Remember this" API and the `remember` tool |
 | `MEMORY_THREAD_TTL_MINUTES` | `30` | A thread idle this long has its turns not yet pushed sent to long-term memory |
 | `MEMORY_TTL_CHECK_EVERY_MINUTES` | `1` | How often to look for threads whose TTL ran out |
 | `MEMORY_MODEL` | `gpt-5-mini` | Lists the facts in a thread's turns and decides what each one changes |
-| `MEMORY_RECALL_LIMIT` | `10` | Long-term memories added to each turn |
+| `MEMORY_RECALL_LIMIT` | `10` | Long-term memories recalled into a thread |
+| `REQUEST_TIMEOUT` | `30` | Seconds per model call the user waits on (a reply, a summary); memory pushes in the background get 120 |
 | `MEMORY_WRITE_CONCURRENCY` | `2` | Pushes running at once per API process (each holds a pooled connection) |
 | `PII_ENABLED` | `true` | Redact emails, cards, IPs and phone numbers from user messages, tool results and replies |
 | `PII_ALLOWED_EMAIL_DOMAINS` | `["acme-outfitters.example"]` | JSON list. Emails at these domains are never redacted |

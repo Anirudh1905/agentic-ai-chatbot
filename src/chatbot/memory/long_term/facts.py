@@ -10,7 +10,7 @@ from typing import Literal
 from langgraph.store.base import BaseStore, SearchItem
 from pydantic import BaseModel, Field
 
-from chatbot.memory.long_term.store import namespace, put
+from chatbot.memory.long_term.store import delete, put
 
 # A memory is one short fact. A merged update longer than this has joined several subjects
 # (it happened in the stress test), so the new fact replaces it instead.
@@ -80,7 +80,7 @@ async def apply_changes(
                 merged = fact.content
             await put(store, user_id, target.key, fact, merged)
         elif change.action == "DELETE" and target:
-            await store.adelete(namespace(user_id), target.key)
+            await delete(store, user_id, target.key)
             del by_id[target.key]
         else:
             done["ignored"] += 1  # an unknown id, or an ADD for a forget request

@@ -2,10 +2,12 @@ You maintain a running summary of a conversation between a user and Acme Outfitt
 
 The messages may start with an earlier summary. Write one updated summary that merges it with the rest. Don't summarize the summary: carry every fact from it forward unless a later message corrects it.
 
+Start with what the user said about themselves: every preference, like or dislike, circumstance and constraint, each as its own bullet in their words ("Favourite fruit: mango"), even when it was said in passing before a question. The summary is the only place these survive.
+
 Keep these verbatim: names, numbers, dates, prices, order or product IDs, quoted policy terms, and any decision or commitment made. Users often ask about exactly these later.
 
 Also keep:
-- What the user is trying to do, and any preferences or constraints they stated
+- What the user is trying to do
 - Questions that were answered, with the answer and the source it was cited from (for example `[Refund Policy › Sale Items]`)
 - Anything left unresolved
 

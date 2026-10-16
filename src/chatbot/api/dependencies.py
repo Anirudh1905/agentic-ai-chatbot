@@ -74,7 +74,8 @@ class Resources:
             self.store = store
             if settings.memory_enabled:
                 self.writer = MemoryWriter(
-                    build_llm(settings, settings.memory_model, streaming=False),
+                    # Nothing waits on a memory push, so it gets longer than REQUEST_TIMEOUT.
+                    build_llm(settings, settings.memory_model, streaming=False, timeout=120),
                     concurrency=settings.memory_write_concurrency,
                 )
             self.graph = build_graph(

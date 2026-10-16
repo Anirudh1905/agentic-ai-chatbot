@@ -39,14 +39,23 @@ RECURSION_LIMIT = 200
 MODEL_NODE = "model"
 
 
-def build_llm(settings: Settings, model: str | None = None, streaming: bool = True) -> ChatOpenAI:
+def build_llm(
+    settings: Settings,
+    model: str | None = None,
+    streaming: bool = True,
+    timeout: float | None = None,
+) -> ChatOpenAI:
+    """A chat model on the configured endpoint. `timeout` defaults to REQUEST_TIMEOUT."""
+    model = model or settings.model
+    # Other models (gpt-4.x) reject the parameter.
+    reasoning = model.startswith(("gpt-5", "o1", "o3", "o4"))
     return ChatOpenAI(
-        model=model or settings.model,
+        model=model,
         api_key=settings.openai_api_key,
         base_url=settings.openai_base_url or None,
-        reasoning_effort=settings.reasoning_effort,
+        reasoning_effort=settings.reasoning_effort if reasoning else None,
         max_completion_tokens=settings.max_tokens,
-        timeout=settings.request_timeout,
+        timeout=timeout or settings.request_timeout,
         streaming=streaming,
         # Token counts on streamed responses too (for logs and tracing).
         stream_usage=True,

@@ -4,7 +4,7 @@
   `apply_changes`, which applies its decisions
 - `store.py`: where memories live: reading them, and writing one
 - `writer.py`: `MemoryWriter`, which pushes threads' turns in, in the background
-- `middleware.py`: `LongTermMemory`, which recalls memories into every turn
+- `middleware.py`: `LongTermMemory`, which recalls memories into a thread
 
 Short-term memory is the thread itself: its messages and running summary, in the checkpointer
 (`short_term.py`). Long-term memory is small memories per user, one fact each, in LangGraph's
@@ -32,22 +32,30 @@ first two never push the same turns twice. Each push:
      corrects, delete the ones it makes obsolete (one fact can make several obsolete).
   One push per user at a time, across API processes too (a Postgres advisory lock), and at
   most MEMORY_WRITE_CONCURRENCY at once per process, since each holds a pooled connection.
-- **Read** every turn: `LongTermMemory` searches the user's memories with their latest
-  message and puts the closest ones in the thread's state, where the system prompt picks
-  them up.
+- **Read** at a thread's first turn, and again whenever the user's memories have changed
+  (a per-user version at `("memory_version", user_id)`): `LongTermMemory` searches them with
+  the latest message and puts the closest ones in the thread's state, where the system
+  prompt picks them up.
 
 Everything is pushed from messages the API and PIIMiddleware have already redacted
 (Phase 5), so no raw PII reaches the store.
 """
 
 from chatbot.memory.long_term.middleware import LongTermMemory
-from chatbot.memory.long_term.store import cursor_namespace, list_memories, namespace, recall
+from chatbot.memory.long_term.store import (
+    cursor_namespace,
+    delete,
+    list_memories,
+    namespace,
+    recall,
+)
 from chatbot.memory.long_term.writer import MemoryWriter, wait_for_memory_writes
 
 __all__ = [
     "LongTermMemory",
     "MemoryWriter",
     "cursor_namespace",
+    "delete",
     "list_memories",
     "namespace",
     "recall",

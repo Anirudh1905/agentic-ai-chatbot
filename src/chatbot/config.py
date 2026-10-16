@@ -18,19 +18,23 @@ class Settings(BaseSettings):
     # gpt-5.4 over gpt-5-mini: better answers, and faster through the gateway (1.5 s vs 2.4 s
     # median on a routing probe), at roughly 10x the token price. gpt-5-mini still works.
     model: str = "gpt-5.4"
-    # Only sent to reasoning models (gpt-5.x, o-series). Leave unset for gpt-4.x. Below "low",
+    # Only sent to reasoning models (gpt-5.x, o-series). Below "low",
     # models answered terse questions like "president of USA" from stale memory instead of
     # searching (gpt-5-mini at "minimal": 9/16 on a routing probe; gpt-5.4 at "none": 15/16).
     reasoning_effort: ReasoningEffort | None = "low"
     max_tokens: int | None = None
-    request_timeout: float = 120.0
+    # Per model call the user waits on (the reply, a summary). A stuck gateway call fails after
+    # this instead of holding the reply for minutes (one summary hung for 126 s at 120).
+    request_timeout: float = 30.0
 
     # Cap on model calls per request (each is followed by a round of tool calls), so a
     # confused model can't loop forever.
     max_model_calls: int = 6
 
-    # Cheap model for side tasks such as summarizing old turns. Same endpoint as `model`.
-    summary_model: str = "gpt-5-nano"
+    # Cheap model for summarizing old turns. Same endpoint as `model`. gpt-4.1-mini over
+    # gpt-5-nano: with 8 summaries at once, gpt-5-nano took 4-70 s (3 hit the timeout) and
+    # gpt-4.1-mini 4-11 s; both kept the user's stated facts with prompts/summarize.md.
+    summary_model: str = "gpt-4.1-mini"
     # Once a thread's messages pass this many tokens (local estimate), older messages are
     # folded into a running summary, keeping the most recent half verbatim. Well under the
     # model's window: every turn resends the history. Each summary also updates the user's

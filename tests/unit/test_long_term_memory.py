@@ -22,6 +22,7 @@ from chatbot.api.main import app
 from chatbot.memory.long_term import (
     MemoryWriter,
     cursor_namespace,
+    middleware,
     namespace,
     wait_for_memory_writes,
 )
@@ -163,7 +164,7 @@ def test_remember_this_only_works_on_your_own_threads_replies() -> None:
     assert memories(store) == [] and memories(store, "bob") == []
 
 
-def test_memories_are_recalled_every_turn() -> None:
+def test_a_memory_saved_mid_thread_is_recalled_on_the_next_turn() -> None:
     with memory_client(replies=3) as (client, store, llm, writer):
         ongoing = chat(client, "hello")
         other = chat(client, "fact: colour=pink")
@@ -172,6 +173,29 @@ def test_memories_are_recalled_every_turn() -> None:
         chat(client, "pick a colour for me", ongoing)
 
     assert ") fact: colour=pink" in system_prompt(llm.calls[-1]).split("<user_memories>")[1]
+
+
+def test_memories_are_searched_again_only_when_they_change(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    searches: list[str] = []
+    real = middleware.recall
+
+    async def counting(store: Any, user_id: str, query: str, limit: int) -> str:
+        searches.append(query)
+        return await real(store, user_id, query, limit)
+
+    monkeypatch.setattr(middleware, "recall", counting)
+    with memory_client(replies=4) as (client, store, llm, writer):
+        thread = chat(client, "hello")
+        chat(client, "still here", thread)  # nothing changed: no new search
+        other = chat(client, "fact: colour=pink")
+        client.post(f"/threads/{other}/messages/1/remember")
+        settle(client)
+        chat(client, "pick a colour", thread)  # a memory was added: search again
+
+    assert searches == ["hello", "fact: colour=pink", "pick a colour"]
+    assert ") fact: colour=pink" in system_prompt(llm.calls[-1])
 
 
 def test_a_newer_fact_updates_its_memory_and_keeps_the_others() -> None:

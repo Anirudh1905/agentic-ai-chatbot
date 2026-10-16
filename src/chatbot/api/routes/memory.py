@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException, Response, status
 
 from chatbot.api.dependencies import Store, UserId
 from chatbot.api.schemas import Memory, MemoryList
-from chatbot.memory.long_term import list_memories, namespace
+from chatbot.memory.long_term import delete, list_memories, namespace
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +36,7 @@ async def forget_memory(memory_id: str, store: Store, user_id: UserId) -> Respon
     """Forget one memory."""
     if await store.aget(namespace(user_id), memory_id) is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "memory not found")
-    await store.adelete(namespace(user_id), memory_id)
+    await delete(store, user_id, memory_id)
     logger.info("user %s deleted a long-term memory", user_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -46,6 +46,6 @@ async def forget_everything(store: Store, user_id: UserId) -> Response:
     """Forget everything: no turn recalls them any more."""
     items = await list_memories(store, user_id)
     for item in items:
-        await store.adelete(namespace(user_id), item.key)
+        await delete(store, user_id, item.key)
     logger.info("user %s deleted all %d long-term memories", user_id, len(items))
     return Response(status_code=status.HTTP_204_NO_CONTENT)

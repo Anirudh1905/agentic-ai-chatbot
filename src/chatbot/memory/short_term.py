@@ -37,10 +37,13 @@ def summary_text(message: AnyMessage) -> str | None:
 
 
 class Summarization(SummarizationMiddleware):
-    """SummarizationMiddleware with four changes, each covered by a test:
+    """SummarizationMiddleware with five changes, each covered by a test:
 
-    - Only at the start of a turn. The built-in runs before every model call, so a turn with
-      tool calls could be summarized twice, mid-answer.
+    - At the end of a turn, after the reply (`after_agent`), so the user never waits for it.
+      The next turn starts with the shorter history. If a turn ended without that hook running
+      (it paused for approval), the next one summarizes at its start instead.
+    - Never mid-turn. The built-in runs before every model call, so a turn with tool calls
+      could be summarized twice, mid-answer.
     - Cuts at a turn boundary and keeps the current turn whole. The built-in only avoids
       splitting a tool call from its result, so it could summarize away the question being
       answered.
@@ -58,15 +61,28 @@ class Summarization(SummarizationMiddleware):
     ) -> dict[str, Any] | None:
         messages = state["messages"]
         if not messages or not isinstance(messages[-1], HumanMessage):
-            return None
+            return None  # mid-turn: a tool round, not the start of a turn
         logger.info(
             "context: %d messages, ~%d tokens", len(messages), count_tokens_approximately(messages)
         )
+        # Normally a no-op: the previous turn already summarized at its end.
+        return await self._summarize(state, runtime)
+
+    async def aafter_agent(
+        self, state: AgentState[Any], runtime: Runtime[Any]
+    ) -> dict[str, Any] | None:
+        return await self._summarize(state, runtime)
+
+    async def _summarize(
+        self, state: AgentState[Any], runtime: Runtime[Any]
+    ) -> dict[str, Any] | None:
+        messages = state["messages"]
         start = time.monotonic()
         try:
+            # The built-in's before_model is the check and the summary; it only reads the state.
             update = await super().abefore_model(state, runtime)
         except Exception:
-            # Answering with a long history beats not answering; try again next turn.
+            # A long history beats a failed turn; try again at the next turn's end.
             logger.exception("summarizing failed")
             return None
         if update:
