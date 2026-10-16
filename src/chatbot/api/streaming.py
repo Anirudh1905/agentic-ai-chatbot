@@ -8,13 +8,12 @@ from uuid import UUID
 
 from langchain_core.messages import AIMessageChunk, ToolMessage
 from langchain_core.runnables import RunnableConfig
-from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command
 
 from chatbot.agent.approvals import pending_request
-from chatbot.agent.builder import MODEL_NODE, AgentState
+from chatbot.agent.builder import MODEL_NODE, Agent, AgentState
 from chatbot.api.schemas import StreamEvent
-from chatbot.config import get_settings
+from chatbot.config import RunContext, get_settings
 from chatbot.pii import StreamRedactor
 
 logger = logging.getLogger(__name__)
@@ -25,9 +24,10 @@ def sse(event: StreamEvent, data: dict[str, Any]) -> dict[str, str]:
 
 
 async def stream_run(
-    graph: CompiledStateGraph[AgentState],
+    graph: Agent,
     graph_input: AgentState | Command[Any] | None,
     config: RunnableConfig,
+    context: RunContext,
     thread_id: UUID,
 ) -> AsyncIterator[dict[str, str]]:
     """Run the graph and stream it. If the run pauses for approval, an INTERRUPT event with
@@ -36,7 +36,9 @@ async def stream_run(
     # tokens the user watches arrive need redacting on the way out too.
     redactor = StreamRedactor() if get_settings().pii_enabled else None
     try:
-        async for event in graph.astream_events(graph_input, config=config, version="v2"):
+        async for event in graph.astream_events(
+            graph_input, config=config, context=context, version="v2"
+        ):
             kind = event["event"]
             # Only the agent's own model call is the reply; the summarizer streams too.
             from_model = event["metadata"].get("langgraph_node") == MODEL_NODE

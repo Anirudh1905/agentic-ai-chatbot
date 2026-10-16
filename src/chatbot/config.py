@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
@@ -17,23 +18,29 @@ class Settings(BaseSettings):
     # gpt-5.4 over gpt-5-mini: better answers, and faster through the gateway (1.5 s vs 2.4 s
     # median on a routing probe), at roughly 10x the token price. gpt-5-mini still works.
     model: str = "gpt-5.4"
-    # Only sent to reasoning models (gpt-5.x, o-series). Leave unset for gpt-4.x. Below "low",
+    # Only sent to reasoning models (gpt-5.x, o-series). Below "low",
     # models answered terse questions like "president of USA" from stale memory instead of
     # searching (gpt-5-mini at "minimal": 9/16 on a routing probe; gpt-5.4 at "none": 15/16).
     reasoning_effort: ReasoningEffort | None = "low"
     max_tokens: int | None = None
-    request_timeout: float = 120.0
+    # Per model call (the reply, a summary, a memory push). The gateway sometimes stalls gpt-5
+    # calls until the timeout; this fails them sooner so the retry can go through (one summary
+    # hung for 126 s at 120).
+    request_timeout: float = 30.0
 
     # Cap on model calls per request (each is followed by a round of tool calls), so a
     # confused model can't loop forever.
     max_model_calls: int = 6
 
-    # Cheap model for side tasks such as summarizing old turns. Same endpoint as `model`.
-    summary_model: str = "gpt-5-nano"
+    # Cheap model for summarizing old turns. Same endpoint as `model`. gpt-4.1-mini over
+    # gpt-5-nano: with 8 summaries at once, gpt-5-nano took 4-70 s (3 hit the timeout) and
+    # gpt-4.1-mini 4-11 s; both kept the user's stated facts with prompts/summarize.md.
+    summary_model: str = "gpt-4.1-mini"
     # Once a thread's messages pass this many tokens (local estimate), older messages are
     # folded into a running summary, keeping the most recent half verbatim. Well under the
-    # model's window: every turn resends the history.
-    context_max_tokens: int = 32_000
+    # model's window: every turn resends the history. Each summary also updates the user's
+    # long-term memory.
+    context_max_tokens: int = 10_000
     # The retention job keeps only the latest checkpoint of threads idle this many days.
     checkpoint_retention_days: int = 30
 
@@ -66,7 +73,25 @@ class Settings(BaseSettings):
     # customers. JSON list in .env.
     pii_allowed_email_domains: list[str] = ["acme-outfitters.example"]
 
-    # Human approval before risky tool calls (see hitl/policy.py).
+    # Long-term memory (memory/long_term/): a thread's turns are pushed into small per-user
+    # memories at its token breach, when it's been idle for MEMORY_THREAD_TTL_MINUTES, or when
+    # the user presses "Remember this"; every turn recalls the closest memories.
+    memory_enabled: bool = True
+    # A thread's turns not yet pushed are pushed once it's been idle this long.
+    memory_thread_ttl_minutes: float = 30
+    # How often to look for threads whose TTL has run out.
+    memory_ttl_check_every_minutes: float = 1
+    # Lists the facts in a thread's turns and decides what each one changes. gpt-5-mini over
+    # gpt-5-nano: on a 24-run memory spike, nano left outdated or forbidden facts behind (32/36
+    # removed vs 36/36) and stored other people's details and health facts.
+    memory_model: str = "gpt-5-mini"
+    # Long-term memories added to each turn, closest to the user's latest message.
+    memory_recall_limit: int = 10
+    # Long-term memory pushes running at once per API process. Each holds a pooled connection
+    # (for its per-user lock) while it waits on the model, so keep it well under the pool size.
+    memory_write_concurrency: int = 2
+
+    # Human approval before risky tool calls (see agent/approvals.py).
     hitl_enabled: bool = True
     # Web searches mentioning any of these (whole words, any case) wait for approval, since the
     # query goes to a third-party search engine. Emails, phone and order numbers always do.
@@ -103,3 +128,12 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
+
+@dataclass(frozen=True)
+class RunContext:
+    """Who a run is for: passed as LangGraph's runtime context (`context=` on every invoke and
+    stream) and read by middleware and tools as `runtime.context`. The thread is in the run's
+    config, where the checkpointer needs it."""
+
+    user_id: str

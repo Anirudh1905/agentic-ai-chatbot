@@ -2,7 +2,7 @@
 
 **Goal:** The agent can stop and ask a human before it does something risky, expensive or uncertain, then continue exactly where it left off once the human responds, even hours later.
 
-[← Phase 3](phase-3-short-term-memory-checkpointing.md) · [Overview](README.md) · [Next: Phase 5 →](phase-5-pii-detection-masking.md)
+[← Phase 3](phase-3-short-term-memory-checkpointing.md) · [Overview](../README.md) · [Next: Phase 5 →](phase-5-pii-detection-masking.md)
 
 ## In one paragraph
 
@@ -60,7 +60,7 @@ The last row matters: the middleware **auto-approves tools that aren't listed**.
 
 ```mermaid
 flowchart TB
-    START((START)) --> Before["before_model<br/>summarization, call limit"]
+    START((START)) --> Before["before_agent, before_model<br/>memory recall, PII, summarization, call limit"]
     Before --> Model["model<br/>system prompt, dangling-call fix, logging"]
     Model --> HITL{"HumanInTheLoopMiddleware<br/>after_model:<br/>any call matches interrupt_on?"}
     HITL -->|no tool calls| END((END))
@@ -78,9 +78,10 @@ flowchart TB
 ```python
 # src/chatbot/agent/builder.py
 middleware = [
+    LongTermMemory(settings.memory_recall_limit),  # recall memories every turn (Phase 6)
     *output_middleware(),                     # PIIMiddleware: tool results + replies (Phase 5)
-    summarization(settings, summary_model),   # SummarizationMiddleware, adjusted (Phase 3)
-    system_prompt,                            # @dynamic_prompt: today's date
+    summarization(settings, summary_model, on_summarize=writer.schedule),  # Phase 3; pushes to memory
+    system_prompt,                            # @dynamic_prompt: today's date, recalled memories
     ModelCallMiddleware(),                    # dangling tool calls, logging
     ModelCallLimit(run_limit=settings.max_model_calls, exit_behavior="end"),  # logs when it stops a run
 ]
@@ -88,7 +89,10 @@ if retry := tool_retry(tools):                # ToolRetryMiddleware for the two 
     middleware.append(retry)
 if interrupt_on:                              # HITL_ENABLED
     middleware.append(HumanInTheLoopMiddleware(interrupt_on))
-agent = create_agent(model, tools=list(tools), middleware=middleware, checkpointer=checkpointer)
+agent = create_agent(
+    model, tools=list(tools), middleware=middleware,
+    context_schema=RunContext, checkpointer=checkpointer, store=store,
+)
 ```
 
 ## End-to-end flow
@@ -173,12 +177,13 @@ def pending_request(state: StateSnapshot) -> dict[str, Any] | None:
     return None
 ```
 
-It's used in four places:
+It's used in five places:
 
 - `stream_run`, after the agent finishes: sends `interrupt` before `done`, and `done` carries `pending: true/false`
 - `chat_response` (`api/runs.py`), after `/chat` and `/resume`: sets `pending`, and `reply` is empty while paused
 - `open_thread`, before a new message: a paused thread is a 409, since a new message would leave the pending calls without results
 - `GET /threads/{id}/messages`, so a client can rebuild the card after a reload
+- `prepare_resume` (`routes/threads.py`), before resuming: a paused thread needs decisions (409 without them), exactly one per pending call (422 otherwise)
 
 ### Resuming
 

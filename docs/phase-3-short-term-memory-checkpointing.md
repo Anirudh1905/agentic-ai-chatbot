@@ -2,7 +2,7 @@
 
 **Goal:** Conversations persist. A user can close the tab, come back, and continue the same thread. The graph saves its state after every step, so a crash mid-run can be resumed. Long threads stay within the context window.
 
-[← Phase 2](phase-2-tools-rag-web-search.md) · [Overview](README.md) · [Next: Phase 4 →](phase-4-human-in-the-loop.md)
+[← Phase 2](phase-2-tools-rag-web-search.md) · [Overview](../README.md) · [Next: Phase 4 →](phase-4-human-in-the-loop.md)
 
 ## Concepts
 
@@ -32,15 +32,16 @@ flowchart TB
 
     subgraph Agent["create_agent graph"]
         direction TB
-        START((START)) --> Sum["before_model<br/>Summarization middleware<br/>(start of a turn only)"]
-        Sum --> Model[model]
+        START((START)) --> Check["before_model<br/>Summarization middleware<br/>(fallback, start of a turn only)"]
+        Check --> Model[model]
         Model -->|tool_calls| Tools[tools]
-        Tools --> Sum
-        Model -->|done| END((END))
+        Tools --> Check
+        Model -->|done| Sum["after_agent<br/>Summarization middleware<br/>(end of the turn)"]
+        Sum --> END((END))
     end
 
     Agent <-->|"put / get after each step"| CP[(Postgres<br/>checkpoints<br/>checkpoint_writes<br/>checkpoint_blobs)]
-    Sum -->|summary call| Small[Small model<br/>gpt-5-nano]
+    Sum -->|summary call| Small[Small model<br/>gpt-4.1-mini]
     API -->|thread metadata| Threads[(threads table<br/>user_id, title,<br/>created_at, updated_at)]
 ```
 
@@ -58,7 +59,7 @@ sequenceDiagram
     A->>G: astream_events(input, config={thread_id: T1})
     G->>P: get_tuple(T1) → latest state
     P-->>G: messages so far (summary included)
-    G->>G: summarization (before_model)
+    G->>G: summarization check (before_model, normally a no-op)
     G->>P: put checkpoint n+1
     G->>G: model
     G->>P: put checkpoint n+2
@@ -66,25 +67,27 @@ sequenceDiagram
     G->>P: put checkpoint n+3
     Note over G,P: crash here? Resuming T1<br/>continues from n+3
     G->>G: model (final answer)
-    G->>P: put checkpoint n+4
     G-->>A: stream
-    A-->>C: SSE
+    A-->>C: SSE (the reply)
+    G->>P: put checkpoint n+4
+    G->>G: summarization (after_agent), if over the limit
+    G->>P: put checkpoint n+5
 ```
 
 With the Phase 4 middleware there are a few more steps per round trip (one per middleware hook), each with its own checkpoint.
 
 ## Context-window management
 
-Messages grow without limit, but the context window doesn't. Older turns are folded into a running summary by LangChain's `SummarizationMiddleware`, configured and slightly adjusted in `src/chatbot/agent/middleware.py`:
+Messages grow without limit, but the context window doesn't. Older turns are folded into a running summary by LangChain's `SummarizationMiddleware`, configured and slightly adjusted in `src/chatbot/memory/short_term.py`:
 
 ```mermaid
 flowchart LR
-    In[New user message] --> Count{Thread over<br/>CONTEXT_MAX_TOKENS?}
+    In[Turn ends] --> Count{Thread over<br/>CONTEXT_MAX_TOKENS?}
     Count -->|no| Pass[Send as-is]
-    Count -->|yes| Split["Cut at a turn boundary,<br/>keeping ~half the budget<br/>and the whole current turn"]
+    Count -->|yes| Split["Cut at a turn boundary,<br/>keeping ~half the budget<br/>and the whole latest turn"]
     Split --> Sum[Summarize everything before<br/>the cut, including the old<br/>summary, with the small model]
     Sum --> Swap[Replace those messages<br/>with one summary message]
-    Swap --> Out[System prompt<br/>+ summary message<br/>+ kept turns]
+    Swap --> Out[Next turn sends: system prompt<br/>+ summary message<br/>+ kept turns + new message]
     Pass --> Out
 ```
 
@@ -98,21 +101,25 @@ Summarization(                       # subclass of SummarizationMiddleware
 )
 ```
 
-- **Threshold:** `CONTEXT_MAX_TOKENS` (default 32k), measured with LangChain's local estimate (`count_tokens_approximately`). That's far below the model's window on purpose: every turn and every tool round trip resends the history, so cost and latency grow long before the window fills.
+- **Threshold:** `CONTEXT_MAX_TOKENS` (default 10k), measured with LangChain's local estimate (`count_tokens_approximately`). That's far below the model's window on purpose: every turn and every tool round trip resends the history, so cost and latency grow long before the window fills.
 - **What's kept:** about the most recent half of the budget, so the next few turns don't trigger another summary straight away.
 - **Rolling summary:** the summary is one message in the thread, marked `lc_source: "summarization"` and starting "Here is a summary of the conversation to date". The next summarization folds it in with the newly dropped messages, so it doesn't drift. `GET /threads/{id}/messages` returns it as `summary` and leaves it out of `messages`.
 - **What the summarizer is told** (`prompts/summarize.md`): keep names, numbers, dates, order IDs and decisions verbatim, keep answers with their citations, and treat the messages as data.
 - **Only the agent's reply is streamed.** `stream_run` forwards tokens from the `model` node only, so the summarizer's output never reaches the client.
 
-**Three adjustments to the built-in**, each covered by a test in `tests/unit/test_summarization.py`:
+**When it runs.** The summary is made at the end of a turn, after the reply has streamed, so the user isn't kept waiting for it before the answer starts (the request still ends once it's done). At the start of the next turn the same check runs again as a fallback, normally finding nothing to do. It catches what the end of the last turn didn't: a new message that pushes the thread over the limit on its own (a long paste), a turn that ended early (the client disconnected, a timeout, a failed summary), and threads from before this change. Without it, those model calls would go over `CONTEXT_MAX_TOKENS`.
+
+**Five adjustments to the built-in**, each covered by a test in `tests/unit/test_summarization.py`:
 
 | Built-in behaviour | Problem | Adjustment |
 |--------------------|---------|------------|
-| Runs before every model call | Summarized twice in one request, mid-answer, ~7 s each | Only at the start of a turn (last message is the user's) |
+| Runs before every model call | Summarized twice in one request, mid-answer, ~7 s each | Never between tool rounds: only at the start of a turn (last message is the user's) |
+| Runs before the model answers | The user waited for the summary (~6 s, once 126 s) before the reply began | Runs at the end of the turn, after the reply (`after_agent`); the start-of-turn check is a fallback |
 | Cuts anywhere that doesn't split a tool call from its result | Summarized away the question being answered: "What about express shipping?" got an answer about a tent | Cut moves back to the start of a turn and never past the current one |
 | Raises if the summary model fails (after its own retries) | The turn fails | The turn goes ahead with the full history; the next turn tries again |
+| Summarizes whenever the thread is over the limit | Once the summary alone was near the limit, every turn re-summarized nothing but the previous summary (5–6 s each) | Skips a summary that would fold away only the previous one |
 
-How fast threads grow, measured on the sample docs: a turn with a knowledge base search is about 600 tokens (most of it the tool result), and plain chat is 50–150. With the defaults that's about 50 search turns before the first summary. To watch it happen, set `CONTEXT_MAX_TOKENS=1000`: the third message of a search-heavy thread triggers it.
+How fast threads grow, measured on the sample docs: a turn with a knowledge base search is about 600 tokens (most of it the tool result), and plain chat is 50–150. With the defaults (10k tokens) that's about 16 search turns before the first summary. To watch it happen, set `CONTEXT_MAX_TOKENS=1000`: the third message of a search-heavy thread triggers it.
 
 ## Components
 
@@ -159,9 +166,9 @@ Checkpoints pile up quickly (one per step, several per turn). Two mechanisms:
 
   ```text
   chatbot.api.routes.chat  [req=daf6ce1f thread=ee996bd2]: continuing thread, message of 28 chars
-  chatbot.agent.middleware [req=daf6ce1f thread=ee996bd2]: context: 9 messages, ~1262 tokens
-  chatbot.agent.middleware [req=daf6ce1f thread=ee996bd2]: summarized older messages in 7.1s; thread now 6 messages, ~1196 tokens
-  chatbot.tools.rag        [req=daf6ce1f thread=ee996bd2]: knowledge base search 'express shipping': 6 hits in 2.3s
+  chatbot.memory.short_term [req=daf6ce1f thread=ee996bd2]: context: 9 messages, ~1262 tokens
+  chatbot.memory.short_term [req=daf6ce1f thread=ee996bd2]: summarized older messages in 7.1s; thread now 6 messages, ~1196 tokens
+  chatbot.tools.rag        [req=daf6ce1f thread=ee996bd2]: knowledge base search 'express shipping': 6 hits in 2.3s (top: Shipping Policy › Shipping Options (United States))
   chatbot.agent.middleware [req=daf6ce1f thread=ee996bd2]: model replied in 2.2s (1080 tokens in, 60 out): answer of 236 chars
   chatbot.api              [req=daf6ce1f thread=ee996bd2]: POST /chat -> 200 in 9.01s (user=log-check)
   ```

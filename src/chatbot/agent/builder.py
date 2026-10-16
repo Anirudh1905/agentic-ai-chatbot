@@ -13,19 +13,20 @@ from langchain_core.tools import BaseTool
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph.state import CompiledStateGraph
+from langgraph.store.base import BaseStore
 
-from chatbot.agent.middleware import (
-    ModelCallLimit,
-    ModelCallMiddleware,
-    summarization,
-    system_prompt,
-)
-from chatbot.config import Settings
+from chatbot.agent.middleware import ModelCallLimit, ModelCallMiddleware, system_prompt
+from chatbot.config import RunContext, Settings
+from chatbot.memory.long_term import LongTermMemory, MemoryWriter
+from chatbot.memory.short_term import summarization
 from chatbot.pii import output_middleware
+from chatbot.tools.memory import build_remember_tool
 from chatbot.tools.registry import tool_retry
 
 # create_agent's state: the messages, plus a few internal keys its middleware uses.
 AgentState = _AgentState[Any]
+# The compiled agent: create_agent's state, and the user each run is for (its runtime context).
+Agent = CompiledStateGraph[AgentState, RunContext]
 
 # Graph steps per run, passed in every run's config. ModelCallLimitMiddleware is the real cap
 # (MAX_MODEL_CALLS); this is a backstop. Each model/tool round is many steps, one per
@@ -38,14 +39,23 @@ RECURSION_LIMIT = 200
 MODEL_NODE = "model"
 
 
-def build_llm(settings: Settings, model: str | None = None, streaming: bool = True) -> ChatOpenAI:
+def build_llm(
+    settings: Settings,
+    model: str | None = None,
+    streaming: bool = True,
+    timeout: float | None = None,
+) -> ChatOpenAI:
+    """A chat model on the configured endpoint. `timeout` defaults to REQUEST_TIMEOUT."""
+    model = model or settings.model
+    # Other models (gpt-4.x) reject the parameter.
+    reasoning = model.startswith(("gpt-5", "o1", "o3", "o4"))
     return ChatOpenAI(
-        model=model or settings.model,
+        model=model,
         api_key=settings.openai_api_key,
         base_url=settings.openai_base_url or None,
-        reasoning_effort=settings.reasoning_effort,
+        reasoning_effort=settings.reasoning_effort if reasoning else None,
         max_completion_tokens=settings.max_tokens,
-        timeout=settings.request_timeout,
+        timeout=timeout or settings.request_timeout,
         streaming=streaming,
         # Token counts on streamed responses too (for logs and tracing).
         stream_usage=True,
@@ -59,19 +69,32 @@ def build_graph(
     summarizer: BaseChatModel | None = None,
     checkpointer: BaseCheckpointSaver[Any] | None = None,
     interrupt_on: dict[str, bool | InterruptOnConfig] | None = None,
-) -> CompiledStateGraph[AgentState]:
+    store: BaseStore | None = None,
+    memory_writer: MemoryWriter | None = None,
+) -> Agent:
     """The agent: LangChain's create_agent loop (model ↔ tools) plus middleware.
 
     Without a checkpointer every call starts a new conversation. `summarizer` defaults to
     SUMMARY_MODEL, or to `llm` when one is injected (tests). With `interrupt_on` (see
-    hitl/policy.py), matching tool calls pause for a human; this needs a checkpointer.
+    agent/approvals.py), matching tool calls pause for a human; this needs a checkpointer. With
+    a `store` (and MEMORY_ENABLED), every turn recalls the user's long-term memories
+    (memory/long_term/); with a `memory_writer` too, the turns a summary folds away are
+    pushed into them.
     """
     model = llm or build_llm(settings)
     summary_model = summarizer or llm or build_llm(settings, settings.summary_model, False)
+    memory = store is not None and settings.memory_enabled
+    writer = memory_writer if memory else None
+    if writer:
+        # Lets the agent save what the user asks it to remember (tools/memory.py). It's not in
+        # `interrupt_on`, so it never waits for approval: it only writes the user's own memories.
+        tools = [*tools, build_remember_tool(writer)]
     middleware: list[AgentMiddleware[Any, Any]] = [
+        # Every turn: recall the user's long-term memories closest to their latest message.
+        *([LongTermMemory(settings.memory_recall_limit)] if memory else []),
         # PII in tool results and replies (user messages are redacted earlier, by the API).
         *(output_middleware() if settings.pii_enabled else []),
-        summarization(settings, summary_model),
+        summarization(settings, summary_model, on_summarize=writer.schedule if writer else None),
         system_prompt,
         ModelCallMiddleware(),
         # Ends the run with a short message rather than an error if the model keeps going.
@@ -81,5 +104,12 @@ def build_graph(
         middleware.append(retry)
     if interrupt_on:
         middleware.append(HumanInTheLoopMiddleware(interrupt_on))
-    agent = create_agent(model, tools=list(tools), middleware=middleware, checkpointer=checkpointer)
-    return cast(CompiledStateGraph[AgentState], agent)
+    agent = create_agent(
+        model,
+        tools=list(tools),
+        middleware=middleware,
+        context_schema=RunContext,
+        checkpointer=checkpointer,
+        store=store,
+    )
+    return cast(Agent, agent)

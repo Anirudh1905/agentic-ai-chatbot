@@ -14,8 +14,8 @@ from langchain_core.tools import tool
 from langgraph.checkpoint.memory import InMemorySaver
 
 from chatbot.agent.builder import build_graph
-from chatbot.agent.middleware import close_dangling_tool_calls, summary_text
 from chatbot.config import Settings
+from chatbot.memory.short_term import close_dangling_tool_calls, summary_text
 
 
 def turn(i: int, words: int = 50) -> list[AnyMessage]:

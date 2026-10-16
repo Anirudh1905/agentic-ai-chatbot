@@ -8,10 +8,9 @@ from uuid import UUID
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.messages import AnyMessage, HumanMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
-from langgraph.graph.state import CompiledStateGraph
 
 from chatbot.agent.approvals import pending_request
-from chatbot.agent.builder import RECURSION_LIMIT, AgentState
+from chatbot.agent.builder import RECURSION_LIMIT, Agent
 from chatbot.api.schemas import ChatResponse
 from chatbot.config import get_settings
 from chatbot.pii import redact_pii
@@ -20,8 +19,11 @@ logger = logging.getLogger(__name__)
 
 
 def run_config(
-    thread_id: UUID, callbacks: list[BaseCallbackHandler], checkpoint_id: str | None = None
+    thread_id: UUID,
+    callbacks: list[BaseCallbackHandler],
+    checkpoint_id: str | None = None,
 ) -> RunnableConfig:
+    """The run's config. Who the run is for goes separately, as its context (RunContext)."""
     configurable: dict[str, Any] = {"thread_id": str(thread_id)}
     if checkpoint_id:
         configurable["checkpoint_id"] = checkpoint_id
@@ -53,9 +55,7 @@ def thread_config(thread_id: UUID) -> RunnableConfig:
     return {"configurable": {"thread_id": str(thread_id)}}
 
 
-async def chat_response(
-    graph: CompiledStateGraph[AgentState], result: dict[str, Any], thread_id: UUID
-) -> ChatResponse:
+async def chat_response(graph: Agent, result: dict[str, Any], thread_id: UUID) -> ChatResponse:
     pending = pending_request(await graph.aget_state(thread_config(thread_id)))
     if pending:
         logger.info(

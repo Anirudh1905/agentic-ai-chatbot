@@ -1,0 +1,704 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Agentic AI Chatbot",
+    "output": ".archify/architecture-chatbot-overview-20261015-203242/chatbot-overview.html",
+    "quality_profile": "showcase",
+    "locale": "en",
+    "repository": {
+      "url": "https://github.com/Anirudh1905/agentic-ai-chatbot.git",
+      "provider": "github",
+      "link_mode": "web",
+      "revision": "1a992d5c01c1cc76642ec93f968e5ab2b226e196"
+    }
+  },
+  "components": [
+    {
+      "id": "user",
+      "type": "external",
+      "label": "User",
+      "sublabel": "browser",
+      "pos": [
+        40,
+        348
+      ],
+      "size": [
+        120,
+        64
+      ],
+      "sources": [
+        {
+          "path": "ui/app.py",
+          "line": 30,
+          "label": "X-User-Id header"
+        }
+      ]
+    },
+    {
+      "id": "ui",
+      "type": "frontend",
+      "label": "Streamlit UI",
+      "sublabel": "chat · approvals · memory",
+      "pos": [
+        220,
+        348
+      ],
+      "size": [
+        180,
+        64
+      ],
+      "sources": [
+        {
+          "path": "ui/app.py",
+          "line": 95,
+          "end_line": 120,
+          "label": "memory panel"
+        },
+        {
+          "path": "ui/app.py",
+          "line": 286,
+          "end_line": 291,
+          "label": "Remember this"
+        },
+        {
+          "path": "ui/app.py",
+          "line": 312,
+          "end_line": 322,
+          "label": "resume + /chat/stream"
+        }
+      ]
+    },
+    {
+      "id": "api",
+      "type": "backend",
+      "label": "FastAPI API",
+      "sublabel": "/chat · /threads · /me/memory",
+      "pos": [
+        490,
+        348
+      ],
+      "size": [
+        180,
+        64
+      ],
+      "sources": [
+        {
+          "path": "src/chatbot/api/main.py",
+          "line": 20,
+          "end_line": 25,
+          "label": "app + routers"
+        },
+        {
+          "path": "src/chatbot/api/routes/chat.py",
+          "line": 50,
+          "end_line": 76,
+          "label": "chat routes"
+        },
+        {
+          "path": "src/chatbot/api/routes/threads.py",
+          "line": 119,
+          "end_line": 145,
+          "label": "remember route"
+        }
+      ]
+    },
+    {
+      "id": "pii",
+      "type": "security",
+      "label": "PII redaction",
+      "sublabel": "email · card · phone · IP",
+      "pos": [
+        490,
+        184
+      ],
+      "size": [
+        180,
+        64
+      ],
+      "sources": [
+        {
+          "path": "src/chatbot/api/runs.py",
+          "line": 74,
+          "end_line": 81,
+          "label": "redact before invoke"
+        },
+        {
+          "path": "src/chatbot/pii.py",
+          "line": 55,
+          "end_line": 69,
+          "label": "RULES, redact_pii"
+        }
+      ]
+    },
+    {
+      "id": "agent",
+      "type": "backend",
+      "label": "Agent loop",
+      "sublabel": "create_agent + middleware",
+      "pos": [
+        790,
+        348
+      ],
+      "size": [
+        180,
+        64
+      ],
+      "sources": [
+        {
+          "path": "src/chatbot/agent/builder.py",
+          "line": 65,
+          "end_line": 115,
+          "label": "build_graph"
+        },
+        {
+          "path": "src/chatbot/memory/short_term.py",
+          "line": 71,
+          "end_line": 93,
+          "label": "summarize after reply"
+        },
+        {
+          "path": "src/chatbot/pii.py",
+          "line": 92,
+          "end_line": 106,
+          "label": "PIIMiddleware on outputs"
+        }
+      ]
+    },
+    {
+      "id": "llm",
+      "type": "external",
+      "label": "OpenAI-compatible API",
+      "sublabel": "chat · summary · memory",
+      "pos": [
+        790,
+        184
+      ],
+      "size": [
+        180,
+        64
+      ],
+      "sources": [
+        {
+          "path": "src/chatbot/agent/builder.py",
+          "line": 42,
+          "end_line": 62,
+          "label": "build_llm"
+        },
+        {
+          "path": "src/chatbot/api/dependencies.py",
+          "line": 76,
+          "end_line": 80,
+          "label": "memory model"
+        }
+      ]
+    },
+    {
+      "id": "gate",
+      "type": "security",
+      "label": "Approval gate",
+      "sublabel": "HITL on sensitive queries",
+      "pos": [
+        1130,
+        184
+      ],
+      "size": [
+        180,
+        64
+      ],
+      "sources": [
+        {
+          "path": "src/chatbot/agent/approvals.py",
+          "line": 22,
+          "end_line": 68,
+          "label": "interrupt_on policy"
+        },
+        {
+          "path": "src/chatbot/agent/builder.py",
+          "line": 105,
+          "end_line": 106,
+          "label": "HumanInTheLoopMiddleware"
+        }
+      ]
+    },
+    {
+      "id": "web",
+      "type": "backend",
+      "label": "web_search",
+      "sublabel": "ddgs · backend fallback",
+      "pos": [
+        1405,
+        184
+      ],
+      "size": [
+        180,
+        64
+      ],
+      "sources": [
+        {
+          "path": "src/chatbot/tools/web_search.py",
+          "line": 37,
+          "end_line": 63,
+          "label": "search()"
+        }
+      ]
+    },
+    {
+      "id": "ddg",
+      "type": "external",
+      "label": "DuckDuckGo",
+      "sublabel": "keyless, then auto",
+      "pos": [
+        1405,
+        40
+      ],
+      "size": [
+        180,
+        64
+      ],
+      "sources": [
+        {
+          "path": "src/chatbot/tools/web_search.py",
+          "line": 16,
+          "label": "BACKENDS"
+        }
+      ]
+    },
+    {
+      "id": "kb",
+      "type": "backend",
+      "label": "search_knowledge_base",
+      "sublabel": "hybrid · RRF · rerank",
+      "pos": [
+        1130,
+        348
+      ],
+      "size": [
+        180,
+        64
+      ],
+      "sources": [
+        {
+          "path": "src/chatbot/tools/rag.py",
+          "line": 105,
+          "end_line": 137,
+          "label": "retrieve()"
+        },
+        {
+          "path": "src/chatbot/tools/rerank.py",
+          "line": 26,
+          "end_line": 58,
+          "label": "cross-encoder"
+        }
+      ]
+    },
+    {
+      "id": "emb",
+      "type": "external",
+      "label": "Embeddings API",
+      "sublabel": "text-embedding-3-small",
+      "pos": [
+        1405,
+        348
+      ],
+      "size": [
+        180,
+        64
+      ],
+      "sources": [
+        {
+          "path": "src/chatbot/embeddings.py",
+          "line": 7,
+          "end_line": 15,
+          "label": "OpenAIEmbeddings"
+        }
+      ]
+    },
+    {
+      "id": "threads",
+      "type": "database",
+      "label": "threads",
+      "sublabel": "owner · title · activity",
+      "pos": [
+        140,
+        552
+      ],
+      "size": [
+        180,
+        64
+      ],
+      "sources": [
+        {
+          "path": "migrations/versions/0002_threads.py",
+          "line": 18,
+          "end_line": 28,
+          "label": "threads table"
+        },
+        {
+          "path": "src/chatbot/memory/threads.py",
+          "line": 69,
+          "end_line": 84,
+          "label": "claim()"
+        }
+      ]
+    },
+    {
+      "id": "checkpoints",
+      "type": "database",
+      "label": "checkpoints",
+      "sublabel": "graph state per thread",
+      "pos": [
+        380,
+        552
+      ],
+      "size": [
+        180,
+        64
+      ],
+      "sources": [
+        {
+          "path": "src/chatbot/api/dependencies.py",
+          "line": 49,
+          "end_line": 51,
+          "label": "AsyncPostgresSaver"
+        }
+      ]
+    },
+    {
+      "id": "memories",
+      "type": "database",
+      "label": "memories",
+      "sublabel": "store · vector index · TTL",
+      "pos": [
+        790,
+        552
+      ],
+      "size": [
+        180,
+        64
+      ],
+      "sources": [
+        {
+          "path": "src/chatbot/api/dependencies.py",
+          "line": 56,
+          "end_line": 66,
+          "label": "AsyncPostgresStore + TTL"
+        },
+        {
+          "path": "src/chatbot/memory/long_term/store.py",
+          "line": 27,
+          "end_line": 35,
+          "label": "recall()"
+        },
+        {
+          "path": "src/chatbot/memory/long_term/middleware.py",
+          "line": 39,
+          "end_line": 62,
+          "label": "recall each turn"
+        }
+      ]
+    },
+    {
+      "id": "chunks",
+      "type": "database",
+      "label": "chunks",
+      "sublabel": "pgvector + tsvector",
+      "pos": [
+        1130,
+        552
+      ],
+      "size": [
+        180,
+        64
+      ],
+      "sources": [
+        {
+          "path": "migrations/versions/0001_chunks.py",
+          "line": 20,
+          "end_line": 43,
+          "label": "chunks table"
+        }
+      ]
+    },
+    {
+      "id": "retention",
+      "type": "backend",
+      "label": "Retention job",
+      "sublabel": "nightly CLI",
+      "pos": [
+        380,
+        746
+      ],
+      "size": [
+        180,
+        64
+      ],
+      "sources": [
+        {
+          "path": "src/chatbot/memory/retention.py",
+          "line": 64,
+          "end_line": 89,
+          "label": "prune_checkpoints"
+        }
+      ]
+    },
+    {
+      "id": "writer",
+      "type": "backend",
+      "label": "MemoryWriter",
+      "sublabel": "summary · idle · remember",
+      "pos": [
+        790,
+        746
+      ],
+      "size": [
+        180,
+        64
+      ],
+      "sources": [
+        {
+          "path": "src/chatbot/memory/long_term/writer.py",
+          "line": 79,
+          "end_line": 117,
+          "label": "triggers"
+        },
+        {
+          "path": "src/chatbot/memory/long_term/facts.py",
+          "line": 19,
+          "end_line": 27,
+          "label": "never stored"
+        },
+        {
+          "path": "src/chatbot/memory/long_term/writer.py",
+          "line": 249,
+          "end_line": 263,
+          "label": "advisory lock"
+        }
+      ]
+    },
+    {
+      "id": "ingest",
+      "type": "backend",
+      "label": "Ingestion CLI",
+      "sublabel": "load · chunk · embed",
+      "pos": [
+        1405,
+        746
+      ],
+      "size": [
+        180,
+        64
+      ],
+      "sources": [
+        {
+          "path": "src/chatbot/ingestion/pipeline.py",
+          "line": 49,
+          "end_line": 106,
+          "label": "ingest_file"
+        },
+        {
+          "path": "src/chatbot/ingestion/pipeline.py",
+          "line": 109,
+          "end_line": 119,
+          "label": "--prune"
+        }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Postgres 16 + pgvector",
+      "wraps": [
+        "threads",
+        "checkpoints",
+        "memories",
+        "chunks"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "user-chat",
+      "from": "user",
+      "to": "ui",
+      "label": "chat",
+      "variant": "emphasis"
+    },
+    {
+      "id": "ui-api",
+      "from": "ui",
+      "to": "api",
+      "label": "REST + SSE",
+      "variant": "emphasis"
+    },
+    {
+      "id": "api-pii",
+      "from": "api",
+      "to": "pii",
+      "label": "redact message",
+      "variant": "security"
+    },
+    {
+      "id": "api-agent",
+      "from": "api",
+      "to": "agent",
+      "label": "invoke / resume",
+      "variant": "emphasis"
+    },
+    {
+      "id": "agent-llm",
+      "from": "agent",
+      "to": "llm",
+      "label": "model calls"
+    },
+    {
+      "id": "agent-kb",
+      "from": "agent",
+      "to": "kb",
+      "label": "KB search"
+    },
+    {
+      "id": "agent-gate",
+      "from": "agent",
+      "to": "gate",
+      "label": "web query",
+      "variant": "security",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "id": "gate-web",
+      "from": "gate",
+      "to": "web",
+      "label": "if approved",
+      "variant": "security"
+    },
+    {
+      "id": "web-ddg",
+      "from": "web",
+      "to": "ddg",
+      "label": "text search"
+    },
+    {
+      "id": "kb-emb",
+      "from": "kb",
+      "to": "emb",
+      "label": "embed query"
+    },
+    {
+      "id": "kb-chunks",
+      "from": "kb",
+      "to": "chunks",
+      "label": "vector + FTS"
+    },
+    {
+      "id": "api-threads",
+      "from": "api",
+      "to": "threads",
+      "label": "ownership",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "agent-checkpoints",
+      "from": "agent",
+      "to": "checkpoints",
+      "label": "save each step",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "agent-memories",
+      "from": "agent",
+      "to": "memories",
+      "label": "recall each turn"
+    },
+    {
+      "id": "agent-writer",
+      "from": "agent",
+      "to": "writer",
+      "label": "summary · remember tool",
+      "variant": "dashed",
+      "fromSide": "right",
+      "toSide": "right"
+    },
+    {
+      "id": "api-writer",
+      "from": "api",
+      "to": "writer",
+      "label": "idle loop · Remember this",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "left"
+    },
+    {
+      "id": "writer-memories",
+      "from": "writer",
+      "to": "memories",
+      "label": "add / update / delete"
+    },
+    {
+      "id": "retention-checkpoints",
+      "from": "retention",
+      "to": "checkpoints",
+      "label": "prune old",
+      "variant": "dashed"
+    },
+    {
+      "id": "ingest-chunks",
+      "from": "ingest",
+      "to": "chunks",
+      "label": "upsert",
+      "variant": "dashed"
+    },
+    {
+      "id": "ingest-emb",
+      "from": "ingest",
+      "to": "emb",
+      "label": "embed chunks",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "rose",
+      "title": "Safety (Phases 4–5)",
+      "items": [
+        "User messages are redacted in the API before the agent runs; PIIMiddleware redacts tool results and replies, and the SSE stream is redacted too",
+        "web_search pauses for approval when the query has sensitive terms or an order number",
+        "New messages to a paused thread get 409"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "Memory (Phases 3 and 6)",
+      "items": [
+        "Short-term: each thread's checkpoints; past CONTEXT_MAX_TOKENS (10k) older turns are summarized after the reply, so the user never waits",
+        "Long-term pushes: turns a summary folds away, threads idle for 30 min (a loop in the API), the Remember this button on a reply, or the remember tool",
+        "MemoryWriter (gpt-5-mini) extracts the user's facts and decides add / update / delete against the 5 closest memories; a per-thread cursor stops double pushes",
+        "Placeholders and claims of status or discounts are never stored; temporary facts expire through the store's TTL sweeper",
+        "Recall searches every turn and adds memories the thread hasn't seen; the prompt only changes when one turns up, so the prompt cache keeps working",
+        "One push per user at a time across processes (Postgres advisory lock), at most MEMORY_WRITE_CONCURRENCY per process"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Reliability",
+      "items": [
+        "ModelCallLimitMiddleware ends a run after MAX_MODEL_CALLS",
+        "Both search tools retry once, then give the model an error to relay",
+        "A failed summary keeps the full history; a memory push that doesn't finish leaves its thread's cursor, so it runs again later (unless the content filter rejected it)"
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "Optional",
+      "items": [
+        "Langfuse tracing when LANGFUSE keys are set",
+        "MEMORY_ENABLED, PII_ENABLED, HITL_ENABLED and WEB_SEARCH_ENABLED switch features off",
+        "Empty RERANKER_MODEL disables reranking"
+      ]
+    }
+  ]
+}

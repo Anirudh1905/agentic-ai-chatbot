@@ -2,7 +2,7 @@
 
 **Goal:** Turn the single LLM call into a ReAct-style agent that decides when to look up internal documents, when to search the web, and when to answer directly.
 
-[← Phase 1](phase-1-foundation.md) · [Overview](README.md) · [Next: Phase 3 →](phase-3-short-term-memory-checkpointing.md)
+[← Phase 1](phase-1-foundation.md) · [Overview](../README.md) · [Next: Phase 3 →](phase-3-short-term-memory-checkpointing.md)
 
 ## Scope
 

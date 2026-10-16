@@ -48,6 +48,8 @@ def test_build_llm_uses_settings() -> None:
     assert llm.reasoning_effort == "medium"
     assert llm.streaming is True
     assert llm.stream_usage is True
+    # gpt-4.x rejects the parameter (400 "Unrecognized request argument").
+    assert build_llm(settings, "gpt-4.1-mini").reasoning_effort is None
 
 
 async def test_tool_loop_runs_tool_and_returns_final_answer() -> None:

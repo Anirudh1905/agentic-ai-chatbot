@@ -43,6 +43,11 @@ def test_detect_phone_ignores_short_numbers() -> None:
     assert [m["value"] for m in detect_phone("ring 303-555-0142")] == ["303-555-0142"]
 
 
+def test_detect_phone_ignores_dates() -> None:
+    assert detect_phone("arrived on 2026-10-16, due 16-10-2026, (2026-10-09) noted") == []
+    assert [m["value"] for m in detect_phone("call +91 98450 12345")] == ["+91 98450 12345"]
+
+
 def all_text(calls: list[list[Any]]) -> str:
     return "\n".join(m.text for call in calls for m in call)
 

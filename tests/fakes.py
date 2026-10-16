@@ -4,7 +4,7 @@ import json
 import re
 from collections.abc import Iterator, Sequence
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 from uuid import UUID
 
@@ -12,8 +12,10 @@ from langchain_core.callbacks import CallbackManagerForLLMRun
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
+from langchain_core.runnables import Runnable, RunnableLambda
 from langchain_core.tools import BaseTool, tool
 
+from chatbot.memory.long_term.facts import Change, Changes, Fact, Facts
 from chatbot.memory.threads import Thread
 
 
@@ -110,7 +112,8 @@ def make_flaky_lookup_tool(failures: int = 1) -> BaseTool:
 
 class FactKeepingSummarizer(BaseChatModel):
     """Summarizes by keeping every line that contains "fact:", from the old summary and the
-    transcript alike. Lets tests check that facts survive repeated summarization."""
+    transcript alike. Lets tests check that facts survive repeated summarization. A fact
+    written as "fact: key=value" replaces an earlier one with the same key."""
 
     calls: int = 0
 
@@ -127,9 +130,60 @@ class FactKeepingSummarizer(BaseChatModel):
     ) -> ChatResult:
         self.calls += 1
         # Stop at "<" and "&": the summary middleware sends messages as XML.
-        facts = re.findall(r"fact: [^\n<&]*", messages[-1].text)
-        summary = "\n".join(f"- {f}" for f in dict.fromkeys(facts))
+        facts: dict[str, str] = {}
+        for fact in re.findall(r"fact: [^\n<&]*", messages[-1].text):
+            facts[fact.split("=", 1)[0]] = fact.strip()
+        summary = "\n".join(f"- {f}" for f in facts.values())
         return ChatResult(generations=[ChatGeneration(message=AIMessage(summary))])
+
+
+class FactMemoryModel(BaseChatModel):
+    """Stands in for the memory model, with "fact: key=value" lines (see FactKeepingSummarizer).
+
+    Every such line in the user's messages is a memory; "fact: key=forget" asks to forget `key`,
+    and "fact: key=value until=YYYY-MM-DD" is temporary. A new memory updates the existing one
+    with the same key (or deletes it, for a forget request), and is added otherwise."""
+
+    @property
+    def _llm_type(self) -> str:
+        return "fact-memory"
+
+    def _generate(self, *args: Any, **kwargs: Any) -> ChatResult:
+        raise NotImplementedError("only used through with_structured_output")
+
+    def with_structured_output(self, schema: Any, **kwargs: Any) -> Runnable[Any, Any]:
+        return RunnableLambda(self._extract if schema is Facts else self._decide)
+
+    @staticmethod
+    def _key(text: str) -> str:
+        return text.split("=", 1)[0]
+
+    def _extract(self, messages: list[BaseMessage]) -> Facts:
+        memories = []
+        for line in re.findall(r"fact: [^\n<]*", messages[-1].text):
+            content, _, until = line.strip().partition(" until=")
+            memories.append(
+                Fact(
+                    content=content,
+                    scope="user",
+                    topic="preferences",
+                    forget=content.endswith("=forget"),
+                    valid_until=date.fromisoformat(until) if until else None,
+                )
+            )
+        return Facts(memories=memories)
+
+    def _decide(self, messages: list[BaseMessage]) -> Changes:
+        request = messages[-1].text
+        new = re.search(r"fact: [^\n<]*", request.split("<existing_memories>")[0])
+        assert new
+        fact = new.group().strip()
+        for memory_id, content in re.findall(r"\[(\w+)\] (fact: [^\n]*)", request):
+            if self._key(content) == self._key(fact):
+                if "FORGET REQUEST" in request:
+                    return Changes(changes=[Change(action="DELETE", memory_id=memory_id)])
+                return Changes(changes=[Change(action="UPDATE", memory_id=memory_id, content=fact)])
+        return Changes(changes=[Change(action="ADD")])
 
 
 class InMemoryThreadStore:
@@ -165,3 +219,7 @@ class InMemoryThreadStore:
 
     async def idle_since(self, cutoff: datetime) -> list[UUID]:
         return [t.id for t in self.rows.values() if t.updated_at < cutoff]
+
+    async def idle_between(self, since: datetime, until: datetime) -> list[Thread]:
+        rows = [t for t in self.rows.values() if since <= t.updated_at < until]
+        return sorted(rows, key=lambda t: t.updated_at)

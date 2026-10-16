@@ -5,7 +5,7 @@ from langchain_core.callbacks import BaseCallbackHandler
 
 from chatbot.config import Settings
 
-# Set per request (see api/middleware.py), so every log line from that request, including
+# Set per request (see api/request_logging.py), so every log line from that request, including
 # the graph and tools running under it, says which request and thread it belongs to.
 request_id: ContextVar[str | None] = ContextVar("request_id", default=None)
 thread_id: ContextVar[str | None] = ContextVar("thread_id", default=None)
