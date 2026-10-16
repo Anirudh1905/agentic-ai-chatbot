@@ -2,7 +2,7 @@
 
 **Goal:** A working chat API backed by a minimal LangGraph agent. No tools or memory yet. The point of this phase is to get the skeleton that every later phase plugs into.
 
-[← Overview](README.md) · [Next: Phase 2 →](phase-2-tools-rag-web-search.md)
+[← Overview](../README.md) · [Next: Phase 2 →](phase-2-tools-rag-web-search.md)
 
 ## Scope
 

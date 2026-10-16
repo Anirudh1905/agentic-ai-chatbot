@@ -2,14 +2,14 @@
 
 The thread's messages live in the checkpointer (Phase 3). Once they pass
 CONTEXT_MAX_TOKENS, older turns are folded into a running summary by LangChain's
-SummarizationMiddleware (adjusted below); the summary is also handed to long-term memory
-(`long_term.py`), which updates the user's memories from it. `close_dangling_tool_calls`
-repairs a thread whose run died mid tool call.
+SummarizationMiddleware (adjusted below). The turns each summary folds away are also handed
+to long-term memory (`long_term/`), which pushes them into the user's memories.
+`close_dangling_tool_calls` repairs a thread whose run died mid tool call.
 """
 
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any
 
 from langchain.agents.middleware import AgentState, SummarizationMiddleware
@@ -17,7 +17,6 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, ToolMessage
 from langchain_core.messages.utils import count_tokens_approximately
 from langgraph.runtime import Runtime
-from langgraph.store.base import BaseStore
 
 from chatbot.config import Settings
 from chatbot.prompts import load_prompt
@@ -38,7 +37,7 @@ def summary_text(message: AnyMessage) -> str | None:
 
 
 class Summarization(SummarizationMiddleware):
-    """SummarizationMiddleware with three changes, each covered by a test:
+    """SummarizationMiddleware with four changes, each covered by a test:
 
     - Only at the start of a turn. The built-in runs before every model call, so a turn with
       tool calls could be summarized twice, mid-answer.
@@ -46,10 +45,13 @@ class Summarization(SummarizationMiddleware):
       splitting a tool call from its result, so it could summarize away the question being
       answered.
     - If the summary model fails, the turn goes ahead with the full history instead of failing.
+    - Skips a summary that would fold away only the previous one (it happened every turn once
+      the summary alone was near the limit).
     """
 
-    # Called with (store, summary) after each successful summary; long-term memory uses it.
-    on_summary: Callable[[BaseStore | None, str], None] | None = None
+    # Called with the run's runtime and the messages just summarized away, after each
+    # successful summary; long-term memory uses it.
+    on_summarize: Callable[[Runtime[Any], Sequence[AnyMessage]], None] | None = None
 
     async def abefore_model(
         self, state: AgentState[Any], runtime: Runtime[Any]
@@ -68,9 +70,11 @@ class Summarization(SummarizationMiddleware):
             logger.exception("summarizing failed")
             return None
         if update:
-            # The update is [remove all, summary, kept messages...].
-            if self.on_summary and (summary := summary_text(update["messages"][1])):
-                self.on_summary(runtime.store, summary)
+            if self.on_summarize:
+                # The update is [remove all, summary, kept messages...]; the kept messages are
+                # the tail of the thread, so the ones summarized are everything before them.
+                kept = len(update["messages"]) - 2
+                self.on_summarize(runtime, messages[: len(messages) - kept])
             logger.info(
                 "summarized older messages in %.1fs; thread now %d messages, ~%d tokens",
                 time.monotonic() - start,
@@ -86,13 +90,17 @@ class Summarization(SummarizationMiddleware):
             i for i, m in enumerate(messages) if isinstance(m, HumanMessage) and i <= cutoff
         ]
         current_turn = max(i for i, m in enumerate(messages) if isinstance(m, HumanMessage))
-        return min(turn_starts[-1] if turn_starts else 0, current_turn)
+        cut = min(turn_starts[-1] if turn_starts else 0, current_turn)
+        # Folding away nothing but the previous summary would only rewrite it, every turn.
+        if all(summary_text(m) is not None for m in messages[:cut]):
+            return 0
+        return cut
 
 
 def summarization(
     settings: Settings,
     model: BaseChatModel,
-    on_summary: Callable[[BaseStore | None, str], None] | None = None,
+    on_summarize: Callable[[Runtime[Any], Sequence[AnyMessage]], None] | None = None,
 ) -> Summarization:
     limit = settings.context_max_tokens
     middleware = Summarization(
@@ -104,7 +112,7 @@ def summarization(
         # Summarize everything being dropped, so the previous summary is never cut off.
         trim_tokens_to_summarize=None,
     )
-    middleware.on_summary = on_summary
+    middleware.on_summarize = on_summarize
     return middleware
 
 

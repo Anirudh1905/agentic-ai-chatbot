@@ -1,4 +1,4 @@
-"""The user's long-term memories: see them, and forget one or all (memory/long_term.py)."""
+"""The user's long-term memories (memory/long_term/): see them, and forget one or all."""
 
 import logging
 
@@ -15,7 +15,7 @@ router = APIRouter(prefix="/me/memory", tags=["memory"])
 
 @router.get("")
 async def get_memories(store: Store, user_id: UserId) -> MemoryList:
-    """What the bot remembers about you across conversations, newest first."""
+    """What the bot remembers about you across conversations."""
     items = await list_memories(store, user_id)
     return MemoryList(
         memories=[
@@ -43,8 +43,7 @@ async def forget_memory(memory_id: str, store: Store, user_id: UserId) -> Respon
 
 @router.delete("", status_code=status.HTTP_204_NO_CONTENT)
 async def forget_everything(store: Store, user_id: UserId) -> Response:
-    """Forget everything. New threads start without memories; threads already open keep what
-    they recalled when they started."""
+    """Forget everything: no turn recalls them any more."""
     items = await list_memories(store, user_id)
     for item in items:
         await store.adelete(namespace(user_id), item.key)

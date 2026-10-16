@@ -4,7 +4,7 @@ import json
 import re
 from collections.abc import Iterator, Sequence
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 from uuid import UUID
 
@@ -15,7 +15,7 @@ from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResu
 from langchain_core.runnables import Runnable, RunnableLambda
 from langchain_core.tools import BaseTool, tool
 
-from chatbot.memory.long_term import Change, Changes, Fact, Facts
+from chatbot.memory.long_term.facts import Change, Changes, Fact, Facts
 from chatbot.memory.threads import Thread
 
 
@@ -140,9 +140,9 @@ class FactKeepingSummarizer(BaseChatModel):
 class FactMemoryModel(BaseChatModel):
     """Stands in for the memory model, with "fact: key=value" lines (see FactKeepingSummarizer).
 
-    Every such line in a summary is a memory; "fact: key=forget" asks to forget `key`. A new
-    memory updates the existing one with the same key (or deletes it, for a forget request),
-    and is added otherwise."""
+    Every such line in the user's messages is a memory; "fact: key=forget" asks to forget `key`,
+    and "fact: key=value until=YYYY-MM-DD" is temporary. A new memory updates the existing one
+    with the same key (or deletes it, for a forget request), and is added otherwise."""
 
     @property
     def _llm_type(self) -> str:
@@ -159,18 +159,19 @@ class FactMemoryModel(BaseChatModel):
         return text.split("=", 1)[0]
 
     def _extract(self, messages: list[BaseMessage]) -> Facts:
-        facts = re.findall(r"fact: [^\n<]*", messages[-1].text)
-        return Facts(
-            memories=[
+        memories = []
+        for line in re.findall(r"fact: [^\n<]*", messages[-1].text):
+            content, _, until = line.strip().partition(" until=")
+            memories.append(
                 Fact(
-                    content=f.strip(),
+                    content=content,
                     scope="user",
                     topic="preferences",
-                    forget=f.endswith("=forget"),
+                    forget=content.endswith("=forget"),
+                    valid_until=date.fromisoformat(until) if until else None,
                 )
-                for f in facts
-            ]
-        )
+            )
+        return Facts(memories=memories)
 
     def _decide(self, messages: list[BaseMessage]) -> Changes:
         request = messages[-1].text
@@ -218,3 +219,6 @@ class InMemoryThreadStore:
 
     async def idle_since(self, cutoff: datetime) -> list[UUID]:
         return [t.id for t in self.rows.values() if t.updated_at < cutoff]
+
+    async def idle_between(self, since: datetime, until: datetime) -> list[Thread]:
+        return [t for t in self.rows.values() if since <= t.updated_at < until]

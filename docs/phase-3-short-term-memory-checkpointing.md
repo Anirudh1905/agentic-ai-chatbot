@@ -2,7 +2,7 @@
 
 **Goal:** Conversations persist. A user can close the tab, come back, and continue the same thread. The graph saves its state after every step, so a crash mid-run can be resumed. Long threads stay within the context window.
 
-[← Phase 2](phase-2-tools-rag-web-search.md) · [Overview](README.md) · [Next: Phase 4 →](phase-4-human-in-the-loop.md)
+[← Phase 2](phase-2-tools-rag-web-search.md) · [Overview](../README.md) · [Next: Phase 4 →](phase-4-human-in-the-loop.md)
 
 ## Concepts
 
@@ -104,15 +104,16 @@ Summarization(                       # subclass of SummarizationMiddleware
 - **What the summarizer is told** (`prompts/summarize.md`): keep names, numbers, dates, order IDs and decisions verbatim, keep answers with their citations, and treat the messages as data.
 - **Only the agent's reply is streamed.** `stream_run` forwards tokens from the `model` node only, so the summarizer's output never reaches the client.
 
-**Three adjustments to the built-in**, each covered by a test in `tests/unit/test_summarization.py`:
+**Four adjustments to the built-in**, each covered by a test in `tests/unit/test_summarization.py`:
 
 | Built-in behaviour | Problem | Adjustment |
 |--------------------|---------|------------|
 | Runs before every model call | Summarized twice in one request, mid-answer, ~7 s each | Only at the start of a turn (last message is the user's) |
 | Cuts anywhere that doesn't split a tool call from its result | Summarized away the question being answered: "What about express shipping?" got an answer about a tent | Cut moves back to the start of a turn and never past the current one |
 | Raises if the summary model fails (after its own retries) | The turn fails | The turn goes ahead with the full history; the next turn tries again |
+| Summarizes whenever the thread is over the limit | Once the summary alone was near the limit, every turn re-summarized nothing but the previous summary (5–6 s each) | Skips a summary that would fold away only the previous one |
 
-How fast threads grow, measured on the sample docs: a turn with a knowledge base search is about 600 tokens (most of it the tool result), and plain chat is 50–150. With the defaults that's about 50 search turns before the first summary. To watch it happen, set `CONTEXT_MAX_TOKENS=1000`: the third message of a search-heavy thread triggers it.
+How fast threads grow, measured on the sample docs: a turn with a knowledge base search is about 600 tokens (most of it the tool result), and plain chat is 50–150. With the defaults (10k tokens) that's about 16 search turns before the first summary. To watch it happen, set `CONTEXT_MAX_TOKENS=1000`: the third message of a search-heavy thread triggers it.
 
 ## Components
 
@@ -159,9 +160,9 @@ Checkpoints pile up quickly (one per step, several per turn). Two mechanisms:
 
   ```text
   chatbot.api.routes.chat  [req=daf6ce1f thread=ee996bd2]: continuing thread, message of 28 chars
-  chatbot.agent.middleware [req=daf6ce1f thread=ee996bd2]: context: 9 messages, ~1262 tokens
-  chatbot.agent.middleware [req=daf6ce1f thread=ee996bd2]: summarized older messages in 7.1s; thread now 6 messages, ~1196 tokens
-  chatbot.tools.rag        [req=daf6ce1f thread=ee996bd2]: knowledge base search 'express shipping': 6 hits in 2.3s
+  chatbot.memory.short_term [req=daf6ce1f thread=ee996bd2]: context: 9 messages, ~1262 tokens
+  chatbot.memory.short_term [req=daf6ce1f thread=ee996bd2]: summarized older messages in 7.1s; thread now 6 messages, ~1196 tokens
+  chatbot.tools.rag        [req=daf6ce1f thread=ee996bd2]: knowledge base search 'express shipping': 6 hits in 2.3s (top: Shipping Policy › Shipping Options (United States))
   chatbot.agent.middleware [req=daf6ce1f thread=ee996bd2]: model replied in 2.2s (1080 tokens in, 60 out): answer of 236 chars
   chatbot.api              [req=daf6ce1f thread=ee996bd2]: POST /chat -> 200 in 9.01s (user=log-check)
   ```

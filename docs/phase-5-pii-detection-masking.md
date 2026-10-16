@@ -2,7 +2,7 @@
 
 **Goal:** Personal data doesn't leak to places it shouldn't go. That covers what the user types and third-party data that comes back from searches. The places to protect: the model provider, third-party APIs (web search), logs and traces, the thread list, checkpoints, replies, and (in Phase 6) long-term memory.
 
-[← Phase 4](phase-4-human-in-the-loop.md) · [Overview](README.md) · [Next: Phase 6 →](phase-6-long-term-memory.md)
+[← Phase 4](phase-4-human-in-the-loop.md) · [Overview](../README.md) · [Next: Phase 6 →](phase-6-long-term-memory.md)
 
 ## What was built: the lean version
 
@@ -37,7 +37,7 @@ flowchart TB
         Tools --> Before
     end
 
-    Model -->|tokens| Stream["StreamRedactor<br/>(api/streaming.py)"]
+    Model -->|tokens| Stream["StreamRedactor<br/>(pii.py, used by api/streaming.py)"]
     Stream -->|"redacted SSE tokens"| User
     Agent -->|"checkpoints: redacted<br/>(see gaps)"| CP[(Checkpointer)]
     Agent -.->|"trace: redacted input"| Obs[Langfuse]
@@ -48,7 +48,7 @@ flowchart TB
 | The user's message, a reviewer's edited query and reject reason | `redact()` in `api/runs.py`, before the agent is invoked | LangGraph checkpoints the input before any middleware runs, so this is the only place that keeps the raw value out of every checkpoint and the trace |
 | Tool results (knowledge base chunks, web snippets) | `PIIMiddleware(apply_to_tool_results=True)` | Redacted before the model reads them, so the model can't repeat a third party's details |
 | The model's reply, as stored | `PIIMiddleware(apply_to_output=True)` | The thread, `/chat` replies and `GET /messages` get the redacted reply |
-| The reply as it streams to the UI | `StreamRedactor` in `api/streaming.py` | The middleware rewrites the reply only after the model has finished, so the tokens the user watches need redacting on the way out too |
+| The reply as it streams to the UI | `StreamRedactor` (`pii.py`), used by `api/streaming.py` | The middleware rewrites the reply only after the model has finished, so the tokens the user watches need redacting on the way out too |
 
 All three share the same rules (`chatbot/pii.py`), built from LangChain's `RedactionRule`.
 
@@ -97,7 +97,7 @@ class StreamRedactor                              # feed(token) / flush()
 
 - **`detect_email`** is LangChain's detector, minus addresses at `PII_ALLOWED_EMAIL_DOMAINS`.
 - **`detect_phone`** is the only fully custom detector: LangChain has none for phone numbers. It matches 8+ digits with optional spaces, dots, dashes and brackets.
-- **`output_middleware()`** is one `PIIMiddleware` per type (`LoggedPIIMiddleware`, which adds a log line for each redaction), with `apply_to_input=False` (the API already redacted the message), `apply_to_tool_results=True` and `apply_to_output=True`. It runs first in the agent's middleware list.
+- **`output_middleware()`** is one `PIIMiddleware` per type (`LoggedPIIMiddleware`, which adds a log line for each redaction), with `apply_to_input=False` (the API already redacted the message), `apply_to_tool_results=True` and `apply_to_output=True`. It's the first middleware in the list after `LongTermMemory` (Phase 6), which only reads the memory store.
 
 ### Approval rule (Phase 4) is simpler
 

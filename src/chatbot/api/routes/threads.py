@@ -6,13 +6,20 @@ from fastapi import APIRouter, HTTPException, Query, Response, status
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
-from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command
 from sse_starlette.sse import EventSourceResponse
 
 from chatbot.agent.approvals import pending_request
-from chatbot.agent.builder import AgentState
-from chatbot.api.dependencies import Callbacks, Checkpointer, Graph, Threads, UserId
+from chatbot.agent.builder import Agent
+from chatbot.api.dependencies import (
+    Callbacks,
+    Checkpointer,
+    Graph,
+    Store,
+    Threads,
+    UserId,
+    Writer,
+)
 from chatbot.api.runs import chat_response, redact, run_config
 from chatbot.api.schemas import (
     ChatMessage,
@@ -24,6 +31,8 @@ from chatbot.api.schemas import (
     ThreadMessages,
 )
 from chatbot.api.streaming import stream_run
+from chatbot.config import RunContext
+from chatbot.memory.long_term import cursor_namespace
 from chatbot.memory.short_term import summary_text
 from chatbot.memory.threads import Thread, ThreadStore
 from chatbot.observability import thread_id as thread_id_var
@@ -107,6 +116,35 @@ async def get_messages(
     )
 
 
+@router.post("/{thread_id}/messages/{index}/remember", status_code=status.HTTP_202_ACCEPTED)
+async def remember_message(
+    thread_id: UUID,
+    index: int,
+    graph: Graph,
+    threads: Threads,
+    store: Store,
+    writer: Writer,
+    user_id: UserId,
+) -> Response:
+    """Push one of the bot's replies (its position in GET .../messages) into the user's
+    long-term memory, in the background, together with the question it answered."""
+    await owned_thread(thread_id, user_id, threads)
+    if writer is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Memory is turned off")
+    state = await graph.aget_state({"configurable": {"thread_id": str(thread_id)}})
+    messages = to_chat_messages(state.values.get("messages", []))
+    if not 0 <= index < len(messages):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Message not found")
+    if messages[index].role != "assistant":
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT, "Only the bot's replies can be remembered"
+        )
+    question = next((m.content for m in reversed(messages[:index]) if m.role == "user"), None)
+    writer.remember(store, user_id, question, messages[index].content)
+    logger.info("user asked to remember reply %d", index)
+    return Response(status_code=status.HTTP_202_ACCEPTED)
+
+
 @router.get("/{thread_id}/history")
 async def get_history(
     thread_id: UUID,
@@ -141,14 +179,13 @@ async def get_history(
 
 async def prepare_resume(
     thread_id: UUID,
-    user_id: str,
     body: ResumeRequest | None,
-    graph: CompiledStateGraph[AgentState],
+    graph: Agent,
     callbacks: list[BaseCallbackHandler],
 ) -> tuple[RunnableConfig, Command[Any] | None]:
     """The config and graph input that continue the thread, or raise if it can't continue."""
     body = body or ResumeRequest()
-    config = run_config(thread_id, user_id, callbacks, body.checkpoint_id)
+    config = run_config(thread_id, callbacks, body.checkpoint_id)
     state = await graph.aget_state(config)
     if state.created_at is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Checkpoint not found")
@@ -219,8 +256,8 @@ async def resume_thread(
       from it and become the thread's latest state; the old branch stays in the history.
     """
     await owned_thread(thread_id, user_id, threads)
-    config, graph_input = await prepare_resume(thread_id, user_id, body, graph, callbacks)
-    result = await graph.ainvoke(graph_input, config=config)
+    config, graph_input = await prepare_resume(thread_id, body, graph, callbacks)
+    result = await graph.ainvoke(graph_input, config=config, context=RunContext(user_id))
     return await chat_response(graph, result, thread_id)
 
 
@@ -235,18 +272,23 @@ async def resume_thread_stream(
 ) -> EventSourceResponse:
     """Same as POST .../resume, streamed like /chat/stream."""
     await owned_thread(thread_id, user_id, threads)
-    config, graph_input = await prepare_resume(thread_id, user_id, body, graph, callbacks)
-    return EventSourceResponse(stream_run(graph, graph_input, config, thread_id))
+    config, graph_input = await prepare_resume(thread_id, body, graph, callbacks)
+    return EventSourceResponse(
+        stream_run(graph, graph_input, config, RunContext(user_id), thread_id)
+    )
 
 
 @router.delete("/{thread_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_thread(
-    thread_id: UUID, threads: Threads, checkpointer: Checkpointer, user_id: UserId
+    thread_id: UUID, threads: Threads, checkpointer: Checkpointer, store: Store, user_id: UserId
 ) -> Response:
-    """Hard delete: every checkpoint of the thread, then its metadata."""
+    """Hard delete: every checkpoint of the thread, then its metadata. Long-term memories
+    already pushed from it stay (DELETE /me/memory clears them)."""
     await owned_thread(thread_id, user_id, threads)
     # Checkpoints first: if this fails the thread is still listed and the delete can be retried.
     await checkpointer.adelete_thread(str(thread_id))
+    if store:
+        await store.adelete(cursor_namespace(user_id), str(thread_id))
     await threads.delete(thread_id)
     logger.info("deleted thread and all its checkpoints")
     return Response(status_code=status.HTTP_204_NO_CONTENT)

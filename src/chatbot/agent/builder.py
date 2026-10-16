@@ -16,14 +16,17 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.store.base import BaseStore
 
 from chatbot.agent.middleware import ModelCallLimit, ModelCallMiddleware, system_prompt
-from chatbot.config import Settings
+from chatbot.config import RunContext, Settings
 from chatbot.memory.long_term import LongTermMemory, MemoryWriter
 from chatbot.memory.short_term import summarization
 from chatbot.pii import output_middleware
+from chatbot.tools.memory import build_remember_tool
 from chatbot.tools.registry import tool_retry
 
 # create_agent's state: the messages, plus a few internal keys its middleware uses.
 AgentState = _AgentState[Any]
+# The compiled agent: create_agent's state, and the user each run is for (its runtime context).
+Agent = CompiledStateGraph[AgentState, RunContext]
 
 # Graph steps per run, passed in every run's config. ModelCallLimitMiddleware is the real cap
 # (MAX_MODEL_CALLS); this is a backstop. Each model/tool round is many steps, one per
@@ -58,27 +61,31 @@ def build_graph(
     checkpointer: BaseCheckpointSaver[Any] | None = None,
     interrupt_on: dict[str, bool | InterruptOnConfig] | None = None,
     store: BaseStore | None = None,
-    memory_model: BaseChatModel | None = None,
-) -> CompiledStateGraph[AgentState]:
+    memory_writer: MemoryWriter | None = None,
+) -> Agent:
     """The agent: LangChain's create_agent loop (model ↔ tools) plus middleware.
 
     Without a checkpointer every call starts a new conversation. `summarizer` defaults to
     SUMMARY_MODEL, or to `llm` when one is injected (tests). With `interrupt_on` (see
     agent/approvals.py), matching tool calls pause for a human; this needs a checkpointer. With
-    a `store` (and MEMORY_ENABLED), the agent keeps long-term memories of each user
-    (memory/long_term.py), written by `memory_model` (default MEMORY_MODEL).
+    a `store` (and MEMORY_ENABLED), every turn recalls the user's long-term memories
+    (memory/long_term/); with a `memory_writer` too, the turns a summary folds away are
+    pushed into them.
     """
     model = llm or build_llm(settings)
     summary_model = summarizer or llm or build_llm(settings, settings.summary_model, False)
-    writer = None
-    if store is not None and settings.memory_enabled:
-        writer = MemoryWriter(memory_model or build_llm(settings, settings.memory_model, False))
+    memory = store is not None and settings.memory_enabled
+    writer = memory_writer if memory else None
+    if writer:
+        # Lets the agent save what the user asks it to remember (tools/memory.py). It's not in
+        # `interrupt_on`, so it never waits for approval: it only writes the user's own memories.
+        tools = [*tools, build_remember_tool(writer)]
     middleware: list[AgentMiddleware[Any, Any]] = [
-        # Recalls the user's long-term memories when a thread starts.
-        *([LongTermMemory(settings.memory_recall_limit)] if writer else []),
+        # Every turn: recall the user's long-term memories closest to their latest message.
+        *([LongTermMemory(settings.memory_recall_limit)] if memory else []),
         # PII in tool results and replies (user messages are redacted earlier, by the API).
         *(output_middleware() if settings.pii_enabled else []),
-        summarization(settings, summary_model, on_summary=writer.schedule if writer else None),
+        summarization(settings, summary_model, on_summarize=writer.schedule if writer else None),
         system_prompt,
         ModelCallMiddleware(),
         # Ends the run with a short message rather than an error if the model keeps going.
@@ -89,6 +96,11 @@ def build_graph(
     if interrupt_on:
         middleware.append(HumanInTheLoopMiddleware(interrupt_on))
     agent = create_agent(
-        model, tools=list(tools), middleware=middleware, checkpointer=checkpointer, store=store
+        model,
+        tools=list(tools),
+        middleware=middleware,
+        context_schema=RunContext,
+        checkpointer=checkpointer,
+        store=store,
     )
-    return cast(CompiledStateGraph[AgentState], agent)
+    return cast(Agent, agent)

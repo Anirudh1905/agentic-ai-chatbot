@@ -16,6 +16,7 @@ DEFAULT_USER = os.environ.get("CHATBOT_USER_ID", "demo-user")
 TOOL_LABELS = {
     "search_knowledge_base": "Searching the knowledge base",
     "web_search": "Searching the web",
+    "remember": "Saving to memory",
 }
 
 
@@ -101,7 +102,8 @@ def memory_panel() -> None:
     with st.expander(f"What I remember about you ({len(memories)})"):
         if not memories:
             st.caption(
-                "Nothing yet. I learn from long conversations, and use it when a new chat starts."
+                "Nothing yet. I learn from long chats and idle ones, or press "
+                '"Remember this" beside any of my replies.'
             )
             return
         for memory in memories:
@@ -120,6 +122,12 @@ def memory_panel() -> None:
 
 
 st.set_page_config(page_title="Agentic AI Chatbot", page_icon="💬")
+# Streamlit pads the right of the user's messages only; matching it on every message keeps the
+# "Remember this" buttons in one column.
+st.markdown(
+    '<style>[data-testid="stChatMessage"] { padding-right: 1rem; }</style>',
+    unsafe_allow_html=True,
+)
 st.title("Agentic AI Chatbot")
 
 if "user_id" not in st.session_state:
@@ -275,9 +283,27 @@ def approval_card(pending: dict[str, Any]) -> list[dict[str, Any]] | None:
     return decisions
 
 
-for msg in st.session_state.messages:
+def remember_button(index: int) -> None:
+    """Push this reply, with the question it answered, into long-term memory
+    (POST .../messages/{index}/remember)."""
+    if st.button("", icon=":material/bookmark_add:", key=f"remember-{index}", help="Remember this"):
+        with api() as client:
+            r = client.post(f"/threads/{st.session_state.thread_id}/messages/{index}/remember")
+        if r.status_code == 202:
+            st.toast("Got it, I'll remember that.")
+        else:
+            st.toast("Couldn't remember that message.")
+
+
+for index, msg in enumerate(st.session_state.messages):
     with st.chat_message(msg["role"]):
-        st.markdown(msg["content"])
+        # The message, with a "Remember this" button beside each of the bot's replies.
+        text, button = st.columns([20, 1])
+        with text:
+            st.markdown(msg["content"])
+        if msg["role"] == "assistant":
+            with button:
+                remember_button(index)
         render_sources(msg.get("sources", []), msg["content"])
 
 pending = st.session_state.pending

@@ -16,9 +16,8 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-from langgraph.graph.state import CompiledStateGraph
 
-from chatbot.agent.builder import AgentState, build_graph
+from chatbot.agent.builder import Agent, build_graph
 from chatbot.config import Settings
 from chatbot.db import Pool, open_pool
 from chatbot.memory.retention import prune_checkpoints
@@ -43,7 +42,7 @@ async def pool(database_url: str) -> AsyncIterator[Pool]:
 
 def make_graph(
     pool: Pool, replies: Sequence[AIMessage | str], tools: Sequence[BaseTool] = ()
-) -> tuple[CompiledStateGraph[AgentState], ScriptedChatModel]:
+) -> tuple[Agent, ScriptedChatModel]:
     llm = ScriptedChatModel(
         responses=[r if isinstance(r, AIMessage) else AIMessage(r) for r in replies]
     )

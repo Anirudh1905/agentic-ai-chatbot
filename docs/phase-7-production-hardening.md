@@ -2,7 +2,7 @@
 
 **Goal:** Take the feature-complete agent from Phases 1–6 and make it safe to run for real users: measured quality, observable behaviour, controlled cost, and a repeatable deployment.
 
-[← Phase 6](phase-6-long-term-memory.md) · [Overview](README.md)
+[← Phase 6](phase-6-long-term-memory.md) · [Overview](../README.md)
 
 ## Scope
 
@@ -63,7 +63,7 @@ Add real (masked, consented) production conversations that went wrong to the gol
 
 ### Security and access
 - [ ] Authentication (OIDC/JWT); `user_id` taken only from the token
-- [ ] Ownership checks on threads, memories, interrupts (threads and interrupts done since Phase 3/4, keyed on `X-User-Id` until real auth)
+- [ ] Ownership checks on threads, memories, interrupts (all three done in Phases 3, 4 and 6, keyed on `X-User-Id` until real auth)
 - [ ] Rate limits per user and per IP; token budget per user per day
 - [ ] Secrets in a secret manager; vault keys in KMS
 - [ ] Prompt-injection defenses reviewed (tool output delimiters, no side-effect tools without HITL)
@@ -75,7 +75,7 @@ Add real (masked, consented) production conversations that went wrong to the gol
 
 ### Cost and latency
 - [ ] Prompt caching on system prompt + tool definitions
-- [x] Small model for summarization (`gpt-5-nano`, Phase 3); use it for extraction and query rewriting too
+- [x] Small model for summarization (`gpt-5-nano`, Phase 3); query rewriting could use it too. Memory extraction stays on `gpt-5-mini` (Phase 6: nano kept outdated and forbidden facts)
 - [x] Cap on model/tool round trips (`ModelCallLimitMiddleware`, `MAX_MODEL_CALLS`; `ToolCallLimitMiddleware` if a single tool needs its own cap)
 - [ ] Cap on retrieved context size
 - [ ] Cache frequent web search queries (short TTL)

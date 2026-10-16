@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
@@ -67,17 +68,25 @@ class Settings(BaseSettings):
     # customers. JSON list in .env.
     pii_allowed_email_domains: list[str] = ["acme-outfitters.example"]
 
-    # Long-term memory: small per-user memories, updated from thread summaries and recalled when
-    # a new thread starts (memory/long_term.py).
+    # Long-term memory (memory/long_term/): a thread's turns are pushed into small per-user
+    # memories at its token breach, when it's been idle for MEMORY_THREAD_TTL_MINUTES, or when
+    # the user presses "Remember this"; every turn recalls the closest memories.
     memory_enabled: bool = True
-    # Splits summaries into memories and decides what each one changes. gpt-5-mini over
+    # A thread's turns not yet pushed are pushed once it's been idle this long.
+    memory_thread_ttl_minutes: float = 30
+    # How often to look for threads whose TTL has run out.
+    memory_ttl_check_every_minutes: float = 1
+    # Lists the facts in a thread's turns and decides what each one changes. gpt-5-mini over
     # gpt-5-nano: on a 24-run memory spike, nano left outdated or forbidden facts behind (32/36
     # removed vs 36/36) and stored other people's details and health facts.
     memory_model: str = "gpt-5-mini"
-    # Memories recalled into a new thread, closest to its first message.
+    # Long-term memories added to each turn, closest to the user's latest message.
     memory_recall_limit: int = 10
+    # Long-term memory pushes running at once per API process. Each holds a pooled connection
+    # (for its per-user lock) while it waits on the model, so keep it well under the pool size.
+    memory_write_concurrency: int = 2
 
-    # Human approval before risky tool calls (see hitl/policy.py).
+    # Human approval before risky tool calls (see agent/approvals.py).
     hitl_enabled: bool = True
     # Web searches mentioning any of these (whole words, any case) wait for approval, since the
     # query goes to a third-party search engine. Emails, phone and order numbers always do.
@@ -114,3 +123,12 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
+
+@dataclass(frozen=True)
+class RunContext:
+    """Who a run is for: passed as LangGraph's runtime context (`context=` on every invoke and
+    stream) and read by middleware and tools as `runtime.context`. The thread is in the run's
+    config, where the checkpointer needs it."""
+
+    user_id: str
