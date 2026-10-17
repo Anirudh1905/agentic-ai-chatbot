@@ -4,11 +4,7 @@ An agentic chatbot with RAG and web search tools, human-in-the-loop approvals, P
 
 The phase plans and as-built docs are in [docs/](docs/); the [Status](#status) table below links them. The agent is LangChain's `create_agent` with middleware, using the built-ins wherever LangChain has one.
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/images/architecture-dark.png">
-  <source media="(prefers-color-scheme: light)" srcset="docs/images/architecture-light.png">
-  <img alt="Architecture: the Streamlit UI calls the FastAPI API, which redacts PII and invokes the agent loop. The agent calls the OpenAI-compatible API, the knowledge base search (pgvector chunks, embeddings) and, through an approval gate, web search on DuckDuckGo. Threads, checkpoints, long-term memories and chunks live in Postgres with pgvector; a background MemoryWriter turns conversations into memories (at the token breach, after 30 idle minutes, or on request), a retention job prunes checkpoints, and an ingestion CLI loads the knowledge base. The eval suites run the agent on golden questions and judge its answers with gpt-4.1; CI checks their report." src="docs/images/architecture-light.png">
-</picture>
+<img alt="Architecture: the Streamlit UI calls the FastAPI API, which redacts PII and invokes the agent loop. The agent calls the OpenAI-compatible API, the knowledge base search (pgvector chunks, embeddings) and, through an approval gate, web search on DuckDuckGo. Threads, checkpoints, long-term memories and chunks live in Postgres with pgvector; a background MemoryWriter turns conversations into memories (at the token breach, after 30 idle minutes, or on request), a retention job prunes checkpoints, and an ingestion CLI loads the knowledge base. The eval suites run the agent on golden questions and judge its answers with gpt-4.1; CI checks their report." src="docs/images/architecture-dark.png">
 
 ## Status
 
@@ -71,6 +67,10 @@ Postgres is mapped to host port 5433 so it doesn't clash with a local Postgres o
 Without Tilt: `make up`, `make migrate`, `make ingest`, then `make dev` and `make ui` in separate terminals.
 
 Try asking "Can I return a tent I bought at 40% off?" (answered from the sample docs) or "What's the latest news about REI?" (web search).
+
+<img alt="The chat UI: a question about returning a clearance jacket and packing for a trek, answered from the refund policy with citations and a Sources list, and a Remember this button beside the reply. The sidebar shows the user, their chats, and what the bot remembers about them (a Ladakh trek in April, lives in Bangalore), which the answer used." src="docs/images/ui-dark.png" width="800">
+
+The answer cites the refund policy, lists its sources, and uses two long-term memories from an earlier conversation (the sidebar's "What I remember about you"). The bookmark button beside the reply saves it to memory.
 
 ### Knowledge base
 

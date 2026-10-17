@@ -341,7 +341,7 @@
         },
         {
           "path": "src/chatbot/memory/threads.py",
-          "line": 69,
+          "line": 70,
           "end_line": 84,
           "label": "claim()"
         }
