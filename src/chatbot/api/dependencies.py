@@ -163,7 +163,7 @@ async def get_threads() -> ThreadStore:
 
 
 async def get_user_id(x_user_id: Annotated[str | None, Header()] = None) -> str:
-    # Stand-in for authentication until Phase 7: callers say who they are, and every thread
+    # Stand-in for authentication until Phase 8: callers say who they are, and every thread
     # is scoped to that ID. Real auth replaces this function and nothing else.
     if not x_user_id:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing X-User-Id header")

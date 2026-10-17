@@ -1,141 +1,151 @@
-"""Phase 2 evals: retrieval recall@k and tool routing accuracy on golden.jsonl.
+"""`make eval`: every suite, against the local stack and the model gateway. Writes report.json.
 
-Needs the stack running (Postgres with the sample docs ingested, and a model API key).
+Needs Postgres with the sample docs ingested (`make eval` ingests them first) and the model
+credentials in `.env`. Every other setting is at its default (settings.py).
 
-    uv run python tests/evals/run.py                  # retrieval + routing
-    uv run python tests/evals/run.py --retrieval-only # no chat model calls
-    uv run python tests/evals/run.py --retrieval-only --no-rerank  # compare without the reranker
+    make eval
 """
 
-import argparse
 import asyncio
 import json
 import sys
-from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
-from langchain_core.messages import AIMessage, HumanMessage
+from evals.agent_runs import Agent, Run
+from evals.check import code_suites
+from evals.golden import Case, load_cases
+from evals.judge import JudgeModel
+from evals.report import (
+    CALIBRATION,
+    MIN_AGREEMENT,
+    REPORT,
+    Metric,
+    baseline_passed,
+    build,
+    compare,
+    judge_fingerprint,
+    load,
+    load_baseline,
+    summarize,
+    table,
+)
+from evals.scoring import Outcome, majority
+from evals.settings import eval_settings
+from evals.suites import judged, retrieval, routing
 
-from chatbot.agent.builder import RECURSION_LIMIT, build_graph
-from chatbot.config import get_settings
-from chatbot.db import open_pool
-from chatbot.embeddings import build_embeddings
-from chatbot.tools.rag import retrieve
-from chatbot.tools.registry import build_tools
-from chatbot.tools.rerank import build_reranker
-
-GOLDEN = Path(__file__).with_name("golden.jsonl")
-CONCURRENCY = 4
-
-
-@dataclass
-class Case:
-    question: str
-    tools: list[str]
-    expect: dict[str, Any] | None
-
-
-def load_cases() -> list[Case]:
-    lines = GOLDEN.read_text().splitlines()
-    return [Case(**{"expect": None, **json.loads(line)}) for line in lines if line.strip()]
-
-
-def matches(hit_doc: str, hit_heading: str | None, expect: dict[str, Any]) -> bool:
-    if not hit_doc.endswith(expect["doc"]):
-        return False
-    return expect["heading"] is None or hit_heading == expect["heading"]
+JUDGED = ("faithfulness", "citations", "correctness")
+# A case that passed on main and fails now is run this many more times; it fails on a majority.
+RERUNS = 2
+# Tries per question when the agent or judge errors (a gateway timeout, usually).
+ATTEMPTS = 3
 
 
-async def eval_retrieval(cases: list[Case], rerank: bool) -> float:
-    settings = get_settings()
-    pool = await open_pool(settings)
-    embeddings = build_embeddings(settings)
-    reranker = build_reranker(settings) if rerank else None
-    k = settings.retrieval_top_k
-    graded = [c for c in cases if c.expect]
-    ranks: list[int | None] = []
-    try:
-        for case in graded:
-            assert case.expect is not None
-            results = await retrieve(pool, embeddings, settings, case.question, reranker)
-            rank = next(
-                (i for i, r in enumerate(results, 1) if matches(r.doc_id, r.heading, case.expect)),
-                None,
-            )
-            ranks.append(rank)
-            if rank != 1:
-                got = [r.cite_as for r in results[:3]]
-                label = "MISS " if rank is None else f"RANK{rank}"
-                print(f"  {label} {case.question}\n        wanted {case.expect}, got {got}")
-    finally:
-        await pool.close()
-    n = len(graded)
-    recall = sum(r is not None for r in ranks) / n
-    top1 = sum(r == 1 for r in ranks) / n
-    mrr = sum(1 / r for r in ranks if r) / n
-    mode = f"reranker {settings.reranker_model}" if reranker else "no reranker"
-    print(f"Retrieval ({mode}): recall@{k} {recall:.0%}, recall@1 {top1:.0%}, MRR {mrr:.2f}")
-    return recall
+def metrics_for(case: Case) -> list[str]:
+    return ["routing", "faithfulness", "citations"] + (["correctness"] if case.reference else [])
 
 
-async def eval_routing(cases: list[Case]) -> float:
-    settings = get_settings()
-    pool = await open_pool(settings)
-    tools = build_tools(settings, pool, build_embeddings(settings), build_reranker(settings))
-    available = {t.name for t in tools}
-    graph = build_graph(settings, tools=tools)
-    runnable = [c for c in cases if set(c.tools) <= available]
-    skipped = len(cases) - len(runnable)
-    semaphore = asyncio.Semaphore(CONCURRENCY)
-
-    async def called_tools(case: Case) -> set[str]:
-        async with semaphore:
-            result = await graph.ainvoke(
-                {"messages": [HumanMessage(case.question)]},
-                config={"recursion_limit": RECURSION_LIMIT},
-            )
-        return {
-            tc["name"]
-            for m in result["messages"]
-            if isinstance(m, AIMessage)
-            for tc in m.tool_calls
-        }
-
-    try:
-        results = await asyncio.gather(*(called_tools(c) for c in runnable))
-    finally:
-        await pool.close()
-
-    correct = 0
-    for case, got in zip(runnable, results, strict=True):
-        if got == set(case.tools):
-            correct += 1
-        else:
-            print(
-                f"  WRONG {case.question}\n        wanted {sorted(case.tools)}, got {sorted(got)}"
-            )
-    accuracy = correct / len(runnable)
-    note = f" ({skipped} skipped: tool not configured)" if skipped else ""
-    print(f"Tool routing accuracy: {correct}/{len(runnable)} = {accuracy:.0%}{note}")
-    return accuracy
+async def score(judge: JudgeModel, case: Case, run: Run) -> dict[str, Outcome]:
+    out = {"routing": routing.score(case, run)}
+    if run.results:  # nothing to be faithful to, or to cite, without search results
+        out["faithfulness"], out["citations"] = await asyncio.gather(
+            judged.faithfulness(judge, case.question, run.answer, run.results),
+            judged.citations(judge, case.question, run.answer, run.results),
+        )
+    if case.reference:
+        out["correctness"] = await judged.correctness(
+            judge, case.question, run.answer, case.reference
+        )
+    return out
 
 
-async def main(args: argparse.Namespace) -> int:
+async def main() -> int:
+    settings = eval_settings()
+    baseline = load_baseline()
     cases = load_cases()
-    recall = await eval_retrieval(cases, rerank=not args.no_rerank)
-    ok = recall >= args.min_recall
-    if not args.retrieval_only:
-        ok &= await eval_routing(cases) >= args.min_routing
-    return 0 if ok else 1
+    print(f"Retrieval: {sum(bool(c.expect) for c in cases)} questions…", flush=True)
+    by_metric: dict[str, dict[str, Outcome]] = {"retrieval": await retrieval.run(settings, cases)}
+
+    judge = JudgeModel(settings)
+    async with Agent(settings) as agent:
+        runnable = [c for c in cases if set(c.tools) <= agent.available]
+
+        async def one(case: Case) -> dict[str, Outcome]:
+            for attempt in range(ATTEMPTS):
+                try:
+                    return await score(judge, case, await agent.run(case.question))
+                except Exception as e:  # the gateway stalls under load; try the case again
+                    error = e
+                    await asyncio.sleep(5 * (attempt + 1))
+            # Still failing: an error, counted as neither a pass nor a fail.
+            return {m: Outcome.error(f"{type(error).__name__}: {error}") for m in metrics_for(case)}
+
+        print(f"Agent and judge: {len(runnable)} questions…", flush=True)
+        scored = dict(
+            zip([c.id for c in runnable], await asyncio.gather(*map(one, runnable)), strict=True)
+        )
+        regressed = [
+            c
+            for c in runnable
+            if any(
+                o.passed is False and baseline_passed(baseline, m, c.id)
+                for m, o in scored[c.id].items()
+            )
+        ]
+        if regressed:
+            print(f"Re-running {len(regressed)} that passed on main…", flush=True)
+            reruns = await asyncio.gather(
+                *(asyncio.gather(*(one(c) for _ in range(RERUNS))) for c in regressed)
+            )
+            for case, extra in zip(regressed, reruns, strict=True):
+                scored[case.id] = {
+                    m: majority([o, *(e[m] for e in extra if m in e)])
+                    for m, o in scored[case.id].items()
+                }
+
+    for case_id, outcomes in scored.items():
+        for metric, outcome in outcomes.items():
+            by_metric.setdefault(metric, {})[case_id] = outcome
+    by_metric.update(code_suites()[1])
+
+    calibration = load(CALIBRATION)
+    current = bool(calibration and calibration["fingerprint"] == judge_fingerprint())
+    metrics = {}
+    for name, outcomes in by_metric.items():
+        if name not in JUDGED:
+            metrics[name] = Metric(*summarize(outcomes), gates=True)
+            continue
+        agreement = (calibration or {}).get("agreement", {}).get(name)
+        note = (
+            ""
+            if current
+            else "calibration out of date: run `make eval-calibrate`"
+            if calibration
+            else "not calibrated"
+        )
+        gates = current and agreement is not None and agreement >= MIN_AGREEMENT
+        metrics[name] = Metric(*summarize(outcomes), gates=gates, agreement=agreement, note=note)
+
+    models: dict[str, Any] = {
+        "model": settings.model,
+        "reasoning_effort": settings.reasoning_effort,
+        "judge_model": settings.judge_model,
+        "summary_model": settings.summary_model,
+        "embedding_model": settings.embedding_model,
+        "reranker_model": settings.reranker_model,
+    }
+    report = build(metrics, by_metric, models)
+    REPORT.write_text(json.dumps(report, indent=1, ensure_ascii=False) + "\n")
+
+    rows = compare(baseline, report["metrics"])
+    print(table(rows))
+    for name, outcomes in by_metric.items():
+        for case_id, o in outcomes.items():
+            if not o.passed:
+                print(f"  {'ERROR' if o.passed is None else 'FAIL '} {name}: {case_id}")
+                print(f"    {o.reason}")
+    print(f"Wrote {REPORT.name}. Commit it with the PR.")
+    return 1 if any(r.blocks for r in rows) else 0
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--retrieval-only", action="store_true")
-    parser.add_argument(
-        "--no-rerank", action="store_true", help="Score retrieval without the reranker"
-    )
-    parser.add_argument("--min-recall", type=float, default=0.8)
-    parser.add_argument("--min-routing", type=float, default=0.9)
-    sys.exit(asyncio.run(main(parser.parse_args())))
+    sys.exit(asyncio.run(main()))

@@ -184,10 +184,10 @@ Build a small golden set now (30–50 questions) and keep growing it:
 |--------|-----|
 | Retrieval recall@k | Does the correct chunk appear in the top k? Labelled question → chunk pairs |
 | Tool routing accuracy | For each question, the expected tool(s). Did the agent pick them? |
-| Answer faithfulness | LLM-as-judge (or Ragas): are claims supported by retrieved context? Planned for Phase 7 |
-| Citation correctness | Does every cited source actually contain the claim? Planned for Phase 7 |
+| Answer faithfulness | LLM-as-judge: are claims supported by retrieved context? Built in Phase 7 (DeepEval) |
+| Citation correctness | Does every cited source actually contain the claim? Built in Phase 7 |
 
-The golden set lives in `tests/evals/golden.jsonl` and runs with `make eval` (or the `evals` button in Tilt). It scores retrieval recall@k, recall@1 and MRR, and tool routing (44 questions, including short ones like "president of USA" and "express shipping"). Routing cases for a disabled tool, such as `web_search` with `WEB_SEARCH_ENABLED=false`, are skipped and reported.
+The golden set lives in `tests/evals/golden.jsonl` and runs with `make eval` (or the `evals` button in Tilt). It scores retrieval recall@k and tool routing (44 questions, including short ones like "president of USA" and "express shipping"). Phase 7 made it part of a gate on every PR, added judged faithfulness, citations and correctness, and reference answers for the knowledge base questions; see [the Phase 7 doc](phase-7-eval-gate.md).
 
 ## Exit criteria
 

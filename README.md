@@ -20,9 +20,11 @@ The phase plans and as-built docs are in [docs/](docs/); the [Status](#status) t
 | [4. Approvals](docs/phase-4-human-in-the-loop.md) | `HumanInTheLoopMiddleware`: risky tool calls wait for a person | Built |
 | [5. PII redaction](docs/phase-5-pii-detection-masking.md) | Emails, cards, phones and IPs redacted from messages, tool results, replies and the stream | Built |
 | [6. Long-term memory](docs/phase-6-long-term-memory.md) | Per-fact memories per user across threads: pushed at the token breach, after 30 idle minutes, or on request; recalled each turn, closest to the message | Built ([PR #7](https://github.com/Anirudh1905/agentic-ai-chatbot/pull/7)) |
-| [7. Production hardening](docs/phase-7-production-hardening.md) | Evals, observability, auth, rate limits, deployment | Planned |
+| [7. Eval gate](docs/phase-7-eval-gate.md) | Golden sets, a judge model (DeepEval) and a regression gate on every PR | Built |
+| [8. Security and observability](docs/phase-8-security-observability.md) | Login, rate limits, traces, metrics, alerts, deleting a user's data | Planned |
+| [9. Reliability and deployment](docs/phase-9-reliability-deployment.md) | Retries and fallbacks, cost controls, container deployment, load test | Planned |
 
-`make check` runs ruff, mypy and the tests (153 at the moment, unit and Postgres integration). `make eval` scores retrieval and tool routing against a golden set with the real model.
+`make check` runs ruff, mypy and the tests (176 at the moment, unit and Postgres integration). `make eval` runs the eval suites against the real model and writes `tests/evals/report.json`, which CI checks on every PR (see [Evals](#evals)).
 
 ## Repository layout
 
@@ -39,7 +41,7 @@ src/chatbot/
 ├── db.py, embeddings.py, observability.py
 ui/app.py           # Streamlit chat UI: threads, approval card, memory panel
 migrations/         # Alembic: chunks, threads (checkpoints and the memory store create their own tables)
-tests/              # unit/, integration/ (need `make up`), evals/ (golden set)
+tests/              # unit/, integration/ (need `make up`), evals/ (golden sets, judge, report)
 data/sample/        # the fictional Acme Outfitters docs
 docs/               # phase plans and as-built docs, images/
 ```
@@ -92,7 +94,7 @@ Behind a TLS-inspecting proxy (such as Cloudflare Gateway or Zscaler), Python us
 
 Every conversation is a thread, saved to Postgres after each graph step by LangGraph's `AsyncPostgresSaver`. Restarting the API, closing the tab or opening the chat in another browser picks the thread up where it left off. The chat UI lists your threads in the sidebar and keeps the current one in the URL (`?thread=...`).
 
-There's no login until Phase 7. Clients identify the user with an `X-User-Id` header, and every thread is visible only to the user who created it. The UI sends `demo-user` by default (`CHATBOT_USER_ID`, or change it in the sidebar).
+There's no login until Phase 8. Clients identify the user with an `X-User-Id` header, and every thread is visible only to the user who created it. The UI sends `demo-user` by default (`CHATBOT_USER_ID`, or change it in the sidebar).
 
 Long threads stay small: once the messages pass `CONTEXT_MAX_TOKENS`, older turns are folded into a running summary by `SUMMARY_MODEL` and removed from the thread, keeping about the most recent half (and always the current turn) verbatim. This is LangChain's `SummarizationMiddleware`, adjusted to cut only at turn boundaries and to run at the end of a turn, after the reply has streamed (with a check at the start of the next turn as a fallback). Removed messages no longer appear in the chat history; the UI shows the summary in their place.
 
@@ -266,11 +268,32 @@ Set in `.env` (see `.env.example`):
 | `LANGFUSE_HOST` | `http://localhost:3000` | |
 | `LOG_LEVEL` | `INFO` | `DEBUG` adds HTTP client and access logs |
 
+## Evals
+
+Every PR is checked for whether it made the bot worse. The model endpoint is an internal gateway that GitHub's runners can't reach, so the gate is split:
+
+- **`make eval`**, on a machine that can reach the gateway, runs every suite and writes `tests/evals/report.json`, which is committed with the PR. It uses every setting at its default, whatever `.env` says.
+- **CI** (`make eval-check`, no model calls) runs the code-only suites again, fails if `report.json` was made for different code, prompts, knowledge base or evals than the PR's, and compares it with the report on `main`.
+
+| Suite | Scored by | Latest |
+| --- | --- | --- |
+| Retrieval: the right section in the top 6 | code, 28 labelled questions | 100% |
+| Routing: exactly the right tools | DeepEval `ToolCorrectnessMetric` (code), 44 questions | 100% |
+| Faithfulness: every claim supported by that turn's search results | DeepEval `FaithfulnessMetric`, judge `gpt-4.1` | 72% (the judge is strict; see the Phase 7 doc) |
+| Citations: what each citation covers is in the result it names | DeepEval `FaithfulnessMetric` per citation | 72% |
+| Correctness: agrees with a reference answer | DeepEval `GEval`, 30 knowledge base questions | 100% |
+| PII: labelled values redacted, look-alikes left alone | code (`redact_pii`) | 95% recall, 92% clean (misses IPv6; reads "1.2.3.4" as an IP) |
+| Approval policy: the right web searches wait for approval | code (`sensitive_reason`) | 100% |
+
+A metric blocks a PR when it drops below `main` by more than 2 points or one case (any drop, for the code-only suites); a case that regressed is run twice more and fails on a majority. A judged metric only gates once the judge agrees with labelled answers at least 90% of the time (`make eval-calibrate`: citations 98%, faithfulness 91%, correctness 90%). The labels and reference answers were written by Claude, not a person. Details in [the Phase 7 doc](docs/phase-7-eval-gate.md).
+
 ## Development
 
 ```bash
 make check    # ruff lint + format check, mypy, pytest (integration tests need `make up`)
 make fmt      # auto-fix lint and formatting
-make eval     # retrieval recall and tool routing on tests/evals/golden.jsonl (calls the model)
+make eval     # every eval suite against the real model; writes tests/evals/report.json
+make eval-calibrate  # how often the judge agrees with labelled answers
+make eval-check      # what CI runs: code-only suites, report.json against main's
 make retention  # prune old checkpoints of idle threads
 ```

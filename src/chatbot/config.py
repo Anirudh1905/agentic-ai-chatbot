@@ -36,6 +36,9 @@ class Settings(BaseSettings):
     # gpt-5-nano: with 8 summaries at once, gpt-5-nano took 4-70 s (3 hit the timeout) and
     # gpt-4.1-mini 4-11 s; both kept the user's stated facts with prompts/summarize.md.
     summary_model: str = "gpt-4.1-mini"
+    # Scores answers in the evals (tests/evals). Not the chat model, so it doesn't grade its own
+    # answers. Changing it means re-running `make eval-calibrate`, and resets the baseline.
+    judge_model: str = "gpt-4.1"
     # Once a thread's messages pass this many tokens (local estimate), older messages are
     # folded into a running summary, keeping the most recent half verbatim. Well under the
     # model's window: every turn resends the history. Each summary also updates the user's
