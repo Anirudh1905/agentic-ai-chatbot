@@ -1,0 +1,94 @@
+{
+ "fingerprint": "c34d6e0ff7f9c914d92441b167203ac92274f66df33a13a276fb7aef4447c15f",
+ "created_at": "2026-10-17T07:12:05+00:00",
+ "agreement": {
+  "citations": 0.9827586206896551,
+  "correctness": 0.9,
+  "faithfulness": 0.9137931034482759
+ },
+ "n": {
+  "citations": 58,
+  "correctness": 50,
+  "faithfulness": 58
+ },
+ "errors": 0,
+ "disagreements": [
+  {
+   "id": "real-4",
+   "metric": "faithfulness",
+   "label": true,
+   "judge": false,
+   "reason": "'Opened fuel canisters are non-returnable.': The context states that returned items must be unused, with tags attached, and in the original packaging, but does not explicitly say that opened fuel canisters are non-returnable.; 'Fuel canisters cannot be shipped by Express shipping.': The context only specifies that fuel canisters, bear spray, and certain batteries are shipped by ground, but does not explicitly state that they cannot be shipped by Express shipping."
+  },
+  {
+   "id": "real-5",
+   "metric": "faithfulness",
+   "label": true,
+   "judge": false,
+   "reason": "'It is usually up to about 8–12 business days from when Acme receives the return for the refund process to be completed.': The context states that Acme issues the refund within 5 business days of receiving the return, and the bank may take an additional 3–7 business days. If added, the total refund processing time would be 8–12 business days; however, the context does not directly state the total timeline as 8–12 business days. The claim makes an inference not explicitly supported by the retrieval context."
+  },
+  {
+   "id": "real-19",
+   "metric": "faithfulness",
+   "label": true,
+   "judge": false,
+   "reason": "\"You must file a warranty claim through Acme's warranty form and include a photo of the defect plus your order number or receipt if you have it.\": The context says claims can be submitted at acme-outfitters.example/warranty with a photo of the defect and proof of purchase; it does not specify a 'warranty form' or require an order number (only receipt or lookup with Trail Club account are mentioned)."
+  },
+  {
+   "id": "real-27",
+   "metric": "faithfulness",
+   "label": true,
+   "judge": false,
+   "reason": "'Storing a tent damp for more than 24 hours can cause mildew and damage the waterproof coating.': The context states that tents should be dried completely before storage to prevent mildew and breakdown of waterproof coating, but does not mention a specific 24 hour threshold. The claim infers specifics not present in the context."
+  },
+  {
+   "id": "real-30",
+   "metric": "citations",
+   "label": true,
+   "judge": false,
+   "reason": "'Tadej Pogačar won the most recent Tour de France, the 2026 edition.': 'Tadej Pogačar won the most recent Tour de France, the 2026 edition.': The context states that Tadej Pogačar is ranked 1st in the 2026 Stage 21 rankings, but it does not state explicitly that he won the Tour de France. Stage 21 ranking often indicates the final overall result, but since it is not stated directly in the context that he won the 2026 Tour de France, the claim is not fully supported."
+  },
+  {
+   "id": "wrong-fact-0",
+   "metric": "correctness",
+   "label": "partly",
+   "judge": "correct",
+   "reason": "The actual output correctly states that items bought at 30% off or more are final sale and cannot be returned for a refund, directly matching the main yes/no conclusion and key fact from the expected output. It also mentions exchange is possible, but gives a 30-day exchange window instead of the 14 days in the expected output. The actual output adds a relevant EU statutory right of withdrawal, which doesn't contradict the expected output. The mismatch on exchange time is significant but not central to the refund answer. No contradictory statements are present."
+  },
+  {
+   "id": "wrong-fact-5",
+   "metric": "correctness",
+   "label": "partly",
+   "judge": "wrong",
+   "reason": "The expected output specifies two time frames: 5 business days for Acme to issue the refund after receiving and inspecting the return, and 3-7 business days for the bank to post the credit. The actual output matches the first fact (5 business days for Acme), but states the bank may take 10–14 business days, which is significantly longer than the expected 3–7 days. This discrepancy notably changes the answer to the input question and constitutes a contradiction to the expected output, which must be heavily penalized."
+  },
+  {
+   "id": "wrong-fact-8",
+   "metric": "correctness",
+   "label": "wrong",
+   "judge": "partly",
+   "reason": "The expected output specifies that a return shipping label is $6.95, deducted from the refund, and that returning to any store is free. The actual output states the cost is $4.95 instead, contradicting the expected $6.95 charge. The statement that returns to an Acme store are free is consistent with the expected note that store returns are free, though the wording is slightly narrower. The incorrect shipping label fee is a significant contradiction and heavily impacts accuracy."
+  },
+  {
+   "id": "wrong-fact-21",
+   "metric": "correctness",
+   "label": "partly",
+   "judge": "wrong",
+   "reason": "The actual output correctly addresses the yes/no aspect and the condition that carried-over PTO expires if not used by March 31. However, it incorrectly states that up to 10 days can be carried over, whereas the expected output specifies up to 5 days. This is a direct contradiction of a key fact, and per the evaluation steps, such contradictions should be heavily penalized."
+  },
+  {
+   "id": "missing-24",
+   "metric": "correctness",
+   "label": "partly",
+   "judge": "wrong",
+   "reason": "The actual output correctly identifies Gear Days as a paid employee benefit, which aligns with the expected output. However, it omits several key facts: that each employee gets two per year, that they're for spending outdoors testing Acme products, they don't count against PTO, and must be scheduled two weeks in advance. These missing facts significantly impact the answer to the input question by excluding essential information about the nature, frequency, and conditions of Gear Days."
+  },
+  {
+   "id": "wrong-citation-3",
+   "metric": "faithfulness",
+   "label": true,
+   "judge": false,
+   "reason": "'Assistance can be provided to figure out whether a situation counts as a defect.': The context does not state that Acme Outfitters provides assistance to determine if a situation counts as a defect. This is not contradicted but not supported by the retrieval context."
+  }
+ ]
+}

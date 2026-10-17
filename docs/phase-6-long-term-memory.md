@@ -2,7 +2,7 @@
 
 **Goal:** The bot remembers useful things about a user across conversations: preferences, facts they've shared, ongoing issues. Each conversation uses what it learned in earlier ones, and the user can see and delete what it remembers.
 
-[← Phase 5](phase-5-pii-detection-masking.md) · [Overview](../README.md) · [Next: Phase 7 →](phase-7-production-hardening.md)
+[← Phase 5](phase-5-pii-detection-masking.md) · [Overview](../README.md) · [Next: Phase 7 →](phase-7-eval-gate.md)
 
 ## Short-term vs. long-term
 

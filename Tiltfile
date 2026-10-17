@@ -69,7 +69,7 @@ local_resource(
 
 local_resource(
     'evals',
-    cmd='uv run python tests/evals/run.py',
+    cmd='make eval',
     auto_init=False,
     trigger_mode=TRIGGER_MODE_MANUAL,
     resource_deps=['ingest-sample'],

@@ -10,7 +10,7 @@
       "url": "https://github.com/Anirudh1905/agentic-ai-chatbot.git",
       "provider": "github",
       "link_mode": "web",
-      "revision": "1a992d5c01c1cc76642ec93f968e5ab2b226e196"
+      "revision": "a5b8f8e6b72835ae209c684d4fb327d31a092997"
     }
   },
   "components": [
@@ -169,7 +169,7 @@
       "id": "llm",
       "type": "external",
       "label": "OpenAI-compatible API",
-      "sublabel": "chat · summary · memory",
+      "sublabel": "chat · summary · memory · judge",
       "pos": [
         790,
         184
@@ -190,6 +190,11 @@
           "line": 76,
           "end_line": 80,
           "label": "memory model"
+        },
+        {
+          "path": "src/chatbot/config.py",
+          "line": 41,
+          "label": "JUDGE_MODEL"
         }
       ]
     },
@@ -336,7 +341,7 @@
         },
         {
           "path": "src/chatbot/memory/threads.py",
-          "line": 69,
+          "line": 70,
           "end_line": 84,
           "label": "claim()"
         }
@@ -503,6 +508,68 @@
           "label": "--prune"
         }
       ]
+    },
+    {
+      "id": "evals",
+      "type": "backend",
+      "label": "Eval suites",
+      "sublabel": "make eval · DeepEval",
+      "pos": [
+        790,
+        40
+      ],
+      "size": [
+        180,
+        64
+      ],
+      "sources": [
+        {
+          "path": "tests/evals/run.py",
+          "line": 61,
+          "end_line": 147,
+          "label": "make eval"
+        },
+        {
+          "path": "tests/evals/judge.py",
+          "line": 27,
+          "end_line": 56,
+          "label": "JudgeModel"
+        },
+        {
+          "path": "tests/evals/suites/judged.py",
+          "line": 40,
+          "end_line": 112,
+          "label": "judged metrics"
+        }
+      ]
+    },
+    {
+      "id": "evalcheck",
+      "type": "backend",
+      "label": "CI eval check",
+      "sublabel": "no model calls",
+      "pos": [
+        490,
+        40
+      ],
+      "size": [
+        180,
+        64
+      ],
+      "sources": [
+        {
+          "path": "tests/evals/check.py",
+          "line": 39,
+          "end_line": 82,
+          "label": "make eval-check"
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 40,
+          "end_line": 41,
+          "label": "CI step"
+        }
+      ]
     }
   ],
   "boundaries": [
@@ -658,6 +725,29 @@
       "to": "emb",
       "label": "embed chunks",
       "variant": "dashed"
+    },
+    {
+      "id": "evals-llm",
+      "from": "evals",
+      "to": "llm",
+      "label": "judge · gpt-4.1",
+      "variant": "dashed"
+    },
+    {
+      "id": "evals-agent",
+      "from": "evals",
+      "to": "agent",
+      "label": "golden questions",
+      "variant": "dashed",
+      "fromSide": "left",
+      "toSide": "left"
+    },
+    {
+      "id": "evals-evalcheck",
+      "from": "evals",
+      "to": "evalcheck",
+      "label": "report.json",
+      "variant": "dashed"
     }
   ],
   "cards": [
@@ -680,6 +770,15 @@
         "Placeholders and claims of status or discounts are never stored; temporary facts expire through the store's TTL sweeper",
         "Recall searches every turn and adds memories the thread hasn't seen; the prompt only changes when one turns up, so the prompt cache keeps working",
         "One push per user at a time across processes (Postgres advisory lock), at most MEMORY_WRITE_CONCURRENCY per process"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Evals (Phase 7)",
+      "items": [
+        "make eval runs the agent on 44 golden questions and scores retrieval, routing, faithfulness, citations and correctness, plus labelled PII and approval-policy sets",
+        "gpt-4.1 judges through DeepEval; a judged metric gates only at 90% agreement with labelled answers (citations 98%, faithfulness 91%, correctness 90%)",
+        "CI gets no model credentials: it reruns the code-only suites, rejects a stale report.json, and blocks a drop below main's scores"
       ]
     },
     {

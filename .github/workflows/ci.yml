@@ -27,6 +27,8 @@ jobs:
       REQUIRE_DB: "1"
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # the eval check compares with main's tests/evals/report.json
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
@@ -35,3 +37,5 @@ jobs:
       - run: uv run ruff format --check .
       - run: uv run mypy src
       - run: uv run pytest
+      - name: Eval check
+        run: make eval-check

@@ -1,0 +1,30 @@
+{"text": "my email is jane.doe@gmail.com, please update it", "pii": [{"type": "email", "value": "jane.doe@gmail.com"}]}
+{"text": "Contact: Priya.Raman+orders@outlook.co.uk", "pii": [{"type": "email", "value": "Priya.Raman+orders@outlook.co.uk"}]}
+{"text": "send the invoice to accounts@raman-family.in and cc me at p_raman99@yahoo.com", "pii": [{"type": "email", "value": "accounts@raman-family.in"}, {"type": "email", "value": "p_raman99@yahoo.com"}]}
+{"text": "EMAIL ME: BOB.SMITH@EXAMPLE.ORG", "pii": [{"type": "email", "value": "BOB.SMITH@EXAMPLE.ORG"}]}
+{"text": "card 4111 1111 1111 1111 exp 09/28", "pii": [{"type": "credit_card", "value": "4111 1111 1111 1111"}]}
+{"text": "my visa is 4111-1111-1111-1111", "pii": [{"type": "credit_card", "value": "4111-1111-1111-1111"}]}
+{"text": "charge 5555555555554444 please", "pii": [{"type": "credit_card", "value": "5555555555554444"}]}
+{"text": "amex 3782 822463 10005", "pii": [{"type": "credit_card", "value": "3782 822463 10005"}]}
+{"text": "I typed my card wrong, it's 4111-1111-1111-1112", "pii": [{"type": "credit_card", "value": "4111-1111-1111-1112"}]}
+{"text": "call me on +91 98450 12345 after 6", "pii": [{"type": "phone", "value": "+91 98450 12345"}]}
+{"text": "my number: (415) 555-0132", "pii": [{"type": "phone", "value": "(415) 555-0132"}]}
+{"text": "ring 303-555-0142 or 303.555.0199", "pii": [{"type": "phone", "value": "303-555-0142"}, {"type": "phone", "value": "303.555.0199"}]}
+{"text": "UK office +44 20 7946 0958", "pii": [{"type": "phone", "value": "+44 20 7946 0958"}]}
+{"text": "whatsapp 919845012345", "pii": [{"type": "phone", "value": "919845012345"}]}
+{"text": "my home router is 192.168.1.20", "pii": [{"type": "ip", "value": "192.168.1.20"}]}
+{"text": "logged in from 203.0.113.77 yesterday", "pii": [{"type": "ip", "value": "203.0.113.77"}]}
+{"text": "my IPv6 is 2001:db8:85a3::8a2e:370:7334", "pii": [{"type": "ip", "value": "2001:db8:85a3::8a2e:370:7334"}]}
+{"text": "I'm jane@x.com, card 4111 1111 1111 1111, phone +1 415 555 0132", "pii": [{"type": "email", "value": "jane@x.com"}, {"type": "credit_card", "value": "4111 1111 1111 1111"}, {"type": "phone", "value": "+1 415 555 0132"}]}
+{"text": "Where is order AC-10001?", "pii": []}
+{"text": "My orders AC-55821 and AC-10003 both arrived", "pii": []}
+{"text": "It arrived on 2026-10-16.", "pii": []}
+{"text": "The return window closes 16-10-2026, or 16.10.2026 in the EU format", "pii": []}
+{"text": "Two Trailblazer 2P tents for $398.00, or 2 x $199.99", "pii": []}
+{"text": "Ticket T-48213 is about the sleeping bag", "pii": []}
+{"text": "My postcode is 560001", "pii": []}
+{"text": "Write to support@acme-outfitters.example for help", "pii": []}
+{"text": "The tent is rated to 3000 mm and weighs 2.1 kg", "pii": []}
+{"text": "Version 1.2.3.4 of the app crashed", "pii": []}
+{"text": "We hiked 12,500 ft in 2026", "pii": []}
+{"text": "Order AC-10001 shipped 2026-10-14 and arrived 2026-10-16", "pii": []}

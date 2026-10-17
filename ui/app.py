@@ -10,7 +10,7 @@ import streamlit as st
 from httpx_sse import connect_sse
 
 API_URL = os.environ.get("CHATBOT_API_URL", "http://localhost:8000")
-# No login until Phase 7: the API trusts this header to say whose threads these are.
+# No login until Phase 8: the API trusts this header to say whose threads these are.
 DEFAULT_USER = os.environ.get("CHATBOT_USER_ID", "demo-user")
 
 TOOL_LABELS = {

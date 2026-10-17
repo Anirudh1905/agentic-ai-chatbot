@@ -220,3 +220,5 @@ __marimo__/
 .streamlit/secrets.toml
 
 data/*
+# DeepEval writes run data here (make eval)
+.deepeval/
