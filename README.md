@@ -7,7 +7,7 @@ The phase plans and as-built docs are in [docs/](docs/); the [Status](#status) t
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/architecture-dark.png">
   <source media="(prefers-color-scheme: light)" srcset="docs/images/architecture-light.png">
-  <img alt="Architecture: the Streamlit UI calls the FastAPI API, which redacts PII and invokes the agent loop. The agent calls the OpenAI-compatible API, the knowledge base search (pgvector chunks, embeddings) and, through an approval gate, web search on DuckDuckGo. Threads, checkpoints, long-term memories and chunks live in Postgres with pgvector; a background MemoryWriter turns conversations into memories (at the token breach, after 30 idle minutes, or on request), a retention job prunes checkpoints, and an ingestion CLI loads the knowledge base." src="docs/images/architecture-light.png">
+  <img alt="Architecture: the Streamlit UI calls the FastAPI API, which redacts PII and invokes the agent loop. The agent calls the OpenAI-compatible API, the knowledge base search (pgvector chunks, embeddings) and, through an approval gate, web search on DuckDuckGo. Threads, checkpoints, long-term memories and chunks live in Postgres with pgvector; a background MemoryWriter turns conversations into memories (at the token breach, after 30 idle minutes, or on request), a retention job prunes checkpoints, and an ingestion CLI loads the knowledge base. The eval suites run the agent on golden questions and judge its answers with gpt-4.1; CI checks their report." src="docs/images/architecture-light.png">
 </picture>
 
 ## Status
