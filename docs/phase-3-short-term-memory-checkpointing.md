@@ -43,7 +43,7 @@ flowchart TB
 ```python
 pool = await open_pool(settings)            # shared with the RAG tool
 checkpointer = AsyncPostgresSaver(pool)
-await checkpointer.setup()                  # creates and migrates the checkpoint tables
+await checkpointer.setup()                  # creates and migrates the checkpoint tables (since Phase 9: python -m chatbot.migrate)
 agent = build_graph(settings, tools=tools, checkpointer=checkpointer)
 ```
 
@@ -173,7 +173,7 @@ Five adjustments to the built-in, each covered by a test in `tests/unit/test_sum
   Token counts come from the API (`stream_usage=True`; streamed responses don't report usage otherwise). HTTP client, OpenAI SDK, uvicorn access and `/healthz` lines only show with `LOG_LEVEL=DEBUG`.
 
 - **State:** `GET /threads/{id}/history` reads the checkpoints ([Resume and time travel](#resume-and-time-travel)).
-- **pgweb** (<http://localhost:8081>, part of `docker compose` and Tilt) browses the `threads` and checkpoint tables directly. Checkpoint blobs are msgpack, so use the history endpoint to read state.
+- **pgweb** (<http://localhost:8081>; part of `docker compose` and Tilt then, a Deployment in the kind cluster since Phase 9) browses the `threads` and checkpoint tables directly. Checkpoint blobs are msgpack, so use the history endpoint to read state.
 
 ## Reference
 
@@ -213,7 +213,7 @@ Five adjustments to the built-in, each covered by a test in `tests/unit/test_sum
 
 - **Summarized messages disappear from the thread view.** Replacing them keeps checkpoints small (each step stores the whole message list), but `GET /threads/{id}/messages` then returns only the recent turns plus the summary. Keeping a full transcript for display would need a separate append-only table.
 - **Summaries lose detail.** Exact numbers, names and decisions are often what users ask about later, which is why the summarizer is told to keep them verbatim. Phase 6 long-term memory is the real fix for "remember this forever".
-- **Concurrent requests on one thread** both read the same checkpoint and the later write wins. The UI sends one message at a time; a per-thread lock is a Phase 9 concern.
+- **Concurrent requests on one thread** both read the same checkpoint and the later write wins. The UI sends one message at a time; a per-thread lock is a Phase 9 concern ([Reliability](phase-9-reliability-deployment.md#reliability), still open).
 - **Checkpoints and logs hold user text.** Checkpoints keep every message, and logs keep search queries as the model wrote them. Since Phase 5 the API redacts PII from the user's message before the agent runs, so both hold the redacted text. Still treat the checkpoint tables as sensitive (encryption at rest, restricted access).
 
 ## Exit criteria

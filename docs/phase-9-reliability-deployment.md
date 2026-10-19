@@ -4,13 +4,13 @@
 
 [← Phase 8](phase-8-security-observability.md) · [Overview](../README.md)
 
-**Status: in progress.** Deployment is designed (below) and built first; reliability, cost and latency, and proof follow, in that order, each designed when it starts. Like Phases 7 and 8, this is for a production-ready demo: a local Kubernetes cluster, no real users or on-call. Items already done in earlier phases are ticked.
+**Status: in progress.** Deployment is built (below); reliability, cost and latency, and proof follow, in that order, each designed when it starts. Like Phases 7 and 8, this is for a production-ready demo: a local Kubernetes cluster, no real users or on-call. Items already done in earlier phases are ticked.
 
 | Area | Planned | Section |
 | --- | --- | --- |
 | Reliability | Retries and circuit breakers on every external call, a fallback model, a per-thread lock, Postgres backups | [Reliability](#reliability) |
 | Cost and latency | Prompt caching, a cap on retrieved context, a web search cache | [Cost and latency](#cost-and-latency) |
-| Deployment | The app on Kubernetes (kind): an image, 2 API replicas behind an Ingress, a worker, a migrations Job, CloudNativePG, kube-prometheus-stack | [Deployment (design)](#deployment-design) |
+| Deployment | Built: the app on Kubernetes (kind): an image, 2 API replicas behind Envoy Gateway, a worker on an SQS queue, a migrate Job, CloudNativePG, kube-prometheus-stack | [Deployment](#deployment) |
 | Proof | A load test, a provider-outage test, a runbook | [Exit criteria](#exit-criteria) |
 
 The target shape is in [What runs where](#what-runs-where).
@@ -19,42 +19,48 @@ API pods are stateless. All conversation state lives in Postgres through the che
 
 Most items below have LangChain middleware equivalents (`ModelRetryMiddleware`, `ModelFallbackMiddleware`, `ToolCallLimitMiddleware`). Check `langchain.agents.middleware` before building one.
 
-## Deployment (design)
+## Deployment
 
-**Status: designed, not built.** Agreed on 2026-10-19. The first piece of Phase 9 to build, because the other three are measured on it: the load test and the outage test need the deployed stack, and the per-thread lock and the background loops depend on where processes run.
+**Status: built.** Designed on 2026-10-19 and built the same day, in 10 steps (the plan is in this doc's history). It came first because the rest of Phase 9 is measured on it: the load test and the outage test need the deployed stack, and the per-thread lock depends on where processes run. [Changes from the design](#changes-from-the-design) lists what turned out different.
 
 ### Decisions
 
 | Decision | Chosen | Why, and what it rules out |
 | --- | --- | --- |
 | Target | Kubernetes in Phase 9, on a local **kind** cluster | Replicas, a migration step that gates the rollout and scheduled jobs are what Kubernetes is for; Compose would only approximate them. There is no separate Phase 10 |
-| Our manifests | **Kustomize**: `deploy/base` and a `deploy/local` overlay | Plain YAML, applies with or without Tilt (`kubectl apply -k deploy/local`) |
-| Third-party services | **Helm** charts, installed once by Tilt | Only where hand-written manifests would be painful: ingress-nginx, CloudNativePG, kube-prometheus-stack |
-| In the cluster | The app, Postgres, Redis, Prometheus and Grafana | **Langfuse stays in Compose**: it's heavy (about five services) and a real deployment often rents it as Langfuse Cloud |
-| Postgres | **CloudNativePG**, one instance with pgvector | The production-grade choice (failover, backups to object storage); the later backup work becomes configuration |
+| Our manifests | **Kustomize**: `deploy/base` and a `deploy/local` overlay (`deploy/ci` on top of it for CI) | Plain YAML, applies with or without Tilt (`kubectl apply -k deploy/local`) |
+| Third-party services | **Helm** charts, installed by `make cluster` | Only where hand-written manifests would be painful: Envoy Gateway, CloudNativePG, kube-prometheus-stack |
+| In the cluster | The app, Postgres, Redis, ElasticMQ, Prometheus, Grafana and Alertmanager | **Langfuse stays in Compose**: it's heavy (about five services) and a real deployment often rents it as Langfuse Cloud |
+| Postgres | **CloudNativePG**, one instance, on its image with pgvector | The production-grade choice (failover, backups to object storage); the later backup work becomes configuration |
 | Redis | A plain Deployment, no volume | It holds only rate-limit windows and token counts, which may be lost on restart (Phase 8) |
-| Monitoring | **kube-prometheus-stack** | A `ServiceMonitor` scrapes every API pod whatever the replica count; the 7 alerts become a `PrometheusRule`; Alertmanager is ready to route (Phase 8 had nothing to page with) |
-| Background work | Every memory push goes through a **queue**; a **worker** Deployment (1 replica) runs them, the idle-thread scan and the store's TTL sweeper | Today a push runs as a task in the API pod that triggered it. If that pod dies mid-push, a summary push is lost for good: the summarized turns have already left the thread, and the memory writer skips the summary text (`transcript` in `memory/long_term/writer.py`). "Remember this" answers 202 and can lose its push the same way. With 2 replicas, rolling deploys and a 30 s drain, that goes from rare to routine. A queue also takes the memory model's calls, and the pooled connection each push holds, out of the API pods |
+| Monitoring | **kube-prometheus-stack** | A `ServiceMonitor` scrapes every API pod whatever the replica count; the alerts are a `PrometheusRule`; Alertmanager is ready to route (Phase 8 had nothing to page with) |
+| Background work | Every memory push goes through a **queue**; a **worker** Deployment (1 replica) runs them, the idle-thread scan and the store's TTL sweeper | Before, a push ran as a task in the API pod that triggered it. If that pod died mid-push, a summary push was lost for good: the summarized turns have already left the thread. "Remember this" answers 202 and could lose its push the same way. With 2 replicas and rolling deploys, that goes from rare to routine. The queue also takes the memory model's calls, and the pooled connection each push holds, out of the API pods |
 | Queue | **Amazon SQS**, with **ElasticMQ** standing in for it in the cluster, CI and dev | The same API locally and on AWS. ElasticMQ is one small container with FIFO queues, visibility timeouts, dead-letter queues and on-disk persistence. LocalStack emulates far more than we need. A Redis Streams queue would have made Redis durable; it stays the disposable limits store |
-| Schema | A **migrations Job** runs Alembic, `checkpointer.setup()` and `store.setup()` | Once, before the API rolls out; a failed migration stops the rollout instead of breaking pods. API and worker no longer create tables at start |
+| Schema | A **migrate Job** runs Alembic, `checkpointer.setup()` and `store.setup()` | Once, before the API rolls out; a failed migration stops the rollout instead of breaking pods. API and worker no longer create tables at start |
 | Reranker model (about 570 MB) | A **shared volume**, filled once by a Job, mounted read-only | The image stays small and the model is downloaded once, not per pod |
-| Traffic | **ingress-nginx**, kind mapping host port 80 | `http://localhost/` is the UI, `/api` the API across both replicas; the load test goes through the same front door as users |
+| Traffic | **Envoy Gateway** (Gateway API), kind mapping host port **8088** | `http://localhost:8088/` is the UI, `/api` the API across both replicas, plus `/grafana`, `/prometheus` and `/alertmanager`; the load test goes through the same front door as users |
 | Settings and secrets | Kustomize **configMapGenerator** and **secretGenerator** | The Secret is built from a gitignored `deploy/local/secrets.env` and mounted at `/run/secrets` (read since Phase 8); a changed value rolls the pods, through the generated name's hash |
 | API replicas | **2, fixed**, with a PodDisruptionBudget (`minAvailable: 1`) and rolling updates at `maxUnavailable: 0` | Autoscaling waits for the load test: the API mostly waits on the model gateway, so CPU is the wrong signal; scaling on in-flight requests needs the Prometheus adapter |
-| Shutdown | **Graceful drain** | Readiness fails, `preStop` waits a few seconds, uvicorn finishes open streams (`--timeout-graceful-shutdown` 45 s in a 60 s grace period), background pushes get up to 30 s. A stream cut off anyway resumes from its checkpoint (`POST /threads/{id}/resume`) |
-| Dev workflow | **`tilt up` deploys to kind** | One environment everywhere; Tilt's live update syncs `src/` into the pods instead of rebuilding the image |
+| Shutdown | **Drain open streams before SIGTERM** | See [Shutdown](#shutdown) |
+| Dev workflow | **`tilt up` deploys to kind** | One environment everywhere |
 | CI | **Build and validate, plus a kind smoke test** | Most Kubernetes mistakes (probes, Secrets, Service names, migration order) only show when the pods start |
 
 ### What runs where
 
+<img alt="Architecture on Kubernetes. A browser reaches Envoy Gateway on localhost:8088 in a kind cluster: / goes to the Streamlit ui pod and /api to two FastAPI API pods. In each API pod a request passes the FastAPI app, then Auth + limits (JWT, rate limits and token budget in Redis, accounts in Postgres), then the agent loop, which calls the model gateway, checkpoints and recalls memories in Postgres (CloudNativePG), and uses three tools: web_search (DuckDuckGo; sensitive queries wait for approval), search_knowledge_base (Postgres chunks, filled by the ingest Job) and remember. Memory pushes go to an ElasticMQ (SQS) FIFO queue with a dead-letter queue; the worker long-polls it and writes memories to Postgres. migrate and retention Jobs maintain the schema and checkpoints. kube-prometheus-stack, behind /grafana, scrapes the API pods and the worker. The app sends run traces to Langfuse in Docker Compose, and the eval suites send their scores there." src="images/architecture-dark.png">
+
+The diagram's source is `.archify/architecture-chatbot-k8s-20261019-231500/candidate.json` (archify); the same picture heads the README. The Mermaid version below adds the reranker volume and the per-route detail.
+
 ```mermaid
 flowchart TB
-    Browser([Browser]) -->|"http://localhost"| Ingress[ingress-nginx]
+    Browser([Browser]) -->|"http://localhost:8088"| GW["Envoy Gateway<br/>Gateway API"]
     subgraph Cluster["kind cluster"]
-        Ingress -->|"/"| UI["ui · Deployment ×1<br/>Streamlit"]
-        Ingress -->|"/api (not /api/metrics)"| API["api · Deployment ×2<br/>PDB · rolling · graceful drain"]
+        GW -->|"/"| UI["ui · Deployment ×1<br/>Streamlit"]
+        GW -->|"/api"| API["api · Deployment ×2<br/>PDB · rolling · stream drain"]
+        GW -->|"/grafana · /prometheus · /alertmanager"| Prom
         UI -->|"http://api:8000"| API
-        Prom["kube-prometheus-stack<br/>Prometheus · Grafana · Alertmanager"] -->|"ServiceMonitor: every pod"| API
+        Prom["kube-prometheus-stack<br/>Prometheus · Grafana · Alertmanager"] -->|"ServiceMonitor: every pod, port 9100"| API
+        Prom -->|"ServiceMonitor"| Worker
         API --> Redis[("Redis<br/>no volume")]
         API --> PG[("Postgres<br/>CloudNativePG + pgvector")]
         API -.-|"read-only"| ModelPVC[("reranker model volume")]
@@ -67,166 +73,132 @@ flowchart TB
     API -->|"chat · embeddings"| Gateway[Model gateway]
     Worker -->|"memory model"| Gateway
     API -->|web_search| DDG[DuckDuckGo]
-    API -.->|run traces| LF["Langfuse<br/>Docker Compose"]
+    API -.->|"run traces (Service + EndpointSlice)"| LF["Langfuse<br/>Docker Compose"]
 ```
 
-- **One app image** (`Dockerfile`, a multi-stage uv build, `.env` excluded by `.dockerignore`) runs as the API, the worker, the UI and every Job, each with its own command.
-- **API:** a Deployment of 2, a Service, and the Ingress at `/api`. The Ingress strips the prefix (the routes stay at `/chat`, `/threads`, …) and uvicorn runs with `--root-path /api` so the OpenAPI docs work behind it. **`/api/metrics` is refused at the Ingress**: Prometheus scrapes the pods directly, and the endpoint isn't authenticated or limited (Phase 8). `/healthz` stays the liveness probe; a new **`/readyz`** (the database pool answers) is the readiness probe, so a pod that loses Postgres leaves the Service instead of being restarted.
-- **The queue:** one FIFO queue, `memory-pushes.fifo`, and its dead-letter queue, `memory-pushes-dlq.fifo`, after 5 failed receives. ElasticMQ declares both in its config at start and runs as a StatefulSet with message persistence on a volume, so queued pushes survive a restart, as on SQS.
-  - **One job per push**, as a small JSON message:
-    - a *summary* push carries the transcript itself (already PII-redacted), because the turns have left the thread; a few thousand tokens, far under SQS's 256 KB limit
+- **One app image** (`Dockerfile`, a multi-stage uv build, non-root, `.env` excluded by `.dockerignore`) runs as the API, the worker, the UI and every Job, each with its own command. It includes `data/sample`, so the ingest Job loads the sample knowledge base with nothing mounted.
+- **API:** a Deployment of 2, a Service, and an `HTTPRoute` at `/api`. The route strips the prefix (the routes stay at `/chat`, `/threads`, …), and uvicorn runs with `--root-path /api` so the OpenAPI docs work behind it. The request timeout is 300 s, for long streamed replies.
+  - **Metrics are on their own port** (`METRICS_PORT=9100`), which no route reaches, and `/metrics` on the app port answers 404 when it's set. Prometheus scrapes the pods directly, and the endpoint isn't authenticated or limited (Phase 8).
+  - `/healthz` stays the liveness probe; **`/readyz`** (the database pool answers `SELECT 1`) is the readiness probe, so a pod that loses Postgres leaves the Service instead of being restarted.
+  - `BACKGROUND_JOBS=false`: the API pods run neither the idle scan nor the sweeper.
+- **The queue:** one FIFO queue, `memory-pushes.fifo`, and its dead-letter queue, `memory-pushes-dlq.fifo`, after 5 failed receives. ElasticMQ declares both in its config at start (`deploy/base/config/elasticmq.conf`) and runs as a StatefulSet with message persistence on a volume, so queued pushes survive a restart, as on SQS.
+  - **One job per push**, as a small JSON message (`chatbot/jobs/push.py`):
+    - a *summary* push carries the transcript itself (already PII-redacted; tool results blanked), because the turns have left the thread
     - an *idle* push carries the thread id; the worker reads the thread and pushes what's after its cursor
     - a *remember* push carries the question and the reply
-  - **`MessageGroupId` is the user**, so one user's pushes run in order, one at a time. That is the guarantee the per-user advisory lock gives today, and the lock stays as a second guard.
-  - **`MessageDeduplicationId`** is the thread and its last message id (or the remembered message's id), so the same push enqueued twice within SQS's 5-minute window runs once. Idle pushes are idempotent anyway, through the cursor.
-  - **Code:** a `JobQueue` protocol (`enqueue`, `receive`, `ack`) in a new `chatbot/jobs/` package, implemented on SQS with `aioboto3`, behind `SQS_ENDPOINT_URL` (ElasticMQ; unset on AWS) and `SQS_QUEUE_URL`. `MemoryWriter.schedule` and `remember` enqueue instead of starting a task; the writing itself (`push`, `_locked_write`) moves unchanged into the worker. Unit tests use an in-memory `JobQueue`.
-- **Worker:** a new `python -m chatbot.worker` long-polls the queue and runs each push. It deletes a message only after the push succeeds; a failure leaves the message to come back after its visibility timeout (5 minutes, longer than a push's worst case of retried model calls). The 6th failure lands in the dead-letter queue. The worker also runs the idle-thread scan, which now only enqueues idle pushes, and the store's TTL sweeper. A new setting, **`BACKGROUND_JOBS`** (`true` by default so `make dev` keeps working alone; `false` in the API pods), decides whether a process runs the scan and the sweeper.
-- **Queue metrics:** the worker exports the queue's depth, the oldest message's age and the dead-letter count (`GetQueueAttributes`), and counts pushes by outcome. New alerts: a message in the dead-letter queue, and the oldest message older than 15 minutes (the worker is down or stuck).
-- **UI:** one Streamlit pod at the Ingress root, calling the API in-cluster.
+  - **`MessageGroupId` is the user**, so one user's pushes run in order, one at a time. The per-user advisory lock stays as a second guard.
+  - **`MessageDeduplicationId`** is a hash of the push, so the same push enqueued twice within SQS's 5-minute window runs once. Idle pushes are idempotent anyway, through the cursor.
+  - **Code:** a `JobQueue` protocol (`enqueue`, `receive`, `ack`, `depth`) in `chatbot/jobs/queue.py`, implemented on SQS with `aioboto3` (`SQS_QUEUE_URL`, `SQS_DEAD_LETTER_QUEUE_URL`, and `SQS_ENDPOINT_URL` for ElasticMQ, unset on AWS) and in memory for tests. `MemoryWriter` enqueues when a queue is configured; with `SQS_QUEUE_URL` unset (`make dev`), pushes run in-process as before.
+- **Worker:** `python -m chatbot.worker` long-polls the queue and runs each push with the existing writing code. It deletes a message only after the push succeeds; a failure leaves it to come back after its visibility timeout (5 minutes, longer than a push's worst case of retried model calls). It also runs the idle-thread scan, which only enqueues, and the store's TTL sweeper. Its metrics are on port 9100.
+- **Queue metrics and alerts:** the worker exports the queue's depth by state (`chatbot_queue_messages`: visible, in flight, dead), each job's age when it runs, and pushes by outcome; the API counts fallbacks. Three alerts join Phase 8's seven: **ChatbotWorkerDown** (no worker scraped for 5 minutes), **ChatbotMemoryPushesDeadLettered** (anything in the dead-letter queue) and **ChatbotMemoryQueueStuck** (pushes waiting for 15 minutes with none run).
+- **UI:** one Streamlit pod at the gateway root, calling the API in-cluster.
 - **Jobs:**
-  - `migrate`: a new `python -m chatbot.migrate` that runs `alembic upgrade head`, then the checkpointer's and the store's setup. Tilt runs it before the API and worker roll out; `make migrate` calls the same module.
-  - `reranker-model`: downloads the model into the shared volume once; the API mounts it read-only (`RERANKER_CACHE_DIR`).
-  - `retention`: a CronJob, nightly, running today's `python -m chatbot.memory.retention`.
-  - `ingest`: a Job you trigger from Tilt, for `data/sample` or your own documents.
-- **Langfuse** stays in `ops/langfuse/docker-compose.yml` (`make langfuse`). Its containers are attached to kind's Docker network, so pods reach `http://langfuse-web:3000`. To verify first when building: if pods can't resolve it, a Service with manual Endpoints pointing at the container's address does the same.
-- **Layout:** `deploy/base/` (our manifests), `deploy/local/` (the kind overlay: generators, `secrets.env`, image tag), `deploy/kind.yaml` (the cluster, with port 80 mapped), `deploy/helm/` (values for the three charts).
+  - `migrate`: `python -m chatbot.migrate` runs `alembic upgrade head`, then the checkpointer's and the store's setup. Tilt runs it before the API and worker; `make migrate` calls the same module.
+  - `reranker-model`: downloads the model into the shared volume once; the API mounts it read-only (`RERANKER_CACHE_DIR=/models`).
+  - `ingest`: loads `data/sample` (with `--prune`); re-run from Tilt.
+  - `retention`: a CronJob, nightly at 03:30, running `python -m chatbot.memory.retention`.
+- **Langfuse** stays in `ops/langfuse/docker-compose.yml` (`make langfuse`). `deploy/local/langfuse-link.sh` attaches `langfuse-web` to kind's Docker network and points a `langfuse-web` Service at it through a manual EndpointSlice, so pods reach `http://langfuse-web:3000`.
+- **Layout:**
+  - `deploy/kind.yaml`: the cluster
+  - `deploy/cluster.sh`: `make cluster`
+  - `deploy/helm/`: values for the three charts
+  - `deploy/base/`: our manifests, with the ElasticMQ config and the Grafana dashboard in `config/`
+  - `deploy/local/`: the kind overlay (generators, `secrets.env`, `ca-bundle.pem`, the NodePort `EnvoyProxy`)
+  - `deploy/ci/`: the CI overlay
+  - `deploy/smoke.sh`: the smoke test
+
+### Shutdown
+
+uvicorn ends every open SSE stream as soon as it gets SIGTERM (sse-starlette closes them on shutdown), so its own graceful shutdown can't let a stream finish. Instead:
+
+1. The pod is marked terminating, leaves the Service, and gets no new requests.
+2. **`preStop` runs `python -m chatbot.api.drain`:** it waits 5 s, then polls `chatbot_active_streams` on the metrics port until it's 0, for up to 55 s.
+3. uvicorn gets SIGTERM and has 10 s (`--timeout-graceful-shutdown`) for ordinary requests, within a 75 s grace period.
+
+A stream still cut off can be finished with `POST /threads/{id}/resume`, from its checkpoint.
 
 ### Dev workflow and settings
 
-- `tilt up` creates the kind cluster if it's missing (Tilt's `ctlptl` integration), installs the three Helm charts once, builds the image and applies `deploy/local`. Live update syncs `src/` and restarts the process in the api, worker and ui pods; a change to `pyproject.toml` or `uv.lock` rebuilds the image. The migrate, ingest, retention, checks and evals resources stay in the Tilt UI.
-- Tilt port-forwards Postgres to `localhost:5433`, Redis to `6380` and ElasticMQ to `9324`, so `make test`, `make eval` and the integration tests keep working with today's `.env`. The UI, API, Grafana and Prometheus are reached through the Ingress on `http://localhost`.
-- `docker-compose.yml` keeps only Langfuse (through its include). Postgres, Redis, pgweb, Prometheus and Grafana move into the cluster; pgweb becomes an optional Deployment.
-- `make secrets` writes `deploy/local/secrets.env` from `.env` (`OPENAI_API_KEY`, `OPENAI_BASE_URL`, `JWT_SECRET`, the Langfuse keys). The overlay's ConfigMap holds the rest, including the in-cluster `DATABASE_URL`, `REDIS_URL`, `SQS_ENDPOINT_URL` and `SQS_QUEUE_URL`. No app code changes for settings: Phase 8 already reads `/run/secrets` and requires the URLs.
-- Running without Kubernetes stays possible with `make dev`, with Postgres and Redis started by hand. With `SQS_QUEUE_URL` unset there is no queue: pushes run in-process, as before this phase.
+```bash
+make cluster   # once: the kind cluster and the three charts (safe to re-run)
+make secrets   # deploy/local/secrets.env and ca-bundle.pem from .env and this machine
+make tilt      # tilt up: Langfuse, the image, everything in deploy/local
+```
+
+- `make cluster` never changes your current kubectl context, and the Tiltfile refuses any context but `kind-chatbot`.
+- Tilt builds the image and applies `deploy/local`. It runs the data services first, then migrate, reranker-model and ingest, then the app. A code change rebuilds the image and rolls the pods in about 20 s. Retention, checks and evals are manual resources. A `monitoring` resource holds our side of monitoring (ServiceMonitors, rules, dashboard, routes) and links Grafana, Prometheus's alerts and Alertmanager; those three are the chart's, so Tilt doesn't track their pods.
+- From the host, for `make test`, `make eval`, the integration tests and database tools:
+  - **Postgres on `localhost:5433`**, as a local-only `dev` role (`dev`/`dev`): it may create databases (the tests make a throwaway one each) and is a member of the tables' owner. CloudNativePG manages it (`spec.managed.roles`, in the kind overlay). It isn't a Tilt port-forward: kubectl's forward drops whenever the server resets a connection, which the tests do on purpose, so a NodePort and a small socat container on kind's network (`deploy/local/postgres-host.sh`) publish it instead.
+  - **Redis on `6380` and ElasticMQ on `9324`**, through Tilt port-forwards.
+  - **pgweb on `http://localhost:8081`**, a database browser (a local-only Deployment).
+  - Everything else is behind the gateway on `http://localhost:8088`.
+- Every object belongs to a named Tilt resource: `config` holds the namespace, the generated settings, trust store and Secret; the others sit with what uses them. Moving an object between Tilt resources while Tilt runs deletes it, so change those groupings with Tilt stopped.
+- `docker-compose.yml` keeps only Langfuse (through its include).
+- `make secrets` writes `deploy/local/secrets.env` from `.env` (`OPENAI_API_KEY`, `OPENAI_BASE_URL`, `JWT_SECRET`, the Langfuse keys) and `deploy/local/ca-bundle.pem`, the trust store the pods use: this Mac's keychains, so a corporate TLS-inspecting proxy's root is trusted inside the containers too (the system bundle on Linux). The overlay's ConfigMap holds the rest; `DATABASE_URL` comes from CloudNativePG's `postgres-app` Secret.
+- Running without Kubernetes stays possible with `make dev`, with Postgres and Redis started by hand.
 
 ### CI
 
-A second job beside today's `check`:
+A `deploy` job beside `check`, in `.github/workflows/ci.yml`:
 
-1. Build the image.
-2. `kustomize build deploy/local` and validate it with kubeconform.
-3. Start kind, install the three charts, deploy with a placeholder model key, and wait for the migrations Job.
-4. Through the Ingress: `/readyz` answers, register and log in work, Prometheus has both API pods and the worker as targets, and both queues exist in ElasticMQ.
+1. Placeholder secrets (a random `JWT_SECRET`, a dummy model key) and `make-secrets.sh`.
+2. `kubectl kustomize deploy/ci`, validated with kubeconform (strict, with the CRD catalog for the Gateway API, CloudNativePG and Prometheus Operator kinds).
+3. Build the image, run `deploy/cluster.sh`, and load the image into kind.
+4. Apply `deploy/ci` (the kind overlay with the `chatbot:ci` image, without the ingest and reranker-model Jobs), then wait for Postgres, the migrate Job and the rollouts.
+5. `deploy/smoke.sh` through the gateway: `/readyz` answers, `/api/metrics` is 404, register, log in and an authenticated call work, Prometheus scrapes both API pods and the worker, the 10 alert rules are loaded, and the worker reports the queue's depth.
 
-There is no chat call: CI has no model access. About 6 to 8 minutes.
+There is no chat call: CI has no model access. On failure it prints the pods, events and logs. `deploy/smoke.sh` also runs against the local cluster (it passed there in under 3 s).
 
 ### Failures
 
 | What fails | What happens |
 | --- | --- |
-| The migrations Job | It shows as failed in Tilt and the API doesn't roll out, so nothing serves against the wrong schema |
+| The migrate Job | It shows as failed in Tilt and the API doesn't roll out, so nothing serves against the wrong schema |
 | Postgres | `/readyz` fails and the pod leaves the Service; `/healthz` keeps answering, so it isn't restarted in a loop |
 | Redis | Limits let requests through, as in Phase 8 |
-| The queue (ElasticMQ, or SQS) | Enqueueing fails: the API retries twice, then runs that push in-process as today, logs it and counts it (`chatbot_queue_fallbacks_total`), so a push is never dropped. The worker waits and reconnects |
-| The worker | Pushes wait in the queue until it's back; nothing is lost. The oldest-message alert fires after 15 minutes |
+| The queue (ElasticMQ, or SQS) | Enqueueing fails: the API retries twice, then runs that push in-process, logs it and counts it (`chatbot_queue_fallbacks_total`), so a push is never dropped. The worker waits and reconnects |
+| The worker | Pushes wait in the queue until it's back; nothing is lost. ChatbotWorkerDown fires after 5 minutes |
 | A push keeps failing | It's retried after each visibility timeout; after 5 receives it moves to the dead-letter queue, which alerts. The message holds everything needed to replay it |
 | The model volume is empty | Search uses the fused results without reranking, as the code already does when the model can't load, and logs it |
 | A pod replaced mid-stream | The drain lets the stream finish; if it's cut anyway, resume finishes the run from its checkpoint |
 
 ### Tests and checks
 
-- Unit tests:
-  - `/readyz` ready and not ready
-  - `BACKGROUND_JOBS=false` starts neither the idle scan nor the sweeper, and the worker starts both
-  - a summary, a Remember this and the `remember` tool each enqueue one job with the right group and dedupe ids; the worker runs it and acks it; a failing push isn't acked; an enqueue failure falls back to an in-process push
-  - the SQS backend against ElasticMQ, in the integration tests (CI runs ElasticMQ as a service)
-  - the worker and migrate entry points, on today's in-memory fakes and against Postgres in the integration tests
+- Unit tests: `/readyz` both ways; `/metrics` off the app port; `BACKGROUND_JOBS`; each push kind enqueued with the right group and dedupe ids; the worker acking success and not failure; the enqueue fallback; the drain's wait (`test_drain.py`).
+- Integration tests: the SQS backend against ElasticMQ, including the dead-letter redrive (CI runs ElasticMQ as a service); migrate against Postgres, run twice; only a background process runs the loops.
 - The CI smoke test above.
-- Checked live before it's done:
-  - chats through the Ingress spread over both API pods (the per-pod request metrics)
-  - a rolling restart during a streaming reply breaks no stream
-  - deleting the worker pod mid-push: the message comes back and the memory is written once
-  - a push that fails 5 times reaches the dead-letter queue and fires its alert
+- **Live checks on kind, 2026-10-19:**
+  - [x] `tilt up` from nothing brings up the whole stack; register, log in and a chat work through `http://localhost:8088`, and the trace shows up in Langfuse.
+  - [x] Chats spread over both API pods (the per-pod request counts in Prometheus).
+  - [x] A rolling restart of the API during a streaming reply: the stream finished with `done` and every token, twice. The first try, before the drain, cut the stream at SIGTERM.
+  - [x] "Remember this" through the queue: the worker wrote the memory.
+  - [x] The worker pod force-deleted (`--grace-period=0`) right after a remember push was received: the message stayed in flight, came back to the new pod after the 5-minute visibility timeout, and the memory was written once ("1 add"); the queue drained to 0.
+  - [x] Prometheus scrapes both API pods and the worker; the 10 rules load; the Grafana dashboard is provisioned.
+  - [x] Every panel of the Chatbot dashboard has data after traffic that touches it (knowledge base and web search chats, PII, a stream, an approval, login 429s), except "Firing alerts", empty because none fired. This found that counters whose label sets are fixed (decisions, limits, recall results, push outcomes, PII types, tool outcomes) now start at 0: a series that first appeared already at 1 had no earlier sample, so `increase()` missed that count and ratios were blank.
+  - [x] `make check` against the cluster: 244 passed, none skipped.
+  - [ ] A push failing 5 times reaching the dead-letter queue *live*: covered by the integration test against ElasticMQ, not repeated on the cluster (it takes 25 minutes of visibility timeouts).
 
-### Implementation plan
+### Changes from the design
 
-Each step is tested and committed on its own, in order. Steps 1 to 4 are app code that also works outside Kubernetes. The cluster comes in at step 5. Each step lists what proves it done.
-
-1. **Readiness and background switch.**
-   - Add `GET /readyz`, which checks that the pool answers `SELECT 1` and returns 503 otherwise.
-   - Add the `BACKGROUND_JOBS` setting, so the API pods neither start the idle-thread loop nor the store's TTL sweeper.
-   - Done when: unit tests cover both `/readyz` states, and an app with `BACKGROUND_JOBS=false` starts neither. `make check` passes.
-2. **Migrations as one command.**
-   - `python -m chatbot.migrate` runs Alembic, `checkpointer.setup()` and `store.setup()`.
-   - `make migrate` and Tilt call it.
-   - `Resources.ensure` stops running `setup()`.
-   - Done when: the integration tests (which migrate a throwaway database) pass with it, and the API starts against a migrated database without creating tables.
-3. **The job queue.**
-   - Add a `chatbot/jobs/` package:
-     - the `JobQueue` protocol
-     - the three job types (summary, idle, remember) as JSON
-     - `SqsJobQueue` on `aioboto3`
-     - `InMemoryJobQueue` for tests
-     - settings `SQS_ENDPOINT_URL` and `SQS_QUEUE_URL`
-   - FIFO group id is the user, plus a deduplication id per push.
-   - Done when: unit tests cover encode, decode, group and dedupe ids, and integration tests run against ElasticMQ, which CI gets as a service container.
-4. **Pushes through the queue, and the worker.**
-   - Change `MemoryWriter.schedule`, `remember` and the idle scan to enqueue when a queue is configured. Without one, they keep running in-process as today.
-   - Enqueueing retries twice, then falls back to an in-process push and counts it.
-   - `python -m chatbot.worker` long-polls, runs each push with the existing writing code, acks on success, and leaves the message on failure. It also runs the idle scan and the sweeper.
-   - Queue metrics: depth, the oldest message's age, the dead-letter count, pushes by outcome, fallbacks.
-   - Done when: unit tests show each trigger enqueues one job with the right ids, the worker acks success and not failure, and the fallback writes the memory. The live check: a memory written through ElasticMQ on the host.
-5. **The image.**
-   - A multi-stage `Dockerfile` (uv, Python 3.12, non-root) with the app and the `ui` group, and a `.dockerignore` that excludes `.env`, `data/` and caches.
-   - Commands for api (uvicorn with `--root-path /api` and graceful shutdown), worker, ui, migrate, ingest, retention and reranker-model.
-   - Done when: `docker build` works and `docker run … chatbot.migrate --help` runs.
-6. **Cluster and third-party services.**
-   - `deploy/kind.yaml` maps port 80 and sets up port-forwards.
-   - `deploy/helm/` holds values for ingress-nginx, CloudNativePG (operator plus a one-instance pgvector `Cluster`) and kube-prometheus-stack (lean: no node-exporter or kube dashboards).
-   - Done when: the cluster comes up with the three charts healthy.
-7. **Our manifests.** `deploy/base/`:
-   - **api:** Deployment ×2, Service, PodDisruptionBudget, probes, `preStop`, a 60 s grace period, the model volume mounted read-only.
-   - **worker:** Deployment.
-   - **ui:** Deployment and Service.
-   - **Ingress:** `/` → ui, `/api` → api with the prefix stripped, `/api/metrics` refused.
-   - **Jobs:** migrate, reranker-model, ingest; the retention CronJob.
-   - **Data:** Redis Deployment and Service; ElasticMQ StatefulSet with a volume and its queue config (both queues, the dead-letter policy).
-   - **Monitoring:** the `ServiceMonitor`; a `PrometheusRule` with today's 7 alerts plus the 2 queue alerts; the dashboard ConfigMap.
-
-   `deploy/local/`:
-   - ConfigMap and Secret generators
-   - the image tag
-   - a `make secrets` target that writes `secrets.env` from `.env`
-
-   Done when: `kustomize build deploy/local` passes kubeconform.
-8. **Tilt into kind.**
-   - Rewrite the Tiltfile:
-     - create the cluster if needed
-     - install the charts once
-     - `docker_build` with live update for `src/`
-     - `k8s_yaml(kustomize('deploy/local'))`
-     - the migrate Job before the api and worker, then the reranker and ingest Jobs
-     - port-forwards for Postgres, Redis and ElasticMQ
-     - manual resources for checks, evals, retention and ingest
-   - `docker-compose.yml` keeps only Langfuse, attached to kind's network; verify pods reach `langfuse-web:3000`, else add a Service with manual Endpoints.
-   - Done when: `tilt up` from nothing serves a chat through `http://localhost`, the trace shows up in Langfuse, and Grafana shows both api pods.
-9. **CI.**
-   - A `deploy` job:
-     - build the image
-     - kustomize plus kubeconform
-     - kind with the charts
-     - deploy with a placeholder model key
-     - wait for migrate
-     - check `/readyz`, register and login, scrape targets and queues
-   - Done when: it passes on the PR.
-10. **Live checks and docs.**
-    - Live checks, each with its result written in this doc:
-      - chats spread over both api pods
-      - a rolling restart during a streaming reply doesn't break it
-      - deleting the worker mid-push writes the memory once
-      - a push failing 5 times reaches the dead-letter queue and alerts
-    - Update:
-      - the README quickstart (`tilt up` into kind, the Ingress URLs)
-      - the architecture diagram, with a cluster view
-      - this section: designed becomes built
-    - Done when: the exit criteria above are ticked.
-
-**Execution:** I build the steps in order, with tests first where there's logic (steps 1 to 4). I commit each step, run `make check` before each commit, and stop to report after steps 4, 8 and 10, or earlier if a step turns out different from the design.
+| Designed | Built | Why |
+| --- | --- | --- |
+| ingress-nginx on host port 80 | **Envoy Gateway** (Gateway API) on host port **8088** | ingress-nginx is retired; Gateway API is its successor. Ports 80 and 8080 are often taken (by Rancher Desktop here) |
+| Tilt creates the cluster with `ctlptl` and installs the charts | **`make cluster`** (`deploy/cluster.sh`) | ctlptl's Homebrew build needs a newer Xcode than this Mac has; a script also keeps chart upgrades out of every `tilt up` |
+| `/api/metrics` refused at the Ingress | **A separate metrics port** no route reaches | Simpler than a deny rule, and it holds on any gateway |
+| uvicorn's graceful shutdown (45 s) finishes streams | **A `preStop` drain** on `chatbot_active_streams`, then 10 s for uvicorn | sse-starlette closes every stream on SIGTERM; found by the rolling-restart check |
+| Live update syncs `src/` into the pods | **A rebuild** (about 20 s) | The image installs the app non-editable; a rebuild is fast enough and never drifts from what CI builds |
+| Pods reach Langfuse by its container name on kind's network | **A Service with a manual EndpointSlice**, and Langfuse listening on all interfaces (`HOSTNAME=0.0.0.0`) | Cluster DNS doesn't resolve Docker names, and Langfuse bound only to its first network |
+| An alert on the oldest message's age | **Alerts on worker absence and on waiting pushes with none run** | SQS's oldest-message age is a CloudWatch metric, not a queue attribute ElasticMQ exposes |
+| — | **A CA bundle** mounted into the pods (`SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`), and `HF_HUB_DISABLE_XET=1` for the model download | A TLS-inspecting corporate proxy re-signs HTTPS; the containers' trust store doesn't have its root, and Hugging Face's xet transfer failed through it |
+| — | Postgres on `localhost:5433` through a NodePort and socat, as a `dev` role; pgvector in `template1` | The Tilt port-forward dropped under the integration tests, and CloudNativePG's app user can't create databases or the (untrusted) vector extension, which the Compose superuser could |
+| pgweb dropped with Compose | pgweb as a local-only Deployment | Still useful for looking at threads, checkpoints and memories |
+| — | `automountServiceAccountToken: false` on the app pods | The token mount sits under `/run/secrets`, which the secrets volume is mounted read-only over |
+| `ops/prometheus/alerts.yml`, `ops/grafana/dashboards/chatbot.json` | The `PrometheusRule` in `deploy/base/monitoring.yaml`; the dashboard in `deploy/base/config/` | Compose no longer runs Prometheus or Grafana |
 
 ### Not in this piece
 
 - **Reliability, then cost and latency, then proof**, in that order, each with its own design ([below](#reliability)).
-- **Production gaps, to document, not build:** the real SQS queues and their IAM permissions (Terraform), in place of ElasticMQ; autoscaling on in-flight requests; Sealed Secrets or External Secrets instead of a generated Secret; storage several nodes can read, for the model volume on a multi-node cluster; Alertmanager routing; TLS on the Ingress.
+- **Production gaps, to document, not build:** the real SQS queues and their IAM permissions (Terraform), in place of ElasticMQ; autoscaling on in-flight requests; Sealed Secrets or External Secrets instead of a generated Secret; storage several nodes can read, for the model volume on a multi-node cluster; Alertmanager routing; TLS on the gateway.
 
 ## Reliability
 
@@ -248,9 +220,9 @@ Each step is tested and committed on its own, in order. Steps 1 to 4 are app cod
 
 ## Exit criteria
 
-- [ ] `tilt up` brings up the whole stack on kind; a chat works through the Ingress, spread over 2 API pods
-- [ ] A rolling restart of the API breaks no streaming reply
-- [ ] The worker alone runs the background loops; Prometheus scrapes every API pod
+- [x] `tilt up` brings up the whole stack on kind; a chat works through the gateway, spread over 2 API pods
+- [x] A rolling restart of the API breaks no streaming reply
+- [x] The worker alone runs the background loops; Prometheus scrapes every API pod
 - [ ] CI builds the image, validates the manifests and passes the kind smoke test
 - [ ] Load test: target concurrent users at the p95 latency target with no errors
 - [ ] A provider outage degrades to the fallback model, not errors

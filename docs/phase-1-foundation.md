@@ -109,7 +109,7 @@ sequenceDiagram
 
 ## Local stack and tooling
 
-- `tilt up` runs Postgres, the self-hosted Langfuse stack, migrations, the API and the Streamlit UI, plus pgweb (<http://localhost:8081>) for browsing the database. Without Tilt: `make up`, `make migrate`, then `make dev` and `make ui`.
+- `tilt up` runs Postgres, the self-hosted Langfuse stack, migrations, the API and the Streamlit UI, plus pgweb (<http://localhost:8081>) for browsing the database. Without Tilt: `make up`, `make migrate`, then `make dev` and `make ui`. (Since Phase 9, `make tilt` deploys everything to a local Kubernetes cluster instead, with the UI at <http://localhost:8088>; see [Phase 9](phase-9-reliability-deployment.md#dev-workflow-and-settings).)
 - `make lint`, `make typecheck` and `make test` (or `make check` for all three); CI runs the same (`.github/workflows/ci.yml`).
 - The Streamlit UI (`ui/app.py`) talks to `/chat/stream`.
 

@@ -215,7 +215,7 @@ Every secret is a `SecretStr` setting (never printed, logged or shown in a repr)
 2. files in `/run/secrets`, one per setting and named like it (`jwt_secret`, `openai_api_key`, `langfuse_secret_key`), which is how Docker and Kubernetes mount secrets;
 3. `.env`, for local development. It's in `.gitignore`, and `.env.example` has no values.
 
-There's no image yet; Phase 9 builds it with `.env` excluded. `JWT_SECRET` must be at least 32 characters (RFC 7518 asks for a key as long as the hash for HS256), or the app refuses to start.
+There was no image yet; Phase 9's `Dockerfile` builds it with `.env` excluded, and Kubernetes mounts the secrets at `/run/secrets`. `JWT_SECRET` must be at least 32 characters (RFC 7518 asks for a key as long as the hash for HS256), or the app refuses to start.
 
 ## Prompt-injection review
 
@@ -258,7 +258,7 @@ Langfuse records the rest from the run itself: each model call with its tokens, 
 
 ### Metrics
 
-`observability/metrics.py`, served at `GET /metrics` (`routes/health.py`), which, like `/healthz`, isn't authenticated or limited: keep it off the public internet (Phase 9: only the cluster network reaches it). Labels are small fixed sets, never users or threads.
+`observability/metrics.py`, served at `GET /metrics` (`routes/health.py`), which, like `/healthz`, isn't authenticated or limited: keep it off the public internet (since Phase 9 it's on a separate port in the cluster, which the gateway doesn't route). Labels are small fixed sets, never users or threads.
 
 | Metric | What | Recorded in |
 | --- | --- | --- |
@@ -272,11 +272,13 @@ Langfuse records the rest from the run itself: each model call with its tokens, 
 | `chatbot_memory_recalls_total{result}` | Turns whose memory search found something (`hit`) or not | `LongTermMemory` |
 | `chatbot_limited_total{limit}` | 429s: `user`, `ip`, `login` or `budget` | `accounts/limits.py` |
 
-Counts are per process: with several API processes each is scraped and the dashboard sums them (Phase 9).
+Counts are per process: with several API processes each is scraped and the dashboard sums them (since Phase 9, a `ServiceMonitor` scrapes every API pod and the worker). Counters with fixed label sets start at 0, so a series' first count shows in `increase()` (Phase 9).
 
 ### From the API to Grafana
 
 Nothing is pushed: the API only keeps counters in memory, and Prometheus pulls them.
+
+> **Since Phase 9** Prometheus, Grafana and Alertmanager run in the kind cluster (kube-prometheus-stack). A `ServiceMonitor` scrapes every API pod and the worker on a separate metrics port, the alerts are a `PrometheusRule` in `deploy/base/monitoring.yaml`, the dashboard is `deploy/base/config/chatbot-dashboard.json`, and all three are at `http://localhost:8088/grafana`, `/prometheus` and `/alertmanager`. `ops/prometheus` and `ops/grafana` are gone. The diagram below is the Phase 8 setup, on Docker Compose; the flow is the same. See [Phase 9](phase-9-reliability-deployment.md#deployment).
 
 ```mermaid
 flowchart LR
@@ -315,13 +317,13 @@ flowchart LR
 - **Prometheus turns totals into history.** Each scrape stores every number with its time, so `rate(...[5m])` is the per-second increase over the last 5 minutes, and `histogram_quantile(0.95, ...)` estimates p95 latency from the buckets. When the API restarts and its counters reset, `rate` and `increase` see the reset and carry on.
 - **Grafana stores no metrics.** It runs each panel's query against Prometheus whenever the dashboard refreshes. Its datasource and dashboard are files in `ops/grafana`, so they live in the repo: edit the JSON (or export it from Grafana) and restart Grafana to change them.
 - **Running it:** `make up` (or Tilt) starts Prometheus at http://localhost:9091 (9090 is Langfuse's MinIO) and Grafana at http://localhost:3001/d/chatbot (3000 is Langfuse), which opens read only without a login (admin/admin to edit). Prometheus reaches the API on the host as `host.docker.internal:8000`, which Docker Desktop and Rancher Desktop provide; on Linux, see `ops/prometheus/prometheus.yml`.
-- **An empty panel:** check that the target is `up` (http://localhost:9091/targets) and that something has happened yet: a counter only appears after its first increment.
+- **An empty panel:** check that the target is `up` (http://localhost:9091/targets; since Phase 9, http://localhost:8088/prometheus/targets) and that something has happened yet: a counter whose labels aren't a fixed set (models, routes) only appears after its first increment.
 
 The "Chatbot" dashboard has, from the top: requests, error rate, p95 time to first token and today's tokens; firing alerts; requests and latency by route; time to first token; model latency, tokens and errors by model; tool calls and error rate by tool; approvals and the share of runs that pause; PII redacted by type and source; memory recall hit rate; 429s by limit.
 
 ### Alerts
 
-`ops/prometheus/alerts.yml`, evaluated by Prometheus every 30 s. A rule whose query stays true for its `for:` time fires, and shows on Prometheus's alerts page and in the dashboard's "Firing alerts" table (the `ALERTS` series). Nothing pages, since there's no on-call; an Alertmanager with a receiver would send them on.
+`ops/prometheus/alerts.yml` (since Phase 9, the `PrometheusRule` in `deploy/base/monitoring.yaml`, with three queue and worker alerts added), evaluated by Prometheus every 30 s. A rule whose query stays true for its `for:` time fires, and shows on Prometheus's alerts page and in the dashboard's "Firing alerts" table (the `ALERTS` series). Nothing pages, since there's no on-call; an Alertmanager with a receiver would send them on.
 
 | Alert | Fires when | Severity |
 | --- | --- | --- |
@@ -373,7 +375,7 @@ The "Chatbot" dashboard has, from the top: requests, error rate, p95 time to fir
 | `/me/memory` only | `DELETE /me` too: the account and all its data |
 | No metrics endpoint | `GET /metrics` for Prometheus |
 
-For `curl`, log in for a token: `curl -s localhost:8000/auth/login -d 'username=me@example.com&password=...'`. The UI shows a 429 or 401 from a run as an error in the chat.
+For `curl`, log in for a token: `curl -s localhost:8000/auth/login -d 'username=me@example.com&password=...'` (since Phase 9, `localhost:8088/api/auth/login`). The UI shows a 429 or 401 from a run as an error in the chat.
 
 ### Settings
 

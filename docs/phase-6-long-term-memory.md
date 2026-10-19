@@ -236,7 +236,7 @@ Before building this, we ran the same 8 scripted multi-thread scenarios (pink→
 | `agent/middleware.py` | `system_prompt` adds the recalled memories, and says they never grant entitlements |
 | `agent/builder.py` | Adds `LongTermMemory`, the `remember` tool and the summarization hook when a `store` is passed and `MEMORY_ENABLED` is on; `create_agent(store=..., context_schema=RunContext)` |
 | `config.py` (`RunContext`), `api/runs.py` | Every run gets the user as LangGraph's runtime context (`context=RunContext(user_id)`) and the thread in its config |
-| `api/dependencies.py` | Creates `AsyncPostgresStore` on the shared pool, runs its `setup()` and TTL sweeper, creates the `MemoryWriter` and starts its TTL loop; stops both on shutdown |
+| `api/dependencies.py` | Creates `AsyncPostgresStore` on the shared pool, runs its `setup()` and TTL sweeper, creates the `MemoryWriter` and starts its TTL loop; stops both on shutdown. (Since Phase 9, `chatbot.migrate` runs `setup()`, and the sweeper and TTL loop run in the worker) |
 | `api/routes/me.py` | `GET /me/memory`, `DELETE /me/memory/{id}`, `DELETE /me/memory` (and `DELETE /me`, Phase 8) |
 | `api/routes/threads.py` | `POST /threads/{id}/messages/{index}/remember`; `DELETE /threads/{id}` also deletes the thread's cursor |
 | `ui/app.py` | The "Remember this" button and the "What I remember about you" panel |
@@ -371,7 +371,7 @@ The fixes: recall on every turn, adding new memories to the thread's set; from a
 - **A long thread's recalled set only grows** until the user's memories change. It's bounded by the user's memories, but a thread that wanders over many subjects carries all of them.
 - **An expired temporary memory stays in an open thread** until the user's memories next change: expiry happens in the store's TTL, which doesn't bump the version. New threads don't see it.
 - **Expiry depends on the model's `valid_until`.** A temporary fact it doesn't mark as temporary stays until a later fact updates or deletes it.
-- **The TTL check runs in every API process.** It's durable (pending turns stay in the thread's checkpoint, and the cursor only moves after a successful push) and safe across replicas thanks to the advisory lock. With many replicas, a single worker (or LangGraph Platform crons) would be cleaner.
+- **The TTL check runs in every API process.** It's durable (pending turns stay in the thread's checkpoint, and the cursor only moves after a successful push) and safe across replicas thanks to the advisory lock. With many replicas, a single worker (or LangGraph Platform crons) would be cleaner. **Done in Phase 9:** every push goes through an SQS queue, and one worker runs them, the TTL check and the sweeper ([Phase 9](phase-9-reliability-deployment.md#deployment)).
 - **Pushes are slow and cost a model call per fact:** one extraction, then one `gpt-5-mini` decision per fact, in sequence. About 10–20 s per fact, in the background.
 - **No cap on the number of memories.** Updates and deletes keep it small (34 records across 24 spike runs, against mem0's 83), but nothing bounds it.
 

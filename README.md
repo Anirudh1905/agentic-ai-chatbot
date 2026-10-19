@@ -4,7 +4,7 @@ An agentic chatbot with RAG and web search tools, human-in-the-loop approvals, P
 
 The phase plans and as-built docs are in [docs/](docs/); the [Status](#status) table below links them. The agent is LangChain's `create_agent` with middleware, using the built-ins wherever LangChain has one.
 
-<img alt="Architecture: the Streamlit UI calls the FastAPI API with a JWT; auth and limits check the token against the users table and count requests and tokens in Redis. The API redacts PII and invokes the agent loop, which calls the OpenAI-compatible API (the server's key or the user's own), the knowledge base search (pgvector chunks, embeddings) and, through an approval gate, web search on DuckDuckGo. Threads, checkpoints, users, long-term memories and chunks live in Postgres with pgvector; a background MemoryWriter turns conversations into memories, a retention job prunes checkpoints, and an ingestion CLI loads the knowledge base. Runs are traced to Langfuse; Prometheus scrapes /metrics for the Grafana dashboard and alerts. The eval suites run the agent on golden questions, judge its answers with gpt-4.1 and send the scores to Langfuse; CI checks their report. src="docs/images/architecture-dark.png">
+<img alt="Architecture on Kubernetes. A browser reaches Envoy Gateway on localhost:8088 in a kind cluster: / goes to the Streamlit ui pod and /api to two FastAPI API pods. In each API pod a request passes the FastAPI app, then Auth + limits (JWT, rate limits and token budget in Redis, accounts in Postgres), then the agent loop, which calls the model gateway, checkpoints and recalls memories in Postgres (CloudNativePG), and uses three tools: web_search (DuckDuckGo; sensitive queries wait for approval), search_knowledge_base (Postgres chunks, filled by the ingest Job) and remember. Memory pushes go to an ElasticMQ (SQS) FIFO queue with a dead-letter queue; the worker long-polls it and writes memories to Postgres. migrate and retention Jobs maintain the schema and checkpoints. kube-prometheus-stack, behind /grafana, scrapes the API pods and the worker. The app sends run traces to Langfuse in Docker Compose, and the eval suites send their scores there." src="docs/images/architecture-dark.png">
 
 ## Status
 
@@ -17,10 +17,10 @@ The phase plans and as-built docs are in [docs/](docs/); the [Status](#status) t
 | [5. PII redaction](docs/phase-5-pii-detection-masking.md) | Emails, cards, phones and IPs redacted from messages, tool results, replies and the stream | Built |
 | [6. Long-term memory](docs/phase-6-long-term-memory.md) | Per-fact memories per user across threads: pushed at the token breach, after 30 idle minutes, or on request; recalled each turn, closest to the message | Built ([PR #7](https://github.com/Anirudh1905/agentic-ai-chatbot/pull/7)) |
 | [7. Eval gate](docs/phase-7-eval-gate.md) | Golden sets, a judge model (DeepEval) and a regression gate on every PR | Built ([PR #8](https://github.com/Anirudh1905/agentic-ai-chatbot/pull/8)) |
-| [8. Security and observability](docs/phase-8-security-observability.md) | Accounts and login (JWT), your own model key, Redis rate limits and token budgets, deleting a user's data, trace metadata, Prometheus metrics, a Grafana dashboard and alerts | Built (on `phase-8-security-observability`, not merged yet) |
-| [9. Reliability and deployment](docs/phase-9-reliability-deployment.md) | Retries and fallbacks, cost controls, container deployment, load test | Planned |
+| [8. Security and observability](docs/phase-8-security-observability.md) | Accounts and login (JWT), your own model key, Redis rate limits and token budgets, deleting a user's data, trace metadata, Prometheus metrics, a Grafana dashboard and alerts | Built ([PR #9](https://github.com/Anirudh1905/agentic-ai-chatbot/pull/9)) |
+| [9. Reliability and deployment](docs/phase-9-reliability-deployment.md) | Kubernetes (kind): 2 API replicas behind Envoy Gateway, memory pushes on an SQS queue run by a worker, CloudNativePG, kube-prometheus-stack, a kind smoke test in CI; then retries and fallbacks, cost controls, a load test | Deployment built (on `phase-9-reliability-deployment`); the rest planned |
 
-`make check` runs ruff, mypy and the tests (220 at the moment, unit and Postgres integration). `make eval` runs the eval suites against the real model and writes `tests/evals/report.json`, which CI checks on every PR (see [Evals](#evals)).
+`make check` runs ruff, mypy and the tests (244 at the moment: unit, and integration against the cluster's Postgres and ElasticMQ). `make eval` runs the eval suites against the real model and writes `tests/evals/report.json`, which CI checks on every PR (see [Evals](#evals)).
 
 ## Repository layout
 
@@ -35,43 +35,53 @@ src/chatbot/
 ├── tools/          # rag.py (knowledge base), web_search.py, rerank.py, memory.py (remember), registry.py
 ├── ingestion/      # loaders, chunking, indexing CLI
 ├── prompts/        # system.md, summarize.md, memory_extract.md, memory_decide.md; as_data (defuses untrusted text)
-├── observability/  # logs.py (request and thread on every line), tracing.py (Langfuse), metrics.py (Prometheus, GET /metrics)
-└── storage/        # db.py (Postgres pool), embeddings.py
+├── jobs/           # push.py (a memory push as a queue message), queue.py (JobQueue: SQS, in memory)
+├── observability/  # logs.py (request and thread on every line), tracing.py (Langfuse), metrics.py (Prometheus)
+├── storage/        # db.py (Postgres pool), embeddings.py, langgraph.py (the checkpointer and the store)
+├── migrate.py      # Alembic, then the checkpointer's and the store's tables
+└── worker.py       # runs the memory pushes from the queue, the idle-thread scan and the TTL sweeper
 ui/app.py           # Streamlit chat UI: login, threads, approval card, memory panel, account deletion
 migrations/         # Alembic: chunks, threads, users (checkpoints and the memory store create their own tables)
-ops/                # langfuse/ (its compose file), prometheus/ (scrape config, alerts.yml), grafana/ (datasource, dashboard)
-tests/              # unit/, integration/ (need `make up`), evals/ (golden sets, judge, report)
+deploy/             # kind.yaml, cluster.sh, helm/ (chart values), base/ (our manifests), local/ (the kind overlay), ci/, smoke.sh
+ops/langfuse/       # Langfuse's compose file
+Dockerfile          # the one app image: API, worker, UI and every Job
+tests/              # unit/, integration/ (need the cluster running), evals/ (golden sets, judge, report)
 data/sample/        # the fictional Acme Outfitters docs
 docs/               # phase plans and as-built docs, images/
 ```
 
 ## Quickstart
 
-Requires [uv](https://docs.astral.sh/uv/), Docker and [Tilt](https://docs.tilt.dev/install.html).
+The stack runs on a local Kubernetes cluster ([kind](https://kind.sigs.k8s.io/)); Langfuse runs beside it in Docker Compose. Requires [uv](https://docs.astral.sh/uv/), Docker, kind, kubectl, Helm and [Tilt](https://docs.tilt.dev/install.html).
 
 ```bash
 cp .env.example .env        # add OPENAI_API_KEY (and OPENAI_BASE_URL for a gateway)
 echo "JWT_SECRET=$(openssl rand -hex 32)" >> .env   # signs login tokens; without it every request gets 401
 uv sync --all-groups
-tilt up                     # Postgres, Redis, Langfuse, Prometheus, Grafana, migrations, sample docs, API and chat UI
+make cluster                # once: the kind cluster, Envoy Gateway, CloudNativePG, kube-prometheus-stack
+make secrets                # the cluster's Secret and trust store, from .env and this machine
+make tilt                   # Langfuse, the image, Postgres, Redis, ElasticMQ, migrations, the reranker model,
+                            # sample docs, 2 API pods, the worker and the chat UI
 ```
 
-Tilt's dashboard is at http://localhost:10350. Open the chat UI, create an account and log in. From there:
+Tilt's dashboard is at http://localhost:10350; it only ever deploys to the `kind-chatbot` context. Open the chat UI, create an account and log in. From there:
 
 | Service | URL |
 | --- | --- |
-| Chat UI (Streamlit) | http://localhost:8501 |
-| API | http://localhost:8000 (OpenAPI docs at `/docs`) |
+| Chat UI (Streamlit) | http://localhost:8088 |
+| API (both pods) | http://localhost:8088/api (OpenAPI docs at `/api/docs`) |
+| Grafana (the Chatbot dashboard) | http://localhost:8088/grafana/d/chatbot, read only without a login |
+| Prometheus (metrics, alerts) | http://localhost:8088/prometheus/alerts |
+| Alertmanager | http://localhost:8088/alertmanager |
 | Langfuse (tracing) | http://localhost:3000, login `dev@local.test` / `password` |
-| Postgres + pgvector | `localhost:5433` |
+| Postgres + pgvector (CloudNativePG) | `localhost:5433`, login `dev` / `dev` (local only) |
 | pgweb (database browser) | http://localhost:8081 |
-| Grafana (the Chatbot dashboard) | http://localhost:3001/d/chatbot, read only without a login (admin/admin to edit) |
-| Prometheus (metrics, alerts) | http://localhost:9091/alerts |
-| Redis (rate limits) | `localhost:6380` |
+| Redis (rate limits) | `localhost:6380`, port-forwarded |
+| ElasticMQ (the SQS queue) | `localhost:9324`, port-forwarded |
 
-The host ports avoid the usual ones (Postgres 5433, Redis 6380, Prometheus 9091, Grafana 3001) so they don't clash with local services or Langfuse; `POSTGRES_PORT`, `REDIS_PORT`, `PGWEB_PORT`, `PROMETHEUS_PORT` and `GRAFANA_PORT` change them. pgweb browses the same database (chunks, threads, checkpoints, users, the memory store).
+Everything in the cluster comes in through one gateway on port 8088 (80 and 8080 are often taken). The host ports are for the tests, `make eval` and database tools, with the URLs in `.env.example`; pgweb browses the same database (chunks, threads, checkpoints, users, the memory store). A code change rebuilds the image and rolls the pods in about 20 s. Details, and what each piece is for, in [the Phase 9 doc](docs/phase-9-reliability-deployment.md#deployment).
 
-Without Tilt: `make up`, `make migrate`, `make ingest`, then `make dev` and `make ui` in separate terminals.
+Without Kubernetes: start Postgres and Redis yourself, then `make migrate`, `make ingest`, `make dev` and `make ui`. Without `SQS_QUEUE_URL`, memory pushes run in the API process instead of a worker.
 
 Try asking "Can I return a tent I bought at 40% off?" (answered from the sample docs) or "What's the latest news about REI?" (web search).
 
@@ -86,16 +96,16 @@ The answer cites the refund policy, lists its sources, and uses two long-term me
 Every request needs a JWT in `Authorization: Bearer <token>`; the user is its `sub`, and every thread and memory is visible only to its owner. The API checks the token's signature (HS256, `JWT_SECRET`, which `/auth/login` signs with) and expiry, and that its account still exists. The chat UI opens on a login screen: create an account with an email and a password, then log in. Optionally give your own OpenAI-compatible base URL and API key there: the login checks them (and fails, saying so, if they don't work), and your chats then run on them instead of the server's key. They stay in your browser session, sent with each request; the server doesn't store them. To call the API yourself:
 
 ```bash
-curl -s localhost:8000/auth/register -H 'content-type: application/json' -d '{"email": "me@example.com", "password": "a-long-password"}'
-TOKEN=$(curl -s localhost:8000/auth/login -d 'username=me@example.com&password=a-long-password' | jq -r .access_token)
-curl -N localhost:8000/chat/stream -H 'content-type: application/json' -H "Authorization: Bearer $TOKEN" -d '{"message": "hi"}'
+curl -s localhost:8088/api/auth/register -H 'content-type: application/json' -d '{"email": "me@example.com", "password": "a-long-password"}'
+TOKEN=$(curl -s localhost:8088/api/auth/login -d 'username=me@example.com&password=a-long-password' | jq -r .access_token)
+curl -N localhost:8088/api/chat/stream -H 'content-type: application/json' -H "Authorization: Bearer $TOKEN" -d '{"message": "hi"}'
 ```
 
-Requests are limited per user (`RATE_LIMIT_PER_USER`, 120 a minute) and per IP (`RATE_LIMIT_PER_IP`, 300 a minute), and each user's agent runs to `DAILY_TOKEN_BUDGET` model tokens a day (500,000). Over a limit, the API answers 429 with `Retry-After`. The counts live in Redis (`make up` starts it), so every API process shares them; if Redis is down, requests go through. `DELETE /me` (the sidebar's "Delete my account") deletes the account with every thread, checkpoint and memory. Details in [the Phase 8 doc](docs/phase-8-security-observability.md).
+Requests are limited per user (`RATE_LIMIT_PER_USER`, 120 a minute) and per IP (`RATE_LIMIT_PER_IP`, 300 a minute), and each user's agent runs to `DAILY_TOKEN_BUDGET` model tokens a day (500,000). Over a limit, the API answers 429 with `Retry-After`. The counts live in Redis, so every API pod shares them; if Redis is down, requests go through. `DELETE /me` (the sidebar's "Delete my account") deletes the account with every thread, checkpoint and memory. Details in [the Phase 8 doc](docs/phase-8-security-observability.md).
 
 ### Knowledge base
 
-`tilt up` ingests the fictional Acme Outfitters docs in `data/sample/`. To add your own documents (Markdown, text, HTML, PDF, Word):
+`make tilt` ingests the fictional Acme Outfitters docs in `data/sample/` (the `ingest` Job; re-run it from Tilt). To add your own documents (Markdown, text, HTML, PDF, Word):
 
 ```bash
 make ingest PATH_TO_DOCS=path/to/docs
@@ -128,7 +138,7 @@ The agent is LangChain's `create_agent` with middleware, and approvals use its `
 When a run pauses, the chat UI shows an approval card: approve, edit the query, or reject with a reason the bot sees. The thread waits in Postgres for as long as it takes, across restarts. Over the API, `/chat` returns `pending` (and `/chat/stream` sends an `interrupt` event). `POST /threads/{id}/resume` takes one decision per pending call, in the order of `pending.action_requests`:
 
 ```bash
-curl localhost:8000/threads/$THREAD/resume -H 'content-type: application/json' -H "Authorization: Bearer $TOKEN" \
+curl localhost:8088/api/threads/$THREAD/resume -H 'content-type: application/json' -H "Authorization: Bearer $TOKEN" \
   -d '{"decisions": [{"type": "edit", "edited_action": {"name": "web_search", "args": {"query": "Falcon 9 launch news"}}}]}'
 ```
 
@@ -146,7 +156,8 @@ Short-term memory is the current thread. Long-term memory is what the bot knows 
 - **How a push works:** `MEMORY_MODEL` (`gpt-5-mini`) lists the facts you stated, each tagged with a scope (about you, or about an order, trip or issue), a topic, and for temporary facts the date they stop being true. For each fact it finds the closest memories you already have and decides what changes: add it, update the memory it corrects, or delete the ones it makes obsolete. Say your favourite colour is pink in one chat and red in a later one, and the pink memory becomes red.
 - **Never stored**, whatever the model says: redacted placeholders, and claims of status, discounts or permissions ("I'm a VIP with 50% off").
 - **Temporary facts expire** through the store's built-in TTL.
-- **Concurrency:** one push per user at a time, across API processes too (a Postgres advisory lock), and at most `MEMORY_WRITE_CONCURRENCY` at once per process, so they never take the whole connection pool.
+- **Through a queue:** in the cluster every push is a message on an SQS FIFO queue (ElasticMQ locally), grouped by user, and the worker runs it, so a push survives an API pod being replaced. A push that fails comes back after 5 minutes; after 5 tries it lands in a dead-letter queue, which alerts. If the queue can't be reached, the API runs the push itself.
+- **Concurrency:** one push per user at a time, across processes too (the queue's user groups, and a Postgres advisory lock), and at most `MEMORY_WRITE_CONCURRENCY` at once per process, so they never take the whole connection pool.
 - **Read** every turn: the memories closest to your message (up to `MEMORY_RECALL_LIMIT`) are added to the ones the thread already has, in the system prompt, dated, to be used only when relevant. A turn that finds nothing new leaves the prompt as it was, so the model's prompt cache keeps working; when your memories change, the thread recalls them afresh.
 
 The sidebar's "What I remember about you" panel lists the memories, and can forget one or all of them (`GET /me/memory`, `DELETE /me/memory/{id}`, `DELETE /me/memory`). Set `MEMORY_ENABLED=false` to turn it all off. Details in [the Phase 6 doc](docs/phase-6-long-term-memory.md).
@@ -224,7 +235,7 @@ HTTP client, OpenAI SDK, uvicorn access, `/healthz` and `/metrics` lines are hid
 
 ### Tracing
 
-Langfuse runs locally from `ops/langfuse/docker-compose.yml`, which `docker-compose.yml` includes. On first start it creates a project with fixed API keys, and `.env.example` already contains them, so every chat request is traced with no setup. The first `tilt up` pulls about 2 GB of images, and Langfuse takes a minute or two to become healthy.
+Langfuse runs locally from `ops/langfuse/docker-compose.yml`, which `docker-compose.yml` includes. On first start it creates a project with fixed API keys, and `.env.example` already contains them, so every chat request is traced with no setup. The first `make tilt` pulls about 2 GB of images, and Langfuse takes a minute or two to become healthy. Pods reach it as `http://langfuse-web:3000`, through a Service Tilt points at the container (`deploy/local/langfuse-link.sh`).
 
 The credentials in that file are local-only placeholders. To trace somewhere else, such as Langfuse Cloud, change the `LANGFUSE_*` values in `.env`.
 
@@ -232,7 +243,7 @@ Each run's trace is named `chat` or `resume`, grouped by thread (Langfuse's sess
 
 ### Metrics and alerts
 
-`GET /metrics` serves Prometheus metrics: requests and latency by route, time to first token, model latency, tokens and errors by model, tool calls by outcome, approval pauses and decisions, PII redactions by type, memory recall hits, and 429s by limit. Prometheus (port 9091) scrapes it, Grafana (port 3001) charts it on the provisioned "Chatbot" dashboard, and `ops/prometheus/alerts.yml` defines seven alerts (API down, error rate, slow first token, slow or failing model, token spike, PII in replies). They show as firing in Prometheus and on the dashboard; nothing pages. Details in [the Phase 8 doc](docs/phase-8-security-observability.md#observability).
+The API serves Prometheus metrics: requests and latency by route, time to first token, open streams, model latency, tokens and errors by model, tool calls by outcome, approval pauses and decisions, PII redactions by type, memory recall hits, 429s by limit, and the memory queue's depth and pushes. In the cluster they're on a separate port (`METRICS_PORT`) that the gateway doesn't route, and Prometheus scrapes every API pod and the worker; outside it, `GET /metrics`. Grafana charts them on the "Chatbot" dashboard, and ten alerts (API or worker down, error rate, slow first token, slow or failing model, token spike, PII in replies, pushes dead-lettered or stuck) are a `PrometheusRule` in `deploy/base/monitoring.yaml`. They show as firing in Prometheus, on the dashboard and in Alertmanager; nothing pages. Details in [the Phase 8 doc](docs/phase-8-security-observability.md#observability) and [Phase 9](docs/phase-9-reliability-deployment.md#deployment).
 
 ## Endpoints
 
@@ -256,9 +267,10 @@ Each run's trace is named `chat` or `resume`, grouped by thread (Langfuse's sess
 | `POST /auth/login` | Log in (form `username` = email, `password`, optionally `openai_api_key` / `openai_base_url`, checked); returns a bearer token |
 | `GET /auth/me` | The signed-in account |
 | `GET /healthz` | Liveness |
-| `GET /metrics` | Prometheus metrics |
+| `GET /readyz` | Readiness: 503 when the database doesn't answer |
+| `GET /metrics` | Prometheus metrics (404 when `METRICS_PORT` moves them to their own port, as in the cluster) |
 
-All endpoints except `/healthz`, `/metrics`, `/auth/register` and `/auth/login` need a bearer token (401 without a valid one), and answer 429 with `Retry-After` over a rate limit. The ones that start a model run (`/chat`, `/chat/stream`, `.../resume`, `.../resume/stream`) also answer 429 once the user's daily token budget is spent.
+All endpoints except `/healthz`, `/readyz`, `/metrics`, `/auth/register` and `/auth/login` need a bearer token (401 without a valid one), and answer 429 with `Retry-After` over a rate limit. The ones that start a model run (`/chat`, `/chat/stream`, `.../resume`, `.../resume/stream`) also answer 429 once the user's daily token budget is spent.
 
 ## Configuration
 
@@ -271,7 +283,7 @@ Set in `.env` (see `.env.example`), the environment, or, for secrets, files in `
 | `MODEL` | `gpt-5.4` | Any chat model the endpoint serves. `gpt-5-mini` costs about a tenth as much per token |
 | `REASONING_EFFORT` | `low` | `none` to `high`. Reasoning models only (gpt-5.x, o-series). It can't be unset from `.env` (a missing or empty value means `low`), so for gpt-4.x change the default in `config.py`. `minimal` is a little faster but often skips the search for short questions |
 | `MAX_TOKENS` | unset | Optional cap on output tokens |
-| `DATABASE_URL` | unset, required | Postgres; `.env.example` has the Compose service's (`postgresql://chatbot:chatbot@localhost:5433/chatbot`) |
+| `DATABASE_URL` | unset, required | Postgres; `.env.example` has the kind cluster's, as the local `dev` login (`postgresql://dev:dev@localhost:5433/chatbot`) |
 | `EMBEDDING_MODEL` / `EMBEDDING_DIMENSIONS` | `text-embedding-3-small` / `1536` | The dimensions must match the vector column (`0001_chunks`); changing them needs a migration and a re-ingest |
 | `CHUNK_SIZE_TOKENS` / `CHUNK_OVERLAP_TOKENS` | `600` / `80` | How documents are split at ingestion |
 | `WEB_SEARCH_ENABLED` | `true` | DuckDuckGo web search; no key needed |
@@ -289,7 +301,13 @@ Set in `.env` (see `.env.example`), the environment, or, for secrets, files in `
 | `MEMORY_MODEL` | `gpt-5-mini` | Lists the facts in a thread's turns and decides what each one changes |
 | `MEMORY_RECALL_LIMIT` | `10` | Long-term memories recalled into a thread |
 | `REQUEST_TIMEOUT` | `30` | Seconds per model call (a reply, a summary, a memory push); a call that times out is retried twice |
-| `MEMORY_WRITE_CONCURRENCY` | `2` | Pushes running at once per API process (each holds a pooled connection) |
+| `MEMORY_WRITE_CONCURRENCY` | `2` | Pushes running at once per process (each holds a pooled connection) |
+| `SQS_QUEUE_URL` / `SQS_DEAD_LETTER_QUEUE_URL` | unset | The memory-push queue and its dead-letter queue. Unset: pushes run in the API process |
+| `SQS_ENDPOINT_URL` | unset (AWS) | ElasticMQ's address locally (`http://localhost:9324`, or `http://elasticmq:9324` in the cluster) |
+| `SQS_REGION` / `SQS_ACCESS_KEY_ID` / `SQS_SECRET_ACCESS_KEY` | `us-east-1` / unset / unset | Unset keys use AWS's usual credential chain; ElasticMQ takes any |
+| `BACKGROUND_JOBS` | `true` | Whether this process runs the idle-thread scan and the store's TTL sweeper; `false` in the API pods, where the worker runs them |
+| `METRICS_PORT` | unset | Serve the metrics on this port instead of `GET /metrics` (9100 in the cluster) |
+| `WORKER_METRICS_PORT` | `9100` | The worker's metrics port |
 | `PII_ENABLED` | `true` | Redact emails, cards, IPs and phone numbers from user messages, tool results and replies |
 | `PII_ALLOWED_EMAIL_DOMAINS` | `["acme-outfitters.example"]` | JSON list. Emails at these domains are never redacted |
 | `HITL_ENABLED` | `true` | Pause risky tool calls for approval |
@@ -297,7 +315,7 @@ Set in `.env` (see `.env.example`), the environment, or, for secrets, files in `
 | `JWT_SECRET` | unset | What `/auth/login` signs tokens with (HS256) and the API verifies them with. At least 32 characters (`openssl rand -hex 32`); a shorter one stops the app from starting, and without one every request gets 401 |
 | `JWT_TTL_MINUTES` | `60` | How long a login lasts |
 | `RATE_LIMITS_ENABLED` | `true` | Rate limits and the token budget |
-| `REDIS_URL` | unset, required with rate limits on | Where the limits are counted; `.env.example` has the Compose service's (`redis://localhost:6380/0`) |
+| `REDIS_URL` | unset, required with rate limits on | Where the limits are counted; `.env.example` has the kind cluster's, through Tilt (`redis://localhost:6380/0`) |
 | `RATE_LIMIT_PER_USER` / `RATE_LIMIT_PER_IP` | `120/minute` / `300/minute` | Requests allowed, in the `limits` library's notation |
 | `RATE_LIMIT_LOGIN` | `10/minute` | Register and log-in attempts per IP |
 | `DAILY_TOKEN_BUDGET` | `500000` | Model tokens per user per UTC day for agent runs; 0 turns it off |
@@ -328,7 +346,7 @@ A metric blocks a PR when it drops below `main` by more than 2 points or one cas
 ## Development
 
 ```bash
-make check    # ruff lint + format check, mypy, pytest (integration tests need `make up`)
+make check    # ruff lint + format check, mypy, pytest (integration tests need the cluster running)
 make fmt      # auto-fix lint and formatting
 make eval     # every eval suite against the real model; writes tests/evals/report.json
 make eval-calibrate  # how often the judge agrees with labelled answers
