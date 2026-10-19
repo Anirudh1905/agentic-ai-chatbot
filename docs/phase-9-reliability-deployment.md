@@ -34,7 +34,8 @@ Most items below have LangChain middleware equivalents (`ModelRetryMiddleware`, 
 | Postgres | **CloudNativePG**, one instance with pgvector | The production-grade choice (failover, backups to object storage); the later backup work becomes configuration |
 | Redis | A plain Deployment, no volume | It holds only rate-limit windows and token counts, which may be lost on restart (Phase 8) |
 | Monitoring | **kube-prometheus-stack** | A `ServiceMonitor` scrapes every API pod whatever the replica count; the 7 alerts become a `PrometheusRule`; Alertmanager is ready to route (Phase 8 had nothing to page with) |
-| Background work | A **worker** Deployment (1 replica) runs the idle-thread memory loop and the store's TTL sweeper | API pods stop running both, so N replicas don't do the same scans N times. Request-triggered pushes (summary, Remember this, the `remember` tool) stay as background tasks in the API pod; the per-user advisory lock (Phase 6) keeps them safe across pods. No job queue: the Phase 9 plan only needs one if pushes outgrow a worker |
+| Background work | Every memory push goes through a **queue**; a **worker** Deployment (1 replica) runs them, the idle-thread scan and the store's TTL sweeper | Today a push runs as a task in the API pod that triggered it. If that pod dies mid-push, a summary push is lost for good: the summarized turns have already left the thread, and the memory writer skips the summary text (`transcript` in `memory/long_term/writer.py`). "Remember this" answers 202 and can lose its push the same way. With 2 replicas, rolling deploys and a 30 s drain, that goes from rare to routine. A queue also takes the memory model's calls, and the pooled connection each push holds, out of the API pods |
+| Queue | **Amazon SQS**, with **ElasticMQ** standing in for it in the cluster, CI and dev | The same API locally and on AWS. ElasticMQ is one small container with FIFO queues, visibility timeouts, dead-letter queues and on-disk persistence. LocalStack emulates far more than we need. A Redis Streams queue would have made Redis durable; it stays the disposable limits store |
 | Schema | A **migrations Job** runs Alembic, `checkpointer.setup()` and `store.setup()` | Once, before the API rolls out; a failed migration stops the rollout instead of breaking pods. API and worker no longer create tables at start |
 | Reranker model (about 570 MB) | A **shared volume**, filled once by a Job, mounted read-only | The image stays small and the model is downloaded once, not per pod |
 | Traffic | **ingress-nginx**, kind mapping host port 80 | `http://localhost/` is the UI, `/api` the API across both replicas; the load test goes through the same front door as users |
@@ -58,17 +59,29 @@ flowchart TB
         API --> PG[("Postgres<br/>CloudNativePG + pgvector")]
         API -.-|"read-only"| ModelPVC[("reranker model volume")]
         Model["reranker-model Job"] --> ModelPVC
-        Worker["worker · Deployment ×1<br/>idle-thread loop · TTL sweeper"] --> PG
+        API -->|"enqueue push"| SQS[("ElasticMQ · SQS API<br/>memory-pushes.fifo + DLQ")]
+        SQS -->|"long poll"| Worker["worker · Deployment ×1<br/>memory pushes · idle scan · TTL sweeper"]
+        Worker --> PG
         Jobs["migrate Job · retention CronJob · ingest Job"] --> PG
     end
     API -->|"chat · embeddings"| Gateway[Model gateway]
+    Worker -->|"memory model"| Gateway
     API -->|web_search| DDG[DuckDuckGo]
     API -.->|run traces| LF["Langfuse<br/>Docker Compose"]
 ```
 
 - **One app image** (`Dockerfile`, a multi-stage uv build, `.env` excluded by `.dockerignore`) runs as the API, the worker, the UI and every Job, each with its own command.
 - **API:** a Deployment of 2, a Service, and the Ingress at `/api`. The Ingress strips the prefix (the routes stay at `/chat`, `/threads`, …) and uvicorn runs with `--root-path /api` so the OpenAPI docs work behind it. **`/api/metrics` is refused at the Ingress**: Prometheus scrapes the pods directly, and the endpoint isn't authenticated or limited (Phase 8). `/healthz` stays the liveness probe; a new **`/readyz`** (the database pool answers) is the readiness probe, so a pod that loses Postgres leaves the Service instead of being restarted.
-- **Worker:** a new `python -m chatbot.worker` runs `MemoryWriter.start` and the store's TTL sweeper. A new setting, **`BACKGROUND_JOBS`** (`true` by default so `make dev` keeps working alone; `false` in the API pods), decides whether a process starts them.
+- **The queue:** one FIFO queue, `memory-pushes.fifo`, and its dead-letter queue, `memory-pushes-dlq.fifo`, after 5 failed receives. ElasticMQ declares both in its config at start and runs as a StatefulSet with message persistence on a volume, so queued pushes survive a restart, as on SQS.
+  - **One job per push**, as a small JSON message:
+    - a *summary* push carries the transcript itself (already PII-redacted), because the turns have left the thread; a few thousand tokens, far under SQS's 256 KB limit
+    - an *idle* push carries the thread id; the worker reads the thread and pushes what's after its cursor
+    - a *remember* push carries the question and the reply
+  - **`MessageGroupId` is the user**, so one user's pushes run in order, one at a time. That is the guarantee the per-user advisory lock gives today, and the lock stays as a second guard.
+  - **`MessageDeduplicationId`** is the thread and its last message id (or the remembered message's id), so the same push enqueued twice within SQS's 5-minute window runs once. Idle pushes are idempotent anyway, through the cursor.
+  - **Code:** a `JobQueue` protocol (`enqueue`, `receive`, `ack`) in a new `chatbot/jobs/` package, implemented on SQS with `aioboto3`, behind `SQS_ENDPOINT_URL` (ElasticMQ; unset on AWS) and `SQS_QUEUE_URL`. `MemoryWriter.schedule` and `remember` enqueue instead of starting a task; the writing itself (`push`, `_locked_write`) moves unchanged into the worker. Unit tests use an in-memory `JobQueue`.
+- **Worker:** a new `python -m chatbot.worker` long-polls the queue and runs each push. It deletes a message only after the push succeeds; a failure leaves the message to come back after its visibility timeout (5 minutes, longer than a push's worst case of retried model calls). The 6th failure lands in the dead-letter queue. The worker also runs the idle-thread scan, which now only enqueues idle pushes, and the store's TTL sweeper. A new setting, **`BACKGROUND_JOBS`** (`true` by default so `make dev` keeps working alone; `false` in the API pods), decides whether a process runs the scan and the sweeper.
+- **Queue metrics:** the worker exports the queue's depth, the oldest message's age and the dead-letter count (`GetQueueAttributes`), and counts pushes by outcome. New alerts: a message in the dead-letter queue, and the oldest message older than 15 minutes (the worker is down or stuck).
 - **UI:** one Streamlit pod at the Ingress root, calling the API in-cluster.
 - **Jobs:**
   - `migrate`: a new `python -m chatbot.migrate` that runs `alembic upgrade head`, then the checkpointer's and the store's setup. Tilt runs it before the API and worker roll out; `make migrate` calls the same module.
@@ -81,10 +94,10 @@ flowchart TB
 ### Dev workflow and settings
 
 - `tilt up` creates the kind cluster if it's missing (Tilt's `ctlptl` integration), installs the three Helm charts once, builds the image and applies `deploy/local`. Live update syncs `src/` and restarts the process in the api, worker and ui pods; a change to `pyproject.toml` or `uv.lock` rebuilds the image. The migrate, ingest, retention, checks and evals resources stay in the Tilt UI.
-- Tilt port-forwards Postgres to `localhost:5433` and Redis to `6380`, so `make test`, `make eval` and the integration tests keep working with today's `.env`. The UI, API, Grafana and Prometheus are reached through the Ingress on `http://localhost`.
+- Tilt port-forwards Postgres to `localhost:5433`, Redis to `6380` and ElasticMQ to `9324`, so `make test`, `make eval` and the integration tests keep working with today's `.env`. The UI, API, Grafana and Prometheus are reached through the Ingress on `http://localhost`.
 - `docker-compose.yml` keeps only Langfuse (through its include). Postgres, Redis, pgweb, Prometheus and Grafana move into the cluster; pgweb becomes an optional Deployment.
-- `make secrets` writes `deploy/local/secrets.env` from `.env` (`OPENAI_API_KEY`, `OPENAI_BASE_URL`, `JWT_SECRET`, the Langfuse keys). The overlay's ConfigMap holds the rest, including the in-cluster `DATABASE_URL` and `REDIS_URL`. No app code changes for settings: Phase 8 already reads `/run/secrets` and requires the URLs.
-- Running without Kubernetes stays possible with `make dev`, with Postgres and Redis started by hand.
+- `make secrets` writes `deploy/local/secrets.env` from `.env` (`OPENAI_API_KEY`, `OPENAI_BASE_URL`, `JWT_SECRET`, the Langfuse keys). The overlay's ConfigMap holds the rest, including the in-cluster `DATABASE_URL`, `REDIS_URL`, `SQS_ENDPOINT_URL` and `SQS_QUEUE_URL`. No app code changes for settings: Phase 8 already reads `/run/secrets` and requires the URLs.
+- Running without Kubernetes stays possible with `make dev`, with Postgres and Redis started by hand. With `SQS_QUEUE_URL` unset there is no queue: pushes run in-process, as before this phase.
 
 ### CI
 
@@ -93,7 +106,7 @@ A second job beside today's `check`:
 1. Build the image.
 2. `kustomize build deploy/local` and validate it with kubeconform.
 3. Start kind, install the three charts, deploy with a placeholder model key, and wait for the migrations Job.
-4. Through the Ingress: `/readyz` answers, register and log in work, and Prometheus has both API pods as targets.
+4. Through the Ingress: `/readyz` answers, register and log in work, Prometheus has both API pods and the worker as targets, and both queues exist in ElasticMQ.
 
 There is no chat call: CI has no model access. About 6 to 8 minutes.
 
@@ -104,7 +117,9 @@ There is no chat call: CI has no model access. About 6 to 8 minutes.
 | The migrations Job | It shows as failed in Tilt and the API doesn't roll out, so nothing serves against the wrong schema |
 | Postgres | `/readyz` fails and the pod leaves the Service; `/healthz` keeps answering, so it isn't restarted in a loop |
 | Redis | Limits let requests through, as in Phase 8 |
-| The worker | Idle threads aren't pushed until it's back (their cursors keep the place); request-triggered pushes keep working in the API pods |
+| The queue (ElasticMQ, or SQS) | Enqueueing fails: the API retries twice, then runs that push in-process as today, logs it and counts it (`chatbot_queue_fallbacks_total`), so a push is never dropped. The worker waits and reconnects |
+| The worker | Pushes wait in the queue until it's back; nothing is lost. The oldest-message alert fires after 15 minutes |
+| A push keeps failing | It's retried after each visibility timeout; after 5 receives it moves to the dead-letter queue, which alerts. The message holds everything needed to replay it |
 | The model volume is empty | Search uses the fused results without reranking, as the code already does when the model can't load, and logs it |
 | A pod replaced mid-stream | The drain lets the stream finish; if it's cut anyway, resume finishes the run from its checkpoint |
 
@@ -112,18 +127,21 @@ There is no chat call: CI has no model access. About 6 to 8 minutes.
 
 - Unit tests:
   - `/readyz` ready and not ready
-  - `BACKGROUND_JOBS=false` starts neither the memory loop nor the sweeper, and the worker starts both
+  - `BACKGROUND_JOBS=false` starts neither the idle scan nor the sweeper, and the worker starts both
+  - a summary, a Remember this and the `remember` tool each enqueue one job with the right group and dedupe ids; the worker runs it and acks it; a failing push isn't acked; an enqueue failure falls back to an in-process push
+  - the SQS backend against ElasticMQ, in the integration tests (CI runs ElasticMQ as a service)
   - the worker and migrate entry points, on today's in-memory fakes and against Postgres in the integration tests
 - The CI smoke test above.
 - Checked live before it's done:
   - chats through the Ingress spread over both API pods (the per-pod request metrics)
   - a rolling restart during a streaming reply breaks no stream
-  - deleting the worker pod, then idle pushes resume when it's back
+  - deleting the worker pod mid-push: the message comes back and the memory is written once
+  - a push that fails 5 times reaches the dead-letter queue and fires its alert
 
 ### Not in this piece
 
 - **Reliability, then cost and latency, then proof**, in that order, each with its own design ([below](#reliability)).
-- **Production gaps, to document, not build:** autoscaling on in-flight requests; Sealed Secrets or External Secrets instead of a generated Secret; storage several nodes can read, for the model volume on a multi-node cluster; Alertmanager routing; TLS on the Ingress.
+- **Production gaps, to document, not build:** the real SQS queues and their IAM permissions (Terraform), in place of ElasticMQ; autoscaling on in-flight requests; Sealed Secrets or External Secrets instead of a generated Secret; storage several nodes can read, for the model volume on a multi-node cluster; Alertmanager routing; TLS on the Ingress.
 
 ## Reliability
 
