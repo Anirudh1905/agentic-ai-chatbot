@@ -10,7 +10,7 @@
       "url": "https://github.com/Anirudh1905/agentic-ai-chatbot.git",
       "provider": "github",
       "link_mode": "web",
-      "revision": "a5b8f8e6b72835ae209c684d4fb327d31a092997"
+      "revision": "4177fe25c54b016b43a35f4ee131469ff92074c4"
     }
   },
   "components": [
@@ -24,14 +24,14 @@
         348
       ],
       "size": [
-        120,
+        100,
         64
       ],
       "sources": [
         {
           "path": "ui/app.py",
-          "line": 30,
-          "label": "X-User-Id header"
+          "line": 55,
+          "label": "login screen"
         }
       ]
     },
@@ -39,9 +39,9 @@
       "id": "ui",
       "type": "frontend",
       "label": "Streamlit UI",
-      "sublabel": "chat · approvals · memory",
+      "sublabel": "login · chat · approvals · memory",
       "pos": [
-        220,
+        185,
         348
       ],
       "size": [
@@ -51,21 +51,106 @@
       "sources": [
         {
           "path": "ui/app.py",
-          "line": 95,
-          "end_line": 120,
-          "label": "memory panel"
+          "line": 26,
+          "label": "Bearer + X-OpenAI headers"
         },
         {
           "path": "ui/app.py",
-          "line": 286,
-          "end_line": 291,
+          "line": 398,
           "label": "Remember this"
         },
         {
           "path": "ui/app.py",
-          "line": 312,
-          "end_line": 322,
+          "line": 421,
           "label": "resume + /chat/stream"
+        }
+      ]
+    },
+    {
+      "id": "auth",
+      "type": "security",
+      "label": "Auth + limits",
+      "sublabel": "JWT · rate limits · budget",
+      "pos": [
+        455,
+        348
+      ],
+      "size": [
+        160,
+        64
+      ],
+      "sources": [
+        {
+          "path": "src/chatbot/api/auth.py",
+          "line": 51,
+          "label": "get_current_user"
+        },
+        {
+          "path": "src/chatbot/api/auth.py",
+          "line": 126,
+          "label": "login + BYOK check"
+        },
+        {
+          "path": "src/chatbot/api/auth.py",
+          "line": 80,
+          "label": "limited_user"
+        }
+      ]
+    },
+    {
+      "id": "redis",
+      "type": "database",
+      "label": "Redis",
+      "sublabel": "moving windows · tokens/day",
+      "pos": [
+        455,
+        184
+      ],
+      "size": [
+        160,
+        64
+      ],
+      "sources": [
+        {
+          "path": "src/chatbot/usage.py",
+          "line": 41,
+          "label": "UsageLimits"
+        },
+        {
+          "path": "src/chatbot/usage.py",
+          "line": 113,
+          "label": "SpendTokens"
+        },
+        {
+          "path": "docker-compose.yml",
+          "line": 23,
+          "label": "redis service"
+        }
+      ]
+    },
+    {
+      "id": "users",
+      "type": "database",
+      "label": "users",
+      "sublabel": "email · argon2id hash",
+      "pos": [
+        455,
+        552
+      ],
+      "size": [
+        160,
+        64
+      ],
+      "sources": [
+        {
+          "path": "migrations/versions/0003_users.py",
+          "line": 19,
+          "label": "users table"
+        },
+        {
+          "path": "src/chatbot/users.py",
+          "line": 44,
+          "label": "PostgresUserStore"
         }
       ]
     },
@@ -73,9 +158,9 @@
       "id": "api",
       "type": "backend",
       "label": "FastAPI API",
-      "sublabel": "/chat · /threads · /me/memory",
+      "sublabel": "/auth · /chat · /threads · /me/memory",
       "pos": [
-        490,
+        695,
         348
       ],
       "size": [
@@ -85,20 +170,17 @@
       "sources": [
         {
           "path": "src/chatbot/api/main.py",
-          "line": 20,
-          "end_line": 25,
+          "line": 23,
           "label": "app + routers"
         },
         {
           "path": "src/chatbot/api/routes/chat.py",
-          "line": 50,
-          "end_line": 76,
+          "line": 51,
           "label": "chat routes"
         },
         {
           "path": "src/chatbot/api/routes/threads.py",
           "line": 119,
-          "end_line": 145,
           "label": "remember route"
         }
       ]
@@ -109,7 +191,7 @@
       "label": "PII redaction",
       "sublabel": "email · card · phone · IP",
       "pos": [
-        490,
+        695,
         184
       ],
       "size": [
@@ -137,7 +219,7 @@
       "label": "Agent loop",
       "sublabel": "create_agent + middleware",
       "pos": [
-        790,
+        990,
         348
       ],
       "size": [
@@ -147,8 +229,7 @@
       "sources": [
         {
           "path": "src/chatbot/agent/builder.py",
-          "line": 65,
-          "end_line": 115,
+          "line": 132,
           "label": "build_graph"
         },
         {
@@ -169,9 +250,9 @@
       "id": "llm",
       "type": "external",
       "label": "OpenAI-compatible API",
-      "sublabel": "chat · summary · memory · judge",
+      "sublabel": "server's key or the user's own",
       "pos": [
-        790,
+        990,
         184
       ],
       "size": [
@@ -181,15 +262,13 @@
       "sources": [
         {
           "path": "src/chatbot/agent/builder.py",
-          "line": 42,
-          "end_line": 62,
+          "line": 44,
           "label": "build_llm"
         },
         {
-          "path": "src/chatbot/api/dependencies.py",
-          "line": 76,
-          "end_line": 80,
-          "label": "memory model"
+          "path": "src/chatbot/agent/middleware.py",
+          "line": 105,
+          "label": "UserModel"
         },
         {
           "path": "src/chatbot/config.py",
@@ -204,11 +283,11 @@
       "label": "Approval gate",
       "sublabel": "HITL on sensitive queries",
       "pos": [
-        1130,
+        1255,
         184
       ],
       "size": [
-        180,
+        170,
         64
       ],
       "sources": [
@@ -220,8 +299,7 @@
         },
         {
           "path": "src/chatbot/agent/builder.py",
-          "line": 105,
-          "end_line": 106,
+          "line": 178,
           "label": "HumanInTheLoopMiddleware"
         }
       ]
@@ -232,11 +310,11 @@
       "label": "web_search",
       "sublabel": "ddgs · backend fallback",
       "pos": [
-        1405,
+        1510,
         184
       ],
       "size": [
-        180,
+        170,
         64
       ],
       "sources": [
@@ -254,11 +332,11 @@
       "label": "DuckDuckGo",
       "sublabel": "keyless, then auto",
       "pos": [
-        1405,
+        1510,
         40
       ],
       "size": [
-        180,
+        170,
         64
       ],
       "sources": [
@@ -275,11 +353,11 @@
       "label": "search_knowledge_base",
       "sublabel": "hybrid · RRF · rerank",
       "pos": [
-        1130,
+        1255,
         348
       ],
       "size": [
-        180,
+        170,
         64
       ],
       "sources": [
@@ -303,11 +381,11 @@
       "label": "Embeddings API",
       "sublabel": "text-embedding-3-small",
       "pos": [
-        1405,
+        1510,
         348
       ],
       "size": [
-        180,
+        170,
         64
       ],
       "sources": [
@@ -325,11 +403,11 @@
       "label": "threads",
       "sublabel": "owner · title · activity",
       "pos": [
-        140,
+        638,
         552
       ],
       "size": [
-        180,
+        145,
         64
       ],
       "sources": [
@@ -353,11 +431,11 @@
       "label": "checkpoints",
       "sublabel": "graph state per thread",
       "pos": [
-        380,
+        808,
         552
       ],
       "size": [
-        180,
+        150,
         64
       ],
       "sources": [
@@ -375,7 +453,7 @@
       "label": "memories",
       "sublabel": "store · vector index · TTL",
       "pos": [
-        790,
+        990,
         552
       ],
       "size": [
@@ -409,11 +487,11 @@
       "label": "chunks",
       "sublabel": "pgvector + tsvector",
       "pos": [
-        1130,
+        1255,
         552
       ],
       "size": [
-        180,
+        170,
         64
       ],
       "sources": [
@@ -431,11 +509,11 @@
       "label": "Retention job",
       "sublabel": "nightly CLI",
       "pos": [
-        380,
+        808,
         746
       ],
       "size": [
-        180,
+        150,
         64
       ],
       "sources": [
@@ -453,7 +531,7 @@
       "label": "MemoryWriter",
       "sublabel": "summary · idle · remember",
       "pos": [
-        790,
+        990,
         746
       ],
       "size": [
@@ -487,11 +565,11 @@
       "label": "Ingestion CLI",
       "sublabel": "load · chunk · embed",
       "pos": [
-        1405,
+        1510,
         746
       ],
       "size": [
-        180,
+        170,
         64
       ],
       "sources": [
@@ -515,7 +593,7 @@
       "label": "Eval suites",
       "sublabel": "make eval · DeepEval",
       "pos": [
-        790,
+        990,
         40
       ],
       "size": [
@@ -549,7 +627,7 @@
       "label": "CI eval check",
       "sublabel": "no model calls",
       "pos": [
-        490,
+        695,
         40
       ],
       "size": [
@@ -579,6 +657,7 @@
       "wraps": [
         "threads",
         "checkpoints",
+        "users",
         "memories",
         "chunks"
       ]
@@ -593,11 +672,32 @@
       "variant": "emphasis"
     },
     {
-      "id": "ui-api",
+      "id": "ui-auth",
       "from": "ui",
-      "to": "api",
-      "label": "REST + SSE",
+      "to": "auth",
+      "label": "Bearer JWT",
       "variant": "emphasis"
+    },
+    {
+      "id": "auth-api",
+      "from": "auth",
+      "to": "api",
+      "label": "signed-in user",
+      "variant": "emphasis"
+    },
+    {
+      "id": "auth-redis",
+      "from": "auth",
+      "to": "redis",
+      "label": "count requests",
+      "variant": "security"
+    },
+    {
+      "id": "auth-users",
+      "from": "auth",
+      "to": "users",
+      "label": "account lookup",
+      "variant": "security"
     },
     {
       "id": "api-pii",
@@ -758,6 +858,16 @@
         "User messages are redacted in the API before the agent runs; PIIMiddleware redacts tool results and replies, and the SSE stream is redacted too",
         "web_search pauses for approval when the query has sensitive terms or an order number",
         "New messages to a paused thread get 409"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "Accounts and limits (Phase 8)",
+      "items": [
+        "Register and log in at /auth (argon2id passwords); every request needs an HS256 JWT whose account still exists",
+        "Per-user and per-IP moving-window limits in Redis, tighter for log-in; over a limit is 429 with Retry-After",
+        "A daily token budget per user, counted after each model call; checked before a run starts. Redis down lets requests through",
+        "Optional own OpenAI-compatible URL and key, checked at login and kept in the UI session; that user's runs use it"
       ]
     },
     {
