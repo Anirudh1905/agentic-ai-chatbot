@@ -220,5 +220,7 @@ __marimo__/
 .streamlit/secrets.toml
 
 data/*
+# The fictional Acme Outfitters docs: the sample knowledge base, ingested by Tilt and the evals.
+!data/sample/
 # DeepEval writes run data here (make eval)
 .deepeval/
