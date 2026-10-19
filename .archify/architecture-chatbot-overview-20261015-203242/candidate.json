@@ -10,7 +10,7 @@
       "url": "https://github.com/Anirudh1905/agentic-ai-chatbot.git",
       "provider": "github",
       "link_mode": "web",
-      "revision": "4177fe25c54b016b43a35f4ee131469ff92074c4"
+      "revision": "885f2bd5f4731533968945bd6d3f22e09e8afe1e"
     }
   },
   "components": [
@@ -56,12 +56,12 @@
         },
         {
           "path": "ui/app.py",
-          "line": 398,
+          "line": 408,
           "label": "Remember this"
         },
         {
           "path": "ui/app.py",
-          "line": 421,
+          "line": 441,
           "label": "resume + /chat/stream"
         }
       ]
@@ -81,18 +81,18 @@
       ],
       "sources": [
         {
-          "path": "src/chatbot/api/auth.py",
-          "line": 51,
+          "path": "src/chatbot/api/security.py",
+          "line": 48,
           "label": "get_current_user"
         },
         {
-          "path": "src/chatbot/api/auth.py",
-          "line": 126,
+          "path": "src/chatbot/api/routes/auth.py",
+          "line": 38,
           "label": "login + BYOK check"
         },
         {
-          "path": "src/chatbot/api/auth.py",
-          "line": 80,
+          "path": "src/chatbot/api/security.py",
+          "line": 77,
           "label": "limited_user"
         }
       ]
@@ -112,13 +112,13 @@
       ],
       "sources": [
         {
-          "path": "src/chatbot/usage.py",
-          "line": 41,
+          "path": "src/chatbot/accounts/limits.py",
+          "line": 42,
           "label": "UsageLimits"
         },
         {
-          "path": "src/chatbot/usage.py",
-          "line": 113,
+          "path": "src/chatbot/accounts/limits.py",
+          "line": 116,
           "label": "SpendTokens"
         },
         {
@@ -148,8 +148,8 @@
           "label": "users table"
         },
         {
-          "path": "src/chatbot/users.py",
-          "line": 44,
+          "path": "src/chatbot/accounts/users.py",
+          "line": 46,
           "label": "PostgresUserStore"
         }
       ]
@@ -158,7 +158,7 @@
       "id": "api",
       "type": "backend",
       "label": "FastAPI API",
-      "sublabel": "/auth · /chat · /threads · /me/memory",
+      "sublabel": "/auth · /chat · /threads · /me",
       "pos": [
         695,
         348
@@ -179,9 +179,9 @@
           "label": "chat routes"
         },
         {
-          "path": "src/chatbot/api/routes/threads.py",
-          "line": 119,
-          "label": "remember route"
+          "path": "src/chatbot/api/routes/me.py",
+          "line": 58,
+          "label": "DELETE /me"
         }
       ]
     },
@@ -201,14 +201,12 @@
       "sources": [
         {
           "path": "src/chatbot/api/runs.py",
-          "line": 74,
-          "end_line": 81,
+          "line": 81,
           "label": "redact before invoke"
         },
         {
-          "path": "src/chatbot/pii.py",
-          "line": 55,
-          "end_line": 69,
+          "path": "src/chatbot/guardrails/pii.py",
+          "line": 56,
           "label": "RULES, redact_pii"
         }
       ]
@@ -229,19 +227,17 @@
       "sources": [
         {
           "path": "src/chatbot/agent/builder.py",
-          "line": 132,
+          "line": 138,
           "label": "build_graph"
         },
         {
           "path": "src/chatbot/memory/short_term.py",
           "line": 71,
-          "end_line": 93,
           "label": "summarize after reply"
         },
         {
-          "path": "src/chatbot/pii.py",
-          "line": 92,
-          "end_line": 106,
+          "path": "src/chatbot/guardrails/pii.py",
+          "line": 95,
           "label": "PIIMiddleware on outputs"
         }
       ]
@@ -262,17 +258,17 @@
       "sources": [
         {
           "path": "src/chatbot/agent/builder.py",
-          "line": 44,
+          "line": 50,
           "label": "build_llm"
         },
         {
           "path": "src/chatbot/agent/middleware.py",
-          "line": 105,
+          "line": 143,
           "label": "UserModel"
         },
         {
           "path": "src/chatbot/config.py",
-          "line": 41,
+          "line": 53,
           "label": "JUDGE_MODEL"
         }
       ]
@@ -293,13 +289,12 @@
       "sources": [
         {
           "path": "src/chatbot/agent/approvals.py",
-          "line": 22,
-          "end_line": 68,
+          "line": 32,
           "label": "interrupt_on policy"
         },
         {
           "path": "src/chatbot/agent/builder.py",
-          "line": 178,
+          "line": 185,
           "label": "HumanInTheLoopMiddleware"
         }
       ]
@@ -320,8 +315,7 @@
       "sources": [
         {
           "path": "src/chatbot/tools/web_search.py",
-          "line": 37,
-          "end_line": 63,
+          "line": 38,
           "label": "search()"
         }
       ]
@@ -342,7 +336,7 @@
       "sources": [
         {
           "path": "src/chatbot/tools/web_search.py",
-          "line": 16,
+          "line": 17,
           "label": "BACKENDS"
         }
       ]
@@ -363,14 +357,12 @@
       "sources": [
         {
           "path": "src/chatbot/tools/rag.py",
-          "line": 105,
-          "end_line": 137,
+          "line": 106,
           "label": "retrieve()"
         },
         {
           "path": "src/chatbot/tools/rerank.py",
-          "line": 26,
-          "end_line": 58,
+          "line": 22,
           "label": "cross-encoder"
         }
       ]
@@ -390,9 +382,8 @@
       ],
       "sources": [
         {
-          "path": "src/chatbot/embeddings.py",
-          "line": 7,
-          "end_line": 15,
+          "path": "src/chatbot/storage/embeddings.py",
+          "line": 8,
           "label": "OpenAIEmbeddings"
         }
       ]
@@ -413,14 +404,12 @@
       "sources": [
         {
           "path": "migrations/versions/0002_threads.py",
-          "line": 18,
-          "end_line": 28,
+          "line": 19,
           "label": "threads table"
         },
         {
           "path": "src/chatbot/memory/threads.py",
-          "line": 70,
-          "end_line": 84,
+          "line": 30,
           "label": "claim()"
         }
       ]
@@ -441,8 +430,7 @@
       "sources": [
         {
           "path": "src/chatbot/api/dependencies.py",
-          "line": 49,
-          "end_line": 51,
+          "line": 51,
           "label": "AsyncPostgresSaver"
         }
       ]
@@ -463,20 +451,17 @@
       "sources": [
         {
           "path": "src/chatbot/api/dependencies.py",
-          "line": 56,
-          "end_line": 66,
+          "line": 58,
           "label": "AsyncPostgresStore + TTL"
         },
         {
           "path": "src/chatbot/memory/long_term/store.py",
           "line": 27,
-          "end_line": 35,
           "label": "recall()"
         },
         {
           "path": "src/chatbot/memory/long_term/middleware.py",
-          "line": 39,
-          "end_line": 62,
+          "line": 40,
           "label": "recall each turn"
         }
       ]
@@ -497,8 +482,7 @@
       "sources": [
         {
           "path": "migrations/versions/0001_chunks.py",
-          "line": 20,
-          "end_line": 43,
+          "line": 22,
           "label": "chunks table"
         }
       ]
@@ -520,7 +504,6 @@
         {
           "path": "src/chatbot/memory/retention.py",
           "line": 64,
-          "end_line": 89,
           "label": "prune_checkpoints"
         }
       ]
@@ -541,20 +524,17 @@
       "sources": [
         {
           "path": "src/chatbot/memory/long_term/writer.py",
-          "line": 79,
-          "end_line": 117,
+          "line": 66,
           "label": "triggers"
         },
         {
           "path": "src/chatbot/memory/long_term/facts.py",
-          "line": 19,
-          "end_line": 27,
+          "line": 24,
           "label": "never stored"
         },
         {
           "path": "src/chatbot/memory/long_term/writer.py",
-          "line": 249,
-          "end_line": 263,
+          "line": 263,
           "label": "advisory lock"
         }
       ]
@@ -576,13 +556,11 @@
         {
           "path": "src/chatbot/ingestion/pipeline.py",
           "line": 49,
-          "end_line": 106,
           "label": "ingest_file"
         },
         {
           "path": "src/chatbot/ingestion/pipeline.py",
           "line": 109,
-          "end_line": 119,
           "label": "--prune"
         }
       ]
@@ -604,20 +582,17 @@
         {
           "path": "tests/evals/run.py",
           "line": 61,
-          "end_line": 147,
           "label": "make eval"
         },
         {
           "path": "tests/evals/judge.py",
           "line": 27,
-          "end_line": 56,
           "label": "JudgeModel"
         },
         {
-          "path": "tests/evals/suites/judged.py",
-          "line": 40,
-          "end_line": 112,
-          "label": "judged metrics"
+          "path": "tests/evals/agent_runs.py",
+          "line": 115,
+          "label": "scores to Langfuse"
         }
       ]
     },
@@ -638,14 +613,74 @@
         {
           "path": "tests/evals/check.py",
           "line": 39,
-          "end_line": 82,
           "label": "make eval-check"
         },
         {
           "path": ".github/workflows/ci.yml",
-          "line": 40,
-          "end_line": 41,
+          "line": 41,
           "label": "CI step"
+        }
+      ]
+    },
+    {
+      "id": "metrics",
+      "type": "cloud",
+      "label": "Prometheus · Grafana",
+      "sublabel": "scrape · dashboard · 7 alerts",
+      "pos": [
+        455,
+        40
+      ],
+      "size": [
+        160,
+        64
+      ],
+      "sources": [
+        {
+          "path": "src/chatbot/observability/metrics.py",
+          "line": 17,
+          "label": "metric definitions"
+        },
+        {
+          "path": "ops/prometheus/alerts.yml",
+          "line": 7,
+          "label": "alert rules"
+        },
+        {
+          "path": "ops/grafana/dashboards/chatbot.json",
+          "line": 3,
+          "label": "Chatbot dashboard"
+        }
+      ]
+    },
+    {
+      "id": "langfuse",
+      "type": "external",
+      "label": "Langfuse",
+      "sublabel": "traces · eval scores",
+      "pos": [
+        1255,
+        40
+      ],
+      "size": [
+        170,
+        64
+      ],
+      "sources": [
+        {
+          "path": "src/chatbot/observability/tracing.py",
+          "line": 50,
+          "label": "trace_metadata"
+        },
+        {
+          "path": "src/chatbot/observability/tracing.py",
+          "line": 32,
+          "label": "build_callbacks"
+        },
+        {
+          "path": "ops/langfuse/docker-compose.yml",
+          "line": 52,
+          "label": "langfuse-web"
         }
       ]
     }
@@ -848,6 +883,27 @@
       "to": "evalcheck",
       "label": "report.json",
       "variant": "dashed"
+    },
+    {
+      "id": "metrics-api",
+      "from": "metrics",
+      "to": "api",
+      "label": "scrape /metrics",
+      "variant": "dashed"
+    },
+    {
+      "id": "agent-langfuse",
+      "from": "agent",
+      "to": "langfuse",
+      "label": "run traces",
+      "variant": "dashed"
+    },
+    {
+      "id": "evals-langfuse",
+      "from": "evals",
+      "to": "langfuse",
+      "label": "scores",
+      "variant": "dashed"
     }
   ],
   "cards": [
@@ -867,7 +923,8 @@
         "Register and log in at /auth (argon2id passwords); every request needs an HS256 JWT whose account still exists",
         "Per-user and per-IP moving-window limits in Redis, tighter for log-in; over a limit is 429 with Retry-After",
         "A daily token budget per user, counted after each model call; checked before a run starts. Redis down lets requests through",
-        "Optional own OpenAI-compatible URL and key, checked at login and kept in the UI session; that user's runs use it"
+        "Optional own OpenAI-compatible URL and key, checked at login and kept in the UI session; that user's runs use it",
+        "DELETE /me deletes the account with every thread, checkpoint and memory"
       ]
     },
     {
@@ -892,6 +949,16 @@
       ]
     },
     {
+      "dot": "orange",
+      "title": "Observability (Phase 8)",
+      "items": [
+        "Each run's trace: chat or resume, the thread as session, an HMAC of the user id, tags; Langfuse adds model calls, tokens, tool calls and approval pauses",
+        "GET /metrics: latency by route, time to first token, model latency, tokens and errors, tool outcomes, approvals, PII redactions, memory recall, 429s",
+        "Prometheus scrapes it every 15 s; Grafana's Chatbot dashboard and 7 alert rules (down, errors, slow first token or model, token spike, PII in replies) read it",
+        "make eval sends each metric's verdict to its run's trace"
+      ]
+    },
+    {
       "dot": "amber",
       "title": "Reliability",
       "items": [
@@ -904,7 +971,7 @@
       "dot": "slate",
       "title": "Optional",
       "items": [
-        "Langfuse tracing when LANGFUSE keys are set",
+        "Tracing needs the LANGFUSE keys; the local Langfuse ships with them",
         "MEMORY_ENABLED, PII_ENABLED, HITL_ENABLED and WEB_SEARCH_ENABLED switch features off",
         "Empty RERANKER_MODEL disables reranking"
       ]
