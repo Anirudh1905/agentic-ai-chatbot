@@ -7,10 +7,13 @@ kind: Job
 metadata:
   name: migrate
 spec:
-  backoffLimit: 3
+  # Applied together with Postgres, it fails until Postgres accepts connections: retries 10 s,
+  # 20 s, 40 s… apart cover about 5 minutes. Never restarts a container in place but starts a new
+  # pod, so a failed attempt's logs survive the Job giving up.
+  backoffLimit: 6
   template:
     spec:
-      restartPolicy: OnFailure
+      restartPolicy: Never
       containers:
         - name: migrate
           image: chatbot

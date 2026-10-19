@@ -1,7 +1,7 @@
 # The CI overlay (Phase 9): the kind overlay with the image CI builds and loads (chatbot:ci), and
 # without what the smoke test doesn't need: the ingest Job calls the embeddings model (CI has no
 # key), the reranker-model Job downloads 570 MB, and pgweb is a dev tool. (postgres-host stays:
-# a NodePort, harmless.)
+# a NodePort, harmless.) Without that Job the model volume is empty, so reranking is off.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
@@ -9,6 +9,13 @@ resources:
 images:
   - name: chatbot
     newTag: ci
+configMapGenerator:
+  - name: app-config
+    namespace: chatbot
+    behavior: merge
+    literals:
+      - RERANKER_MODEL=  # empty turns reranking off; the API's /readyz would wait on the model
+
 patches:
   - target: {kind: Job, name: ingest}
     patch: |-
