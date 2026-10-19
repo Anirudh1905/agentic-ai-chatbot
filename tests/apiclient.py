@@ -16,7 +16,6 @@ from langgraph.store.base import BaseStore
 
 from chatbot.accounts.limits import UsageLimits
 from chatbot.agent.builder import build_graph
-from chatbot.api.auth import create_access_token
 from chatbot.api.dependencies import (
     get_callbacks,
     get_checkpointer,
@@ -28,6 +27,7 @@ from chatbot.api.dependencies import (
     get_writer,
 )
 from chatbot.api.main import app
+from chatbot.api.security import create_access_token
 from chatbot.config import Settings, get_settings
 from chatbot.memory.long_term import MemoryWriter
 

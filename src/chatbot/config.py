@@ -120,7 +120,7 @@ class Settings(BaseSettings):
         "password",
     ]
 
-    # Accounts log in at POST /auth/login (api/auth.py) for a token signed with JWT_SECRET
+    # Accounts log in at POST /auth/login (api/routes/auth.py) for a token signed with JWT_SECRET
     # (HS256); every request needs it as `Authorization: Bearer <JWT>`. Without a secret,
     # every request is refused. At least 32 characters: `openssl rand -hex 32`.
     jwt_secret: SecretStr | None = None

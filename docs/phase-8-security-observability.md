@@ -31,7 +31,7 @@ flowchart LR
     IP & User & Budget -.->|count / read| Redis
 ```
 
-**Accounts and login** (`src/chatbot/api/auth.py`, `src/chatbot/accounts/users.py`, migration `0003_users`), following the login API of [async-agentic-workflows](https://github.com/Anirudh1905/async-agentic-workflows/blob/main/src/agentic_workflows/api/routes/auth.py):
+**Accounts and login** (`src/chatbot/api/routes/auth.py`, `src/chatbot/accounts/users.py`, migration `0003_users`), following the login API of [async-agentic-workflows](https://github.com/Anirudh1905/async-agentic-workflows/blob/main/src/agentic_workflows/api/routes/auth.py):
 
 ```mermaid
 sequenceDiagram
@@ -100,7 +100,7 @@ sequenceDiagram
 - **A key that stops working mid-session** (revoked, out of credit) gets a 400 or the stream's error event saying so, instead of a 500. Errors from the server's own key are unchanged.
 - Only send keys over HTTPS outside local development: they travel with every request.
 
-**Authentication** (`src/chatbot/api/auth.py`), the same logic as the reference repo. Every route gets the user from one dependency, `get_current_user`; the same file holds the account routes and the `UserId` / `BudgetedUserId` dependencies built on it.
+**Authentication** (`src/chatbot/api/security.py`), the same logic as the reference repo. Every route gets the user from one dependency, `get_current_user`; the same file holds `create_access_token` and the `UserId` / `BudgetedUserId` dependencies built on it. The `/auth` endpoints are in `routes/auth.py`, with every other route.
 
 ```mermaid
 flowchart TB
@@ -199,7 +199,7 @@ For `curl`, log in for a token: `curl -s localhost:8000/auth/login -d 'username=
 
 | File | Change |
 | --- | --- |
-| `src/chatbot/api/auth.py` (new) | Everything about who's calling: the `/auth` routes, `create_access_token`, `get_current_user` (decode, then look the account up), and the `UserId` / `BudgetedUserId` dependencies |
+| `src/chatbot/api/security.py`, `api/routes/auth.py` (new) | Who's calling: `create_access_token`, `get_current_user` (decode, then look the account up), and the `UserId` / `BudgetedUserId` dependencies; the `/auth` routes |
 | `src/chatbot/agent/builder.py`, `agent/middleware.py` | `check_credentials`; `build_llm(credentials=...)`; the `UserModel` middleware and `UserModelError` |
 | `src/chatbot/config.py` (`RunContext`) | `ModelCredentials`, carried in the run context |
 | `src/chatbot/accounts/users.py` (new) | `UserStore`: create, authenticate (argon2id, dummy hash for unknown emails), get (every request) |

@@ -5,10 +5,9 @@ from fastapi import Depends, FastAPI, Request, status
 from fastapi.responses import JSONResponse
 
 from chatbot.agent.middleware import UserModelError
-from chatbot.api import auth
 from chatbot.api.dependencies import limit_ip, resources
 from chatbot.api.middleware import RequestMiddleware
-from chatbot.api.routes import chat, health, me, threads
+from chatbot.api.routes import auth, chat, health, me, threads
 from chatbot.config import get_settings
 from chatbot.observability.logs import configure_logging
 from chatbot.observability.metrics import RUN_ERRORS

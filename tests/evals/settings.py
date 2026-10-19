@@ -17,7 +17,7 @@ FROM_ENV = (
     "langfuse_secret_key",
     "langfuse_host",
     "log_level",
-    # API only (api/auth.py, accounts/limits.py)
+    # API only (api/security.py, accounts/limits.py)
     "jwt_secret",
     "jwt_ttl_minutes",
     "rate_limits_enabled",

@@ -1,7 +1,7 @@
 """Accounts: an email and an argon2id password hash per user (the `users` table).
 
 The login endpoints create and check accounts, and every request looks its token's user up
-here (api/auth.py), so a deleted account's token stops working.
+here (api/security.py), so a deleted account's token stops working.
 """
 
 from dataclasses import dataclass

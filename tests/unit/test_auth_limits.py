@@ -1,6 +1,7 @@
-"""Accounts and JWT authentication (api/auth.py), and rate limits and the token budget
-(accounts/limits.py), over the API. Limits use the `limits` library's in-memory store here;
-Redis in the app. Every test client has the accounts alice, bob and carol (apiclient.ACCOUNTS)."""
+"""Accounts and JWT authentication (api/routes/auth.py, api/security.py), and rate limits and
+the token budget (accounts/limits.py), over the API. Limits use the `limits` library's in-memory
+store here; Redis in the app. Every test client has the accounts alice, bob and carol
+(apiclient.ACCOUNTS)."""
 
 import logging
 from datetime import UTC, datetime, timedelta
@@ -20,9 +21,9 @@ from chatbot.accounts.limits import UsageLimits
 from chatbot.agent import builder
 from chatbot.agent.builder import check_credentials
 from chatbot.agent.middleware import UserModel
-from chatbot.api import auth as auth_module
 from chatbot.api.dependencies import get_users
 from chatbot.api.main import app
+from chatbot.api.routes import auth as auth_module
 from chatbot.config import ModelCredentials, Settings, get_settings
 
 SECRET = AUTH.jwt_secret.get_secret_value()  # type: ignore[union-attr]

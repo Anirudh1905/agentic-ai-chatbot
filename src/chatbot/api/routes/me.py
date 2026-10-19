@@ -6,9 +6,9 @@ from contextlib import nullcontext
 
 from fastapi import APIRouter, HTTPException, Response, status
 
-from chatbot.api.auth import UserId
 from chatbot.api.dependencies import Checkpointer, Store, Threads, Users, Writer
 from chatbot.api.schemas import Memory, MemoryList
+from chatbot.api.security import UserId
 from chatbot.memory.long_term import delete, forget_user, list_memories, namespace
 
 logger = logging.getLogger(__name__)

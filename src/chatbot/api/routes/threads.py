@@ -11,7 +11,6 @@ from sse_starlette.sse import EventSourceResponse
 
 from chatbot.agent.approvals import pending_request
 from chatbot.agent.builder import Agent
-from chatbot.api.auth import BudgetedUserId, UserCredentials, UserId
 from chatbot.api.dependencies import (
     Callbacks,
     Checkpointer,
@@ -30,6 +29,7 @@ from chatbot.api.schemas import (
     ThreadInfo,
     ThreadMessages,
 )
+from chatbot.api.security import BudgetedUserId, UserCredentials, UserId
 from chatbot.api.streaming import stream_run
 from chatbot.config import RunContext
 from chatbot.memory.long_term import cursor_namespace

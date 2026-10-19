@@ -28,7 +28,7 @@ The phase plans and as-built docs are in [docs/](docs/); the [Status](#status) t
 src/chatbot/
 ├── config.py       # every setting (env, /run/secrets, .env), and RunContext (the run's user)
 ├── agent/          # builder.py (create_agent + middleware), middleware.py (prompt, call limit, metrics), approvals.py (HITL rules)
-├── api/            # main.py, routes/ (chat, threads, me: memories and account, health: /healthz and /metrics), auth.py (accounts, login, JWT), runs.py, streaming.py (SSE), dependencies.py
+├── api/            # main.py, routes/ (auth, chat, threads, me: memories and account, health: /healthz and /metrics), security.py (the JWT and the signed-in user), runs.py, streaming.py (SSE), dependencies.py
 ├── accounts/       # users.py (email and argon2id hash), limits.py (rate limits and the daily token budget, Redis)
 ├── guardrails/     # pii.py: redaction rules, PIIMiddleware for outputs, the SSE stream redactor
 ├── memory/         # short_term.py (summarization), long_term/ (user memories: facts, store, writer, middleware), threads.py, retention.py
