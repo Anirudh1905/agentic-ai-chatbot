@@ -4,7 +4,7 @@ from datetime import timedelta
 from functools import lru_cache
 from typing import Annotated, Any
 
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Depends, Request
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.messages import AnyMessage
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -22,6 +22,8 @@ from chatbot.memory.threads import PostgresThreadStore, ThreadStore
 from chatbot.observability import build_callbacks
 from chatbot.tools.registry import build_tools
 from chatbot.tools.rerank import build_reranker
+from chatbot.usage import UsageLimits
+from chatbot.users import PostgresUserStore, UserStore
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +87,7 @@ class Resources:
                 checkpointer=checkpointer,
                 store=store,
                 memory_writer=self.writer,
+                usage=get_limits(),
                 interrupt_on=interrupt_on(tools, settings.hitl_sensitive_terms)
                 if settings.hitl_enabled
                 else None,
@@ -162,12 +165,32 @@ async def get_threads() -> ThreadStore:
     return resources.threads
 
 
-async def get_user_id(x_user_id: Annotated[str | None, Header()] = None) -> str:
-    # Stand-in for authentication until Phase 8: callers say who they are, and every thread
-    # is scoped to that ID. Real auth replaces this function and nothing else.
-    if not x_user_id:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing X-User-Id header")
-    return x_user_id
+async def get_users() -> UserStore:
+    await resources.ensure()
+    assert resources.pool is not None
+    return PostgresUserStore(resources.pool)
+
+
+@lru_cache
+def get_limits() -> UsageLimits | None:
+    settings = get_settings()
+    return UsageLimits(settings) if settings.rate_limits_enabled else None
+
+
+Limits = Annotated[UsageLimits | None, Depends(get_limits)]
+
+
+async def limit_ip(request: Request, limits: Limits) -> None:
+    """Per client IP, before authentication, so a flood of bad tokens is limited too. Behind a
+    proxy, run uvicorn with --proxy-headers so this is the client's address."""
+    if limits and request.client:
+        await limits.limit_ip(request.client.host)
+
+
+async def limit_login(request: Request, limits: Limits) -> None:
+    """Register and log-in attempts per client IP, against password guessing."""
+    if limits and request.client:
+        await limits.limit_login(request.client.host)
 
 
 @lru_cache
@@ -178,7 +201,7 @@ def get_callbacks() -> list[BaseCallbackHandler]:
 Graph = Annotated[Agent, Depends(get_graph)]
 Checkpointer = Annotated[BaseCheckpointSaver[Any], Depends(get_checkpointer)]
 Threads = Annotated[ThreadStore, Depends(get_threads)]
+Users = Annotated[UserStore, Depends(get_users)]
 Store = Annotated[BaseStore, Depends(get_store)]
 Writer = Annotated[MemoryWriter | None, Depends(get_writer)]
-UserId = Annotated[str, Depends(get_user_id)]
 Callbacks = Annotated[list[BaseCallbackHandler], Depends(get_callbacks)]

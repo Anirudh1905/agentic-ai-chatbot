@@ -17,22 +17,24 @@ The phase plans and as-built docs are in [docs/](docs/); the [Status](#status) t
 | [5. PII redaction](docs/phase-5-pii-detection-masking.md) | Emails, cards, phones and IPs redacted from messages, tool results, replies and the stream | Built |
 | [6. Long-term memory](docs/phase-6-long-term-memory.md) | Per-fact memories per user across threads: pushed at the token breach, after 30 idle minutes, or on request; recalled each turn, closest to the message | Built ([PR #7](https://github.com/Anirudh1905/agentic-ai-chatbot/pull/7)) |
 | [7. Eval gate](docs/phase-7-eval-gate.md) | Golden sets, a judge model (DeepEval) and a regression gate on every PR | Built |
-| [8. Security and observability](docs/phase-8-security-observability.md) | Login, rate limits, traces, metrics, alerts, deleting a user's data | Planned |
+| [8. Security and observability](docs/phase-8-security-observability.md) | Accounts and login (JWT), Redis rate limits and token budgets (built); traces, metrics, alerts, deleting a user's data (planned) | In progress |
 | [9. Reliability and deployment](docs/phase-9-reliability-deployment.md) | Retries and fallbacks, cost controls, container deployment, load test | Planned |
 
-`make check` runs ruff, mypy and the tests (176 at the moment, unit and Postgres integration). `make eval` runs the eval suites against the real model and writes `tests/evals/report.json`, which CI checks on every PR (see [Evals](#evals)).
+`make check` runs ruff, mypy and the tests (193 at the moment, unit and Postgres integration). `make eval` runs the eval suites against the real model and writes `tests/evals/report.json`, which CI checks on every PR (see [Evals](#evals)).
 
 ## Repository layout
 
 ```text
 src/chatbot/
 ├── agent/          # builder.py (create_agent + middleware), middleware.py (prompt, call limit), approvals.py (HITL rules)
-├── api/            # main.py, routes/ (chat, threads, memory, health), runs.py, streaming.py (SSE), dependencies.py
+├── api/            # main.py, routes/ (chat, threads, memory, health), auth.py (accounts, login, JWT), runs.py, streaming.py (SSE), dependencies.py
 ├── memory/         # short_term.py (summarization), long_term/ (user memories: facts, store, writer, middleware), threads.py, retention.py
 ├── tools/          # rag.py (knowledge base), web_search.py, rerank.py, memory.py (remember), registry.py
 ├── ingestion/      # loaders, chunking, indexing CLI
 ├── prompts/        # system.md, summarize.md, memory_extract.md, memory_decide.md
 ├── pii.py          # redaction rules, PIIMiddleware for outputs, the SSE stream redactor
+├── usage.py        # rate limits and the daily token budget (Redis)
+├── users.py        # accounts: email and argon2id password hash
 ├── config.py       # every setting, from .env, and RunContext (the run's user)
 ├── db.py, embeddings.py, observability.py
 ui/app.py           # Streamlit chat UI: threads, approval card, memory panel
@@ -94,7 +96,14 @@ Behind a TLS-inspecting proxy (such as Cloudflare Gateway or Zscaler), Python us
 
 Every conversation is a thread, saved to Postgres after each graph step by LangGraph's `AsyncPostgresSaver`. Restarting the API, closing the tab or opening the chat in another browser picks the thread up where it left off. The chat UI lists your threads in the sidebar and keeps the current one in the URL (`?thread=...`).
 
-There's no login until Phase 8. Clients identify the user with an `X-User-Id` header, and every thread is visible only to the user who created it. The UI sends `demo-user` by default (`CHATBOT_USER_ID`, or change it in the sidebar).
+Every request needs a JWT in `Authorization: Bearer <token>`; the user is its `sub`, and every thread is visible only to the user who created it. The API checks the token's signature (HS256, `JWT_SECRET`, which `/auth/login` signs with) and expiry, and that its account still exists. The chat UI opens on a login screen: create an account with an email and a password, then log in. Optionally give your own OpenAI-compatible base URL and API key there: the login checks them (and fails, saying so, if they don't work), and your chats then run on them instead of the server's key. They stay in your browser session, sent with each request; the server doesn't store them. To call the API yourself:
+
+```bash
+curl -s localhost:8000/auth/register -H 'content-type: application/json' -d '{"email": "me@example.com", "password": "a-long-password"}'
+TOKEN=$(curl -s localhost:8000/auth/login -d 'username=me@example.com&password=a-long-password' | jq -r .access_token)
+```
+
+Requests are limited per user (`RATE_LIMIT_PER_USER`, 120 a minute) and per IP (`RATE_LIMIT_PER_IP`, 300 a minute), and each user's agent runs to `DAILY_TOKEN_BUDGET` model tokens a day (500,000). Over a limit, the API answers 429 with `Retry-After`. The counts live in Redis (`make up` starts it), so every API process shares them; if Redis is down, requests go through. Details in [the Phase 8 doc](docs/phase-8-security-observability.md).
 
 Long threads stay small: once the messages pass `CONTEXT_MAX_TOKENS`, older turns are folded into a running summary by `SUMMARY_MODEL` and removed from the thread, keeping about the most recent half (and always the current turn) verbatim. This is LangChain's `SummarizationMiddleware`, adjusted to cut only at turn boundaries and to run at the end of a turn, after the reply has streamed (with a check at the start of the next turn as a fallback). Removed messages no longer appear in the chat history; the UI shows the summary in their place.
 
@@ -109,7 +118,7 @@ The agent is LangChain's `create_agent` with middleware, and approvals use its `
 When a run pauses, the chat UI shows an approval card: approve, edit the query, or reject with a reason the bot sees. The thread waits in Postgres for as long as it takes, across restarts. Over the API, `/chat` returns `pending` (and `/chat/stream` sends an `interrupt` event). `POST /threads/{id}/resume` takes one decision per pending call, in the order of `pending.action_requests`:
 
 ```bash
-curl localhost:8000/threads/$THREAD/resume -H 'content-type: application/json' -H 'X-User-Id: me' \
+curl localhost:8000/threads/$THREAD/resume -H 'content-type: application/json' -H "Authorization: Bearer $TOKEN" \
   -d '{"decisions": [{"type": "edit", "edited_action": {"name": "web_search", "args": {"query": "Falcon 9 launch news"}}}]}'
 ```
 
@@ -209,7 +218,7 @@ The credentials in that file are local-only placeholders. To trace somewhere els
 
 ```bash
 curl -N localhost:8000/chat/stream \
-  -H 'content-type: application/json' -H 'X-User-Id: me' \
+  -H 'content-type: application/json' -H "Authorization: Bearer $TOKEN" \
   -d '{"message": "hi"}'
 ```
 
@@ -230,9 +239,12 @@ curl -N localhost:8000/chat/stream \
 | `GET /me/memory` | What the bot remembers about you across threads (your long-term memories), newest first |
 | `DELETE /me/memory/{id}` | Forget one memory |
 | `DELETE /me/memory` | Forget everything |
+| `POST /auth/register` | Create an account (`{email, password}`); 409 if the email is taken |
+| `POST /auth/login` | Log in (form `username` = email, `password`, optionally `openai_api_key` / `openai_base_url`, checked); returns a bearer token |
+| `GET /auth/me` | The signed-in account |
 | `GET /healthz` | Liveness |
 
-All endpoints except `/healthz` need an `X-User-Id` header.
+All endpoints except `/healthz`, `/auth/register` and `/auth/login` need a bearer token (401 without a valid one), and answer 429 with `Retry-After` over a rate limit. The ones that start a model run (`/chat`, `/chat/stream`, `.../resume`, `.../resume/stream`) also answer 429 once the user's daily token budget is spent.
 
 ## Configuration
 
@@ -264,6 +276,13 @@ Set in `.env` (see `.env.example`):
 | `PII_ALLOWED_EMAIL_DOMAINS` | `["acme-outfitters.example"]` | JSON list. Emails at these domains are never redacted |
 | `HITL_ENABLED` | `true` | Pause risky tool calls for approval |
 | `HITL_SENSITIVE_TERMS` | see `config.py` | JSON list. Web searches mentioning these wait for approval |
+| `JWT_SECRET` | unset | What `/auth/login` signs tokens with (HS256) and the API verifies them with. Without it, every request is refused |
+| `JWT_TTL_MINUTES` | `60` | How long a login lasts |
+| `RATE_LIMITS_ENABLED` | `true` | Rate limits and the token budget |
+| `REDIS_URL` | `redis://localhost:6380/0` | Where the limits are counted |
+| `RATE_LIMIT_PER_USER` / `RATE_LIMIT_PER_IP` | `120/minute` / `300/minute` | Requests allowed, in the `limits` library's notation |
+| `RATE_LIMIT_LOGIN` | `10/minute` | Register and log-in attempts per IP |
+| `DAILY_TOKEN_BUDGET` | `500000` | Model tokens per user per UTC day for agent runs; 0 turns it off |
 | `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` | local dev keys | Tracing turns on when both are set |
 | `LANGFUSE_HOST` | `http://localhost:3000` | |
 | `LOG_LEVEL` | `INFO` | `DEBUG` adds HTTP client and access logs |

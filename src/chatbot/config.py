@@ -108,6 +108,26 @@ class Settings(BaseSettings):
         "password",
     ]
 
+    # Accounts log in at POST /auth/login (api/auth.py) for a token signed with JWT_SECRET
+    # (HS256); every request needs it as `Authorization: Bearer <JWT>`. Without a secret,
+    # every request is refused.
+    jwt_secret: SecretStr | None = None
+    # How long a token lasts; then the user logs in again.
+    jwt_ttl_minutes: int = 60
+
+    # Limits (usage.py), counted in Redis so every API process shares them. In the
+    # `limits` library's notation. 0 for DAILY_TOKEN_BUDGET turns the budget off.
+    rate_limits_enabled: bool = True
+    redis_url: str = "redis://localhost:6380/0"
+    # Against abuse, not cost (the token budget is for cost): the UI makes about three reads per
+    # page run (threads, messages, memories), so these leave room for normal use.
+    rate_limit_per_user: str = "120/minute"
+    rate_limit_per_ip: str = "300/minute"
+    # Register and log-in attempts per IP: tighter, against password guessing.
+    rate_limit_login: str = "10/minute"
+    # Model tokens (input + output) a user's runs may use per UTC day.
+    daily_token_budget: int = 500_000
+
     langfuse_public_key: str | None = None
     langfuse_secret_key: SecretStr | None = None
     langfuse_host: str = "http://localhost:3000"
@@ -134,9 +154,20 @@ def get_settings() -> Settings:
 
 
 @dataclass(frozen=True)
+class ModelCredentials:
+    """A user's own OpenAI-compatible endpoint and key, for their runs' model calls. Checked at
+    login and sent by the UI with each request; never stored on the server."""
+
+    base_url: str
+    api_key: SecretStr
+
+
+@dataclass(frozen=True)
 class RunContext:
     """Who a run is for: passed as LangGraph's runtime context (`context=` on every invoke and
     stream) and read by middleware and tools as `runtime.context`. The thread is in the run's
-    config, where the checkpointer needs it."""
+    config, where the checkpointer needs it. With `credentials`, the agent's model calls use
+    the user's endpoint and key instead of the server's (agent/middleware.py)."""
 
     user_id: str
+    credentials: ModelCredentials | None = None

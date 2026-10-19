@@ -17,6 +17,18 @@ services:
       interval: 5s
       retries: 10
 
+  # Rate limits and daily token budgets (src/chatbot/usage.py), shared by every API process.
+  # Counters only: nothing here needs to survive a restart, so no volume. Port 6380 so it
+  # doesn't clash with a local Redis on 6379.
+  redis:
+    image: redis:7.4-alpine
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6380}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 10
+
   # Web UI for browsing the database: chunks, threads, checkpoints. Local dev only.
   pgweb:
     image: sosedoff/pgweb:0.17.0

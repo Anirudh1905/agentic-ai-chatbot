@@ -7,6 +7,7 @@ from collections.abc import Awaitable, Callable
 from datetime import date
 from typing import Any
 
+import openai
 from langchain.agents.middleware import (
     AgentMiddleware,
     AgentState,
@@ -16,13 +17,18 @@ from langchain.agents.middleware import (
     dynamic_prompt,
     hook_config,
 )
+from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage
 from langgraph.runtime import Runtime
 
+from chatbot.config import ModelCredentials, RunContext, Settings
 from chatbot.memory.short_term import close_dangling_tool_calls
 from chatbot.prompts import load_prompt
 
 logger = logging.getLogger(__name__)
+
+# Clients kept for users' own endpoints (UserModel); the oldest is dropped past this.
+MAX_USER_MODELS = 256
 
 
 @dynamic_prompt
@@ -89,3 +95,48 @@ def log_model_call(response: AIMessage, seconds: float) -> None:
     )
     if response.response_metadata.get("finish_reason") == "content_filter":
         logger.warning("response blocked by content filter")
+
+
+class UserModelError(Exception):
+    """The user's own endpoint refused a call (their key was revoked or ran out, say). Shown to
+    the user as is; the server's key isn't involved."""
+
+
+class UserModel(AgentMiddleware[AgentState[Any], Any]):
+    """Runs a user's model calls on their own endpoint and key, when they logged in with one
+    (`RunContext.credentials`): the same model and settings, the user's base URL and key. A
+    client per endpoint and key is cached, so a conversation reuses its connections."""
+
+    def __init__(self, settings: Settings) -> None:
+        super().__init__()
+        self.settings = settings
+        self.clients: dict[tuple[str, str], BaseChatModel] = {}
+
+    def model_for(self, credentials: ModelCredentials) -> BaseChatModel:
+        key = (credentials.base_url, credentials.api_key.get_secret_value())
+        if key not in self.clients:
+            from chatbot.agent.builder import build_llm  # builder imports this module
+
+            if len(self.clients) >= MAX_USER_MODELS:
+                self.clients.pop(next(iter(self.clients)))
+            self.clients[key] = build_llm(self.settings, credentials=credentials)
+        return self.clients[key]
+
+    async def awrap_model_call(
+        self,
+        request: ModelRequest,
+        handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
+    ) -> ModelResponse:
+        context = request.runtime.context if request.runtime else None
+        if not (isinstance(context, RunContext) and context.credentials):
+            return await handler(request)
+        try:
+            return await handler(request.override(model=self.model_for(context.credentials)))
+        except openai.APIStatusError as e:
+            if e.status_code not in (400, 401, 403):
+                raise
+            logger.info("the user's own model endpoint refused a call (%d)", e.status_code)
+            raise UserModelError(
+                f"Your OpenAI credentials were refused ({e.status_code}). Log in again with a "
+                "working key, or without one to use the server's."
+            ) from e

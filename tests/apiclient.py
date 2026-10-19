@@ -5,7 +5,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
 
-from fakes import InMemoryThreadStore, ScriptedChatModel
+from fakes import InMemoryThreadStore, InMemoryUserStore, ScriptedChatModel
 from fastapi.testclient import TestClient
 from langchain.agents.middleware import InterruptOnConfig
 from langchain_core.language_models import BaseChatModel
@@ -15,20 +15,34 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.store.base import BaseStore
 
 from chatbot.agent.builder import build_graph
+from chatbot.api.auth import create_access_token
 from chatbot.api.dependencies import (
     get_callbacks,
     get_checkpointer,
     get_graph,
+    get_limits,
     get_store,
     get_threads,
+    get_users,
     get_writer,
 )
 from chatbot.api.main import app
-from chatbot.config import Settings
+from chatbot.config import Settings, get_settings
 from chatbot.memory.long_term import MemoryWriter
+from chatbot.usage import UsageLimits
 
-ALICE = {"X-User-Id": "alice"}
-BOB = {"X-User-Id": "bob"}
+# Tokens are signed with this secret; the API under test verifies them with it.
+AUTH = Settings(jwt_secret="test-secret-that-is-long-enough-for-hs256")
+# Accounts every test client has, so the tokens below belong to someone.
+ACCOUNTS = ("alice", "bob", "carol")
+
+
+def auth(user_id: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {create_access_token(AUTH, user_id)[0]}"}
+
+
+ALICE = auth("alice")
+BOB = auth("bob")
 
 
 @contextmanager
@@ -39,8 +53,10 @@ def client_for(
     store: BaseStore | None = None,
     summarizer: BaseChatModel | None = None,
     memory_writer: MemoryWriter | None = None,
+    usage: UsageLimits | None = None,
     **settings: Any,
 ) -> Iterator[TestClient]:
+    """`usage`: rate limits and the token budget (in memory), off unless a test passes them."""
     checkpointer = InMemorySaver()
     graph = build_graph(
         Settings(**settings),
@@ -51,6 +67,7 @@ def client_for(
         interrupt_on=interrupt_on,
         store=store,
         memory_writer=memory_writer,
+        usage=usage,
     )
     threads = InMemoryThreadStore()
     app.dependency_overrides[get_graph] = lambda: graph
@@ -59,6 +76,12 @@ def client_for(
     app.dependency_overrides[get_store] = lambda: store
     app.dependency_overrides[get_writer] = lambda: memory_writer
     app.dependency_overrides[get_callbacks] = lambda: []
+    app.dependency_overrides[get_settings] = lambda: AUTH  # what /auth/login signs with
+    app.dependency_overrides[get_limits] = lambda: usage
+    users = InMemoryUserStore()
+    for account in ACCOUNTS:
+        users.add(account)
+    app.dependency_overrides[get_users] = lambda: users
     try:
         with TestClient(app, headers=ALICE) as client:
             yield client

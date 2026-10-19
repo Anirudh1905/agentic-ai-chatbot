@@ -72,8 +72,8 @@ def test_chat_rejects_malformed_thread_id(client: TestClient) -> None:
     assert client.post("/chat", json={"message": "hi", "thread_id": "t1"}).status_code == 422
 
 
-def test_requests_without_a_user_are_rejected(client: TestClient) -> None:
-    headers = {"X-User-Id": ""}
+def test_requests_without_a_token_are_rejected(client: TestClient) -> None:
+    headers = {"Authorization": ""}
     assert client.post("/chat", json={"message": "hi"}, headers=headers).status_code == 401
     assert client.get("/threads", headers=headers).status_code == 401
 

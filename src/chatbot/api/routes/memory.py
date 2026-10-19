@@ -4,7 +4,8 @@ import logging
 
 from fastapi import APIRouter, HTTPException, Response, status
 
-from chatbot.api.dependencies import Store, UserId
+from chatbot.api.auth import UserId
+from chatbot.api.dependencies import Store
 from chatbot.api.schemas import Memory, MemoryList
 from chatbot.memory.long_term import delete, list_memories, namespace
 

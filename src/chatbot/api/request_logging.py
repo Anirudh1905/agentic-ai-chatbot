@@ -46,7 +46,8 @@ class RequestLoggingMiddleware:
         finally:
             path = scope["path"]
             level = logging.DEBUG if path in QUIET_PATHS else logging.INFO
-            user = headers.get(b"x-user-id", b"-").decode()
+            # Set by the auth dependency once the token checks out (api/dependencies.py).
+            user = scope.get("state", {}).get("user_id", "-")
             logger.log(
                 level,
                 "%s %s -> %d in %.2fs (user=%s)",

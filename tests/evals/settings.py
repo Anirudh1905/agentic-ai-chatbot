@@ -2,7 +2,8 @@
 
 A local `.env` often changes some (CONTEXT_MAX_TOKENS=1000 to watch summaries happen), and the
 scores have to be comparable between machines and with `main`. So only where to reach the model
-and the database come from the environment.
+and the database come from the environment, and settings evals never use: they call the agent
+directly, not through the API, so authentication and the limits don't apply.
 """
 
 from chatbot.config import Settings, get_settings
@@ -16,6 +17,14 @@ FROM_ENV = (
     "langfuse_secret_key",
     "langfuse_host",
     "log_level",
+    # API only (api/auth.py, usage.py)
+    "jwt_secret",
+    "jwt_ttl_minutes",
+    "rate_limits_enabled",
+    "redis_url",
+    "rate_limit_per_user",
+    "rate_limit_per_ip",
+    "daily_token_budget",
 )
 
 

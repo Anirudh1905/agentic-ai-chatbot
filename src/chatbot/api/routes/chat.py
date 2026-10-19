@@ -7,7 +7,8 @@ from sse_starlette.sse import EventSourceResponse
 
 from chatbot.agent.approvals import pending_request
 from chatbot.agent.builder import Agent
-from chatbot.api.dependencies import Callbacks, Graph, Threads, UserId
+from chatbot.api.auth import BudgetedUserId, UserCredentials
+from chatbot.api.dependencies import Callbacks, Graph, Threads
 from chatbot.api.runs import chat_response, redact, run_config, thread_config
 from chatbot.api.schemas import ChatRequest, ChatResponse
 from chatbot.api.streaming import stream_run
@@ -49,20 +50,30 @@ async def open_thread(
 
 @router.post("")
 async def chat(
-    body: ChatRequest, graph: Graph, threads: Threads, user_id: UserId, callbacks: Callbacks
+    body: ChatRequest,
+    graph: Graph,
+    threads: Threads,
+    user_id: BudgetedUserId,
+    callbacks: Callbacks,
+    credentials: UserCredentials,
 ) -> ChatResponse:
     thread_id, message = await open_thread(body, user_id, threads, graph)
     result = await graph.ainvoke(
         {"messages": [HumanMessage(message)]},
         config=run_config(thread_id, callbacks),
-        context=RunContext(user_id),
+        context=RunContext(user_id, credentials),
     )
     return await chat_response(graph, result, thread_id)
 
 
 @router.post("/stream")
 async def chat_stream(
-    body: ChatRequest, graph: Graph, threads: Threads, user_id: UserId, callbacks: Callbacks
+    body: ChatRequest,
+    graph: Graph,
+    threads: Threads,
+    user_id: BudgetedUserId,
+    callbacks: Callbacks,
+    credentials: UserCredentials,
 ) -> EventSourceResponse:
     thread_id, message = await open_thread(body, user_id, threads, graph)
     return EventSourceResponse(
@@ -70,7 +81,7 @@ async def chat_stream(
             graph,
             {"messages": [HumanMessage(message)]},
             run_config(thread_id, callbacks),
-            RunContext(user_id),
+            RunContext(user_id, credentials),
             thread_id,
         )
     )

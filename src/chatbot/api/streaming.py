@@ -12,6 +12,7 @@ from langgraph.types import Command
 
 from chatbot.agent.approvals import pending_request
 from chatbot.agent.builder import MODEL_NODE, Agent, AgentState
+from chatbot.agent.middleware import UserModelError
 from chatbot.api.schemas import StreamEvent
 from chatbot.config import RunContext, get_settings
 from chatbot.pii import StreamRedactor
@@ -71,6 +72,8 @@ async def stream_run(
         if pending:
             yield sse(StreamEvent.INTERRUPT, {"thread_id": thread_id, **pending})
         yield sse(StreamEvent.DONE, {"thread_id": thread_id, "pending": pending is not None})
+    except UserModelError as e:
+        yield sse(StreamEvent.ERROR, {"message": str(e)})
     except Exception:
         logger.exception("stream failed")
         yield sse(StreamEvent.ERROR, {"message": "Something went wrong. Please try again."})

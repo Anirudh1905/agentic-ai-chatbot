@@ -6,7 +6,7 @@ from collections.abc import Iterator, Sequence
 from dataclasses import replace
 from datetime import UTC, date, datetime
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from langchain_core.callbacks import CallbackManagerForLLMRun
 from langchain_core.language_models import BaseChatModel
@@ -17,6 +17,7 @@ from langchain_core.tools import BaseTool, tool
 
 from chatbot.memory.long_term.facts import Change, Changes, Fact, Facts
 from chatbot.memory.threads import Thread
+from chatbot.users import DUMMY_HASH, EmailTaken, User, password_hash
 
 
 class ScriptedChatModel(BaseChatModel):
@@ -223,3 +224,31 @@ class InMemoryThreadStore:
     async def idle_between(self, since: datetime, until: datetime) -> list[Thread]:
         rows = [t for t in self.rows.values() if since <= t.updated_at < until]
         return sorted(rows, key=lambda t: t.updated_at)
+
+
+class InMemoryUserStore:
+    """UserStore with real argon2 hashing, so the login tests check the same verification."""
+
+    def __init__(self) -> None:
+        self.rows: dict[str, tuple[User, str]] = {}  # by email
+
+    async def create(self, email: str, password: str) -> User:
+        if email.lower() in self.rows:
+            raise EmailTaken(email)
+        user = User(str(uuid4()), email.lower())
+        self.rows[user.email] = (user, password_hash.hash(password))
+        return user
+
+    async def authenticate(self, email: str, password: str) -> User | None:
+        user, hashed = self.rows.get(email.lower(), (None, DUMMY_HASH))
+        ok = password_hash.verify(password, hashed)
+        return user if user and ok else None
+
+    async def get(self, user_id: str) -> User | None:
+        return next((u for u, _ in self.rows.values() if u.id == user_id), None)
+
+    def add(self, user_id: str, password: str = "test-password") -> User:
+        """An account with a known id, for tests that sign their own tokens."""
+        user = User(user_id, f"{user_id}@example.com")
+        self.rows[user.email] = (user, password_hash.hash(password))
+        return user

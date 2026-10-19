@@ -262,7 +262,7 @@ The store keeps `created_at`, `updated_at` and `expires_at`, and indexes memorie
 | `DELETE /me/memory` | Forget everything |
 | `DELETE /threads/{id}` | Also deletes the thread's cursor. The memories already made from it stay |
 
-All are scoped to the caller's `X-User-Id`, like the thread endpoints.
+All are scoped to the caller (their login token since Phase 8; `X-User-Id` before), like the thread endpoints.
 
 ### UI
 
@@ -365,6 +365,7 @@ A failed push is logged with its traceback (`updating long-term memory failed`).
 ## Trade-offs of this design
 
 - **Health facts can still be stored.** The prompt says to leave them out, but in one end-to-end run "User has asthma" was stored in 2 of 3 runs (0 of 6 in the two runs since). A code check like the entitlement one (dropping facts that name health conditions) would close this.
+- **An update can make a memory vaguer.** Seen while testing Phase 8: "User is planning a trek in Ladakh in April" became "User is planning a trek" after a thread where the user only said "my trek" was pushed. The decide step treated the vaguer mention as an update; it should keep the more specific memory.
 - **Facts reach other threads only after a push.** Something said in a thread is known elsewhere once that thread hits its token breach, goes idle for 30 minutes, or the user saves it. Until then, only that thread knows.
 - **A search on every turn.** One embedding call and one vector search per turn (tens of milliseconds against Postgres, plus the embedding). Recalling only when a thread starts was cheaper, but missed what a thread turned to later.
 - **A long thread's recalled set only grows** until the user's memories change. It's bounded by the user's memories, but a thread that wanders over many subjects carries all of them.

@@ -2,6 +2,7 @@
 
 docker_compose('./docker-compose.yml')
 dc_resource('postgres', labels=['infra'])
+dc_resource('redis', labels=['infra'])
 dc_resource('pgweb', labels=['infra'], links=[link('http://localhost:8081', 'pgweb')])
 
 dc_resource('langfuse-web', labels=['langfuse'], links=[link('http://localhost:3000', 'Langfuse')])
@@ -34,7 +35,7 @@ local_resource(
     'api',
     serve_cmd='uv run uvicorn chatbot.api.main:app --reload --port 8000',
     deps=['pyproject.toml', 'uv.lock'],
-    resource_deps=['migrate', 'reranker-model'],
+    resource_deps=['migrate', 'reranker-model', 'redis'],
     readiness_probe=probe(http_get=http_get_action(port=8000, path='/healthz')),
     links=[link('http://localhost:8000/docs', 'API docs')],
     labels=['app'],

@@ -11,13 +11,13 @@ from sse_starlette.sse import EventSourceResponse
 
 from chatbot.agent.approvals import pending_request
 from chatbot.agent.builder import Agent
+from chatbot.api.auth import BudgetedUserId, UserCredentials, UserId
 from chatbot.api.dependencies import (
     Callbacks,
     Checkpointer,
     Graph,
     Store,
     Threads,
-    UserId,
     Writer,
 )
 from chatbot.api.runs import chat_response, redact, run_config
@@ -244,8 +244,9 @@ async def resume_thread(
     thread_id: UUID,
     graph: Graph,
     threads: Threads,
-    user_id: UserId,
+    user_id: BudgetedUserId,
     callbacks: Callbacks,
+    credentials: UserCredentials,
     body: ResumeRequest | None = None,
 ) -> ChatResponse:
     """Continue a paused or interrupted run.
@@ -257,7 +258,9 @@ async def resume_thread(
     """
     await owned_thread(thread_id, user_id, threads)
     config, graph_input = await prepare_resume(thread_id, body, graph, callbacks)
-    result = await graph.ainvoke(graph_input, config=config, context=RunContext(user_id))
+    result = await graph.ainvoke(
+        graph_input, config=config, context=RunContext(user_id, credentials)
+    )
     return await chat_response(graph, result, thread_id)
 
 
@@ -266,15 +269,16 @@ async def resume_thread_stream(
     thread_id: UUID,
     graph: Graph,
     threads: Threads,
-    user_id: UserId,
+    user_id: BudgetedUserId,
     callbacks: Callbacks,
+    credentials: UserCredentials,
     body: ResumeRequest | None = None,
 ) -> EventSourceResponse:
     """Same as POST .../resume, streamed like /chat/stream."""
     await owned_thread(thread_id, user_id, threads)
     config, graph_input = await prepare_resume(thread_id, body, graph, callbacks)
     return EventSourceResponse(
-        stream_run(graph, graph_input, config, RunContext(user_id), thread_id)
+        stream_run(graph, graph_input, config, RunContext(user_id, credentials), thread_id)
     )
 
 

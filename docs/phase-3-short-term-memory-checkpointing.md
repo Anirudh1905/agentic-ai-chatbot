@@ -149,7 +149,7 @@ The saver is created once per process with the shared connection pool, not per r
 
 `POST /chat` and `/chat/stream` take an optional `thread_id` (a UUID). Without one a new thread is created. An unknown ID creates a thread with that ID, so clients can generate their own; the `done` SSE event carries the ID either way.
 
-Always check that the `thread_id` belongs to the authenticated user. A guessable or leaked thread ID otherwise exposes someone else's conversation. Until real auth in Phase 8, the caller identifies itself with an `X-User-Id` header (`get_user_id` in `api/dependencies.py` is the one function auth will replace). Someone else's thread answers 404, the same as a missing one, so IDs can't be probed.
+Always check that the `thread_id` belongs to the authenticated user. A guessable or leaked thread ID otherwise exposes someone else's conversation. The user comes from the caller's login token since Phase 8 (`get_current_user` in `api/auth.py`; before that, an `X-User-Id` header). Someone else's thread answers 404, the same as a missing one, so IDs can't be probed.
 
 If a run dies mid tool call and the user sends a new message instead of resuming, the thread holds a tool call with no result, which the model API rejects. `ModelCallMiddleware` (`close_dangling_tool_calls`) adds a placeholder result to what the model is sent; the stored state isn't changed. LangChain has no built-in for this.
 
