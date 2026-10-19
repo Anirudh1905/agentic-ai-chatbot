@@ -29,6 +29,17 @@ services:
       interval: 5s
       retries: 10
 
+  # The queue memory pushes go through (chatbot/jobs), standing in for Amazon SQS: a FIFO queue
+  # grouped by user and its dead-letter queue (ops/elasticmq/elasticmq.conf). Messages are kept
+  # on a volume, so queued pushes survive a restart.
+  elasticmq:
+    image: softwaremill/elasticmq-native:1.6.11
+    volumes:
+      - ./ops/elasticmq/elasticmq.conf:/opt/elasticmq.conf:ro
+      - elasticmqdata:/data
+    ports:
+      - "127.0.0.1:${ELASTICMQ_PORT:-9324}:9324"
+
   # Web UI for browsing the database: chunks, threads, checkpoints. Local dev only.
   pgweb:
     image: sosedoff/pgweb:0.17.0
@@ -72,5 +83,6 @@ services:
 
 volumes:
   pgdata:
+  elasticmqdata:
   promdata:
   grafanadata:

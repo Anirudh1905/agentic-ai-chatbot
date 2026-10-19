@@ -3,6 +3,7 @@
 docker_compose('./docker-compose.yml')
 dc_resource('postgres', labels=['infra'])
 dc_resource('redis', labels=['infra'])
+dc_resource('elasticmq', labels=['infra'])
 dc_resource('pgweb', labels=['infra'], links=[link('http://localhost:8081', 'pgweb')])
 dc_resource('prometheus', labels=['metrics'], links=[link('http://localhost:9091/alerts', 'Alerts')])
 dc_resource('grafana', labels=['metrics'], links=[link('http://localhost:3001/d/chatbot', 'Dashboard')])

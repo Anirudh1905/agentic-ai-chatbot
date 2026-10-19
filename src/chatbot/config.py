@@ -113,6 +113,18 @@ class Settings(BaseSettings):
     # API pods set it to false, so N replicas don't run the same scans N times (Phase 9).
     background_jobs: bool = True
 
+    # The queue memory pushes go through (chatbot/jobs, Phase 9): Amazon SQS, or ElasticMQ
+    # standing in for it (SQS_ENDPOINT_URL). Unset SQS_QUEUE_URL means no queue: pushes run in
+    # the process that triggered them, as before Phase 9. A FIFO queue, with a redrive policy to
+    # the dead-letter queue.
+    sqs_queue_url: str | None = None
+    sqs_dead_letter_queue_url: str | None = None
+    sqs_endpoint_url: str | None = None
+    sqs_region: str = "us-east-1"
+    # Only for ElasticMQ, which accepts any; on AWS leave them unset and use the pod's IAM role.
+    sqs_access_key_id: str | None = None
+    sqs_secret_access_key: SecretStr | None = None
+
     # Human approval before risky tool calls (see agent/approvals.py).
     hitl_enabled: bool = True
     # Web searches mentioning any of these (whole words, any case) wait for approval, since the

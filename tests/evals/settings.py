@@ -25,6 +25,14 @@ FROM_ENV = (
     "rate_limit_per_user",
     "rate_limit_per_ip",
     "daily_token_budget",
+    # Deployment only (Phase 9)
+    "background_jobs",
+    "sqs_queue_url",
+    "sqs_dead_letter_queue_url",
+    "sqs_endpoint_url",
+    "sqs_region",
+    "sqs_access_key_id",
+    "sqs_secret_access_key",
 )
 
 

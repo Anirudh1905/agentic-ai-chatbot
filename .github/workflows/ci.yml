@@ -21,10 +21,17 @@ jobs:
           --health-cmd "pg_isready -U chatbot"
           --health-interval 5s
           --health-retries 10
+      # Stands in for SQS; the queue tests create their own queues.
+      elasticmq:
+        image: softwaremill/elasticmq-native:1.6.11
+        ports:
+          - 9324:9324
     env:
       TEST_DATABASE_URL: postgresql://chatbot:chatbot@localhost:5432/chatbot
-      # Fail instead of skipping the integration tests if Postgres isn't reachable.
+      TEST_SQS_ENDPOINT: http://localhost:9324
+      # Fail instead of skipping the integration tests if Postgres or ElasticMQ isn't reachable.
       REQUIRE_DB: "1"
+      REQUIRE_SQS: "1"
     steps:
       - uses: actions/checkout@v4
         with:
