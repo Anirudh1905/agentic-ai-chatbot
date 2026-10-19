@@ -12,7 +12,7 @@ import jwt
 import openai
 import pytest
 from apiclient import ALICE, AUTH, BOB, auth, client_for, parse_sse, scripted
-from fakes import ScriptedChatModel
+from fakes import TEST_PASSWORD, ScriptedChatModel
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage
 from pydantic import SecretStr
@@ -116,7 +116,7 @@ NO_TOKEN = {"Authorization": ""}
 
 
 def register(
-    client: TestClient, email: str = "Maya@Example.com", password: str = "s3cret-pass"
+    client: TestClient, email: str = "Maya@Example.com", password: str = TEST_PASSWORD
 ) -> Any:
     return client.post(
         "/auth/register", json={"email": email, "password": password}, headers=NO_TOKEN
@@ -124,7 +124,7 @@ def register(
 
 
 def log_in(
-    client: TestClient, email: str = "maya@example.com", password: str = "s3cret-pass"
+    client: TestClient, email: str = "maya@example.com", password: str = TEST_PASSWORD
 ) -> Any:
     return client.post(
         "/auth/login", data={"username": email, "password": password}, headers=NO_TOKEN
@@ -173,7 +173,7 @@ def test_passwords_are_stored_hashed() -> None:
         register(client)
         users = app.dependency_overrides[get_users]()
     _, stored = users.rows["maya@example.com"]
-    assert "s3cret-pass" not in stored and stored.startswith("$argon2id$")
+    assert TEST_PASSWORD not in stored and stored.startswith("$argon2id$")
 
 
 def test_logging_in_is_limited_per_ip() -> None:
@@ -264,7 +264,7 @@ def test_login_fails_when_the_users_credentials_dont_work(monkeypatch: pytest.Mo
         register(client)
         form = {
             "username": "maya@example.com",
-            "password": "s3cret-pass",
+            "password": TEST_PASSWORD,
             "openai_api_key": "sk-bad",
         }
         r = client.post("/auth/login", data=form, headers=NO_TOKEN)

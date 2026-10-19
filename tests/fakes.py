@@ -2,6 +2,7 @@
 
 import json
 import re
+import secrets
 from collections.abc import Iterator, Sequence
 from dataclasses import replace
 from datetime import UTC, date, datetime
@@ -18,6 +19,9 @@ from langchain_core.tools import BaseTool, tool
 from chatbot.accounts.users import DUMMY_HASH, EmailTaken, User, password_hash
 from chatbot.memory.long_term.facts import Change, Changes, Fact, Facts
 from chatbot.memory.threads import Thread
+
+# Made up per test run, so no password is written in the repo (secret scanners flag those).
+TEST_PASSWORD = secrets.token_urlsafe(16)
 
 
 class ScriptedChatModel(BaseChatModel):
@@ -253,7 +257,7 @@ class InMemoryUserStore:
     async def delete(self, user_id: str) -> None:
         self.rows = {e: (u, h) for e, (u, h) in self.rows.items() if u.id != user_id}
 
-    def add(self, user_id: str, password: str = "test-password") -> User:
+    def add(self, user_id: str, password: str = TEST_PASSWORD) -> User:
         """An account with a known id, for tests that sign their own tokens."""
         user = User(user_id, f"{user_id}@example.com")
         self.rows[user.email] = (user, password_hash.hash(password))
