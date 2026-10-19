@@ -3,7 +3,7 @@ limit. Memory middleware lives in `chatbot.memory` (short_term.py, long_term/)."
 
 import logging
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from datetime import date
 from typing import Any
 
@@ -101,6 +101,12 @@ class ModelCallMiddleware(AgentMiddleware[AgentState[Any], Any]):
 class ToolCallMetrics(AgentMiddleware[AgentState[Any], Any]):
     """Counts tool calls by outcome. Outermost, so a call that failed and then succeeded on
     retry counts once, as ok."""
+
+    def __init__(self, tools: Sequence[str] = ()) -> None:
+        super().__init__()
+        for name in tools:  # each count starts at 0 (observability/metrics.py says why)
+            for outcome in ("ok", "error"):
+                TOOL_CALLS.labels(name, outcome)
 
     async def awrap_tool_call(
         self,

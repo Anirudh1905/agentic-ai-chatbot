@@ -126,6 +126,10 @@ class Settings(BaseSettings):
     sqs_secret_access_key: SecretStr | None = None
     # Where the worker (python -m chatbot.worker) serves its Prometheus metrics.
     worker_metrics_port: int = 9100
+    # With a port, the API serves its metrics there instead of on /metrics, which then answers
+    # 404: the public port (and so the gateway) never exposes them. Set in Kubernetes; unset for
+    # make dev, where Prometheus scrapes /metrics.
+    metrics_port: int | None = None
 
     # Human approval before risky tool calls (see agent/approvals.py).
     hitl_enabled: bool = True

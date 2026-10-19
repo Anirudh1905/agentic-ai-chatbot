@@ -165,7 +165,7 @@ def build_graph(
         # `interrupt_on`, so it never waits for approval: it only writes the user's own memories.
         tools = [*tools, build_remember_tool(writer)]
     middleware: list[AgentMiddleware[Any, Any]] = [
-        ToolCallMetrics(),
+        ToolCallMetrics([t.name for t in tools]),
         # Every turn: recall the user's long-term memories closest to their latest message.
         *([LongTermMemory(settings.memory_recall_limit)] if memory else []),
         # PII in tool results and replies (user messages are redacted earlier, by the API).

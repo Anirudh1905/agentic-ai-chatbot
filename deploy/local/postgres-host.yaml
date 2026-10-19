@@ -1,0 +1,13 @@
+# Postgres on a NodePort, for deploy/local/postgres-host.sh to publish on localhost:5433. Not a
+# Tilt port-forward: kubectl's forward drops whenever the server resets a connection, which the
+# integration tests do on purpose (DROP DATABASE ... WITH (FORCE)).
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-host
+  namespace: chatbot
+spec:
+  type: NodePort
+  selector: {cnpg.io/cluster: postgres, cnpg.io/instanceRole: primary}
+  ports:
+    - {name: postgres, port: 5432, targetPort: 5432, nodePort: 30432}

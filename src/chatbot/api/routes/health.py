@@ -4,11 +4,12 @@ it, and Prometheus scrapes the pods directly)."""
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from fastapi.responses import JSONResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from chatbot.api.dependencies import get_readiness
+from chatbot.config import Settings, get_settings
 
 router = APIRouter(tags=["health"])
 
@@ -27,6 +28,8 @@ async def readyz(ready: Annotated[bool, Depends(get_readiness)]) -> JSONResponse
 
 
 @router.get("/metrics", include_in_schema=False)
-def metrics() -> Response:
-    """For Prometheus (observability/metrics.py)."""
+def metrics(settings: Annotated[Settings, Depends(get_settings)]) -> Response:
+    """For Prometheus (observability/metrics.py), unless METRICS_PORT moved them off this port."""
+    if settings.metrics_port:
+        raise HTTPException(status.HTTP_404_NOT_FOUND)
     return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)

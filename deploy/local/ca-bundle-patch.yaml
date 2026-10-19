@@ -1,0 +1,70 @@
+# Mounts this machine's trust store (ca-bundle.pem, from make secrets) into the pods that make
+# outbound HTTPS calls, so a corporate TLS-inspecting proxy's root is trusted there too.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: api, namespace: chatbot}
+spec:
+  template:
+    spec:
+      containers:
+        - name: api
+          env:
+            - {name: SSL_CERT_FILE, value: /etc/ssl/local/ca-bundle.pem}
+            - {name: REQUESTS_CA_BUNDLE, value: /etc/ssl/local/ca-bundle.pem}
+          volumeMounts:
+            - {name: ca-bundle, mountPath: /etc/ssl/local, readOnly: true}
+      volumes:
+        - name: ca-bundle
+          configMap: {name: ca-bundle}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: worker, namespace: chatbot}
+spec:
+  template:
+    spec:
+      containers:
+        - name: worker
+          env:
+            - {name: SSL_CERT_FILE, value: /etc/ssl/local/ca-bundle.pem}
+            - {name: REQUESTS_CA_BUNDLE, value: /etc/ssl/local/ca-bundle.pem}
+          volumeMounts:
+            - {name: ca-bundle, mountPath: /etc/ssl/local, readOnly: true}
+      volumes:
+        - name: ca-bundle
+          configMap: {name: ca-bundle}
+---
+apiVersion: batch/v1
+kind: Job
+metadata: {name: ingest, namespace: chatbot}
+spec:
+  template:
+    spec:
+      containers:
+        - name: ingest
+          env:
+            - {name: SSL_CERT_FILE, value: /etc/ssl/local/ca-bundle.pem}
+            - {name: REQUESTS_CA_BUNDLE, value: /etc/ssl/local/ca-bundle.pem}
+          volumeMounts:
+            - {name: ca-bundle, mountPath: /etc/ssl/local, readOnly: true}
+      volumes:
+        - name: ca-bundle
+          configMap: {name: ca-bundle}
+---
+apiVersion: batch/v1
+kind: Job
+metadata: {name: reranker-model, namespace: chatbot}
+spec:
+  template:
+    spec:
+      containers:
+        - name: download
+          env:
+            - {name: SSL_CERT_FILE, value: /etc/ssl/local/ca-bundle.pem}
+            - {name: REQUESTS_CA_BUNDLE, value: /etc/ssl/local/ca-bundle.pem}
+          volumeMounts:
+            - {name: ca-bundle, mountPath: /etc/ssl/local, readOnly: true}
+      volumes:
+        - name: ca-bundle
+          configMap: {name: ca-bundle}

@@ -1,0 +1,171 @@
+# The app: the API, the worker and the UI, all from the one image (Phase 9). Settings come from
+# the app-config ConfigMap and DATABASE_URL from CloudNativePG's Secret; secrets are files in
+# /run/secrets (the app-secrets Secret, read since Phase 8).
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+spec:
+  replicas: 2
+  strategy:
+    rollingUpdate: {maxUnavailable: 0, maxSurge: 1}
+  selector:
+    matchLabels: {app: api}
+  template:
+    metadata:
+      labels: {app: api}
+    spec:
+      # preStop waits up to 55 s for open streams, then uvicorn gets SIGTERM.
+      terminationGracePeriodSeconds: 75
+      containers:
+        - name: api
+          image: chatbot
+          command:
+            - uvicorn
+            - chatbot.api.main:app
+            - --host=0.0.0.0
+            - --port=8000
+            - --root-path=/api
+            - --proxy-headers
+            - --forwarded-allow-ips=*
+            - --timeout-graceful-shutdown=10
+          ports:
+            - {name: http, containerPort: 8000}
+            - {name: metrics, containerPort: 9100}
+          env:
+            - {name: BACKGROUND_JOBS, value: "false"}  # the worker runs them
+            - {name: METRICS_PORT, value: "9100"}
+            - name: DATABASE_URL
+              valueFrom: {secretKeyRef: {name: postgres-app, key: uri}}
+          envFrom:
+            - configMapRef: {name: app-config}
+          readinessProbe:
+            httpGet: {path: /readyz, port: http}
+            periodSeconds: 5
+            failureThreshold: 2
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 10
+            failureThreshold: 6
+          lifecycle:
+            # SIGTERM would end every open SSE stream at once, so first wait until none is
+            # open (api/drain.py).
+            preStop:
+              exec: {command: [python, -m, chatbot.api.drain]}
+          volumeMounts:
+            - {name: secrets, mountPath: /run/secrets, readOnly: true}
+            - {name: models, mountPath: /models, readOnly: true}
+          resources:
+            requests: {cpu: 200m, memory: 1Gi}  # the reranker model is about 600 MB in memory
+      automountServiceAccountToken: false  # no Kubernetes API calls; frees /run/secrets
+      volumes:
+        - name: secrets
+          secret: {secretName: app-secrets}
+        - name: models
+          persistentVolumeClaim: {claimName: reranker-model, readOnly: true}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api
+  labels: {app: api}
+spec:
+  selector: {app: api}
+  ports:
+    - {name: http, port: 8000, targetPort: http}
+    - {name: metrics, port: 9100, targetPort: metrics}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: api
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: {app: api}
+---
+# Runs the memory pushes from the queue, the idle-thread scan and the store's TTL sweeper.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: worker}
+  template:
+    metadata:
+      labels: {app: worker}
+    spec:
+      terminationGracePeriodSeconds: 60  # lets the pushes in hand finish
+      containers:
+        - name: worker
+          image: chatbot
+          command: [python, -m, chatbot.worker]
+          ports:
+            - {name: metrics, containerPort: 9100}
+          env:
+            - name: DATABASE_URL
+              valueFrom: {secretKeyRef: {name: postgres-app, key: uri}}
+          envFrom:
+            - configMapRef: {name: app-config}
+          volumeMounts:
+            - {name: secrets, mountPath: /run/secrets, readOnly: true}
+          resources:
+            requests: {cpu: 100m, memory: 384Mi}
+      automountServiceAccountToken: false  # no Kubernetes API calls; frees /run/secrets
+      volumes:
+        - name: secrets
+          secret: {secretName: app-secrets}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: worker
+  labels: {app: worker}
+spec:
+  selector: {app: worker}
+  ports:
+    - {name: metrics, port: 9100, targetPort: metrics}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ui
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: ui}
+  template:
+    metadata:
+      labels: {app: ui}
+    spec:
+      containers:
+        - name: ui
+          image: chatbot
+          command:
+            - streamlit
+            - run
+            - ui/app.py
+            - --server.port=8501
+            - --server.headless=true
+            - --server.address=0.0.0.0
+          ports:
+            - {name: http, containerPort: 8501}
+          env:
+            - {name: CHATBOT_API_URL, value: "http://api:8000"}
+          readinessProbe:
+            httpGet: {path: /_stcore/health, port: http}
+          resources:
+            requests: {cpu: 50m, memory: 256Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ui
+spec:
+  selector: {app: ui}
+  ports:
+    - {name: http, port: 8501, targetPort: http}

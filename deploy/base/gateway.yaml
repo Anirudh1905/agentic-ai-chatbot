@@ -1,0 +1,43 @@
+# The front door (Phase 9): a Gateway API Gateway, served by Envoy Gateway. `/` is the UI and
+# `/api` the API across its replicas, with the prefix stripped (the routes live at /chat,
+# /threads, ...; uvicorn's --root-path keeps the OpenAPI docs right). The API's metrics are on
+# their own port, which no route reaches.
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: chatbot
+spec:
+  gatewayClassName: envoy
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+      allowedRoutes:
+        namespaces: {from: All}  # the monitoring routes live in their own namespace
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: api
+spec:
+  parentRefs: [{name: chatbot}]
+  rules:
+    - matches: [{path: {type: PathPrefix, value: /api}}]
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path: {type: ReplacePrefixMatch, replacePrefixMatch: /}
+      backendRefs: [{name: api, port: 8000}]
+      timeouts:
+        request: 300s  # a streamed reply with tool calls can run for minutes
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: ui
+spec:
+  parentRefs: [{name: chatbot}]
+  rules:
+    - matches: [{path: {type: PathPrefix, value: /}}]
+      backendRefs: [{name: ui, port: 8501}]

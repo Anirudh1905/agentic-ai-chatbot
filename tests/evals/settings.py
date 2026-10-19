@@ -34,6 +34,7 @@ FROM_ENV = (
     "sqs_access_key_id",
     "sqs_secret_access_key",
     "worker_metrics_port",
+    "metrics_port",
 )
 
 

@@ -1,0 +1,66 @@
+# The kind overlay (Phase 9): the app's settings for this cluster, its secrets, and the front
+# door on host port 8088. `tilt up` applies it; so does `kubectl apply -k deploy/local`.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../base
+  - ../base/monitoring-routes
+  - gateway-kind.yaml
+  - pgweb.yaml
+  - postgres-host.yaml
+patches:
+  - path: ca-bundle-patch.yaml
+  - target: {kind: Gateway, name: chatbot}
+    patch: |-
+      - op: add
+        path: /spec/infrastructure
+        value:
+          parametersRef: {group: gateway.envoyproxy.io, kind: EnvoyProxy, name: kind-nodeport}
+  # A login for the host, through Tilt's port-forward (localhost:5433): the tests create throwaway
+  # databases with it, and make eval / make ingest use the app's tables as a member of their owner.
+  - target: {kind: Cluster, name: postgres}
+    patch: |-
+      - op: add
+        path: /spec/managed
+        value:
+          roles:
+            - name: dev
+              login: true
+              createdb: true
+              inRoles: [chatbot]
+              passwordSecret: {name: postgres-dev}
+configMapGenerator:
+  # Settings for this cluster. DATABASE_URL comes from CloudNativePG's Secret.
+  - name: app-config
+    namespace: chatbot
+    literals:
+      - REDIS_URL=redis://redis:6379/0
+      - SQS_QUEUE_URL=http://elasticmq:9324/000000000000/memory-pushes.fifo
+      - SQS_DEAD_LETTER_QUEUE_URL=http://elasticmq:9324/000000000000/memory-pushes-dlq.fifo
+      - SQS_ENDPOINT_URL=http://elasticmq:9324
+      - SQS_ACCESS_KEY_ID=local  # ElasticMQ accepts any key
+      - SQS_SECRET_ACCESS_KEY=local
+      - LANGFUSE_HOST=http://langfuse-web:3000
+      - RERANKER_CACHE_DIR=/models
+      - LOG_LEVEL=INFO
+  # This machine's trust store, written by make secrets (ca-bundle-patch.yaml mounts it).
+  - name: ca-bundle
+    namespace: chatbot
+    files:
+      - ca-bundle.pem
+secretGenerator:
+  # The dev role's login (local only: dev/dev).
+  - name: postgres-dev
+    namespace: chatbot
+    type: kubernetes.io/basic-auth
+    literals:
+      - username=dev
+      - password=dev
+    options:
+      disableNameSuffixHash: true  # CloudNativePG refers to it by name
+  # Mounted at /run/secrets, one file per key (Phase 8 reads them). Written from .env by
+  # `make secrets`; gitignored.
+  - name: app-secrets
+    namespace: chatbot
+    envs:
+      - secrets.env

@@ -17,7 +17,12 @@ from chatbot.agent.middleware import UserModelError
 from chatbot.api.schemas import StreamEvent
 from chatbot.config import RunContext, get_settings
 from chatbot.guardrails.pii import StreamRedactor
-from chatbot.observability.metrics import APPROVAL_PAUSES, FIRST_TOKEN_SECONDS, RUN_ERRORS
+from chatbot.observability.metrics import (
+    ACTIVE_STREAMS,
+    APPROVAL_PAUSES,
+    FIRST_TOKEN_SECONDS,
+    RUN_ERRORS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +52,7 @@ async def stream_run(
             first_token = False
         return sse(StreamEvent.TOKEN, {"token": text})
 
+    ACTIVE_STREAMS.inc()
     try:
         async for event in graph.astream_events(
             graph_input, config=config, context=context, version="v2"
@@ -91,3 +97,5 @@ async def stream_run(
         RUN_ERRORS.labels("internal").inc()
         logger.exception("stream failed")
         yield sse(StreamEvent.ERROR, {"message": "Something went wrong. Please try again."})
+    finally:
+        ACTIVE_STREAMS.dec()

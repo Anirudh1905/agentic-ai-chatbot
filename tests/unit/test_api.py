@@ -28,7 +28,7 @@ from chatbot.api.dependencies import (
     get_readiness,
 )
 from chatbot.api.main import app
-from chatbot.config import ModelCredentials, RunContext, get_settings
+from chatbot.config import ModelCredentials, RunContext, Settings, get_settings
 from chatbot.observability.logs import ContextFilter
 from chatbot.observability.tracing import hashed_user, trace_metadata
 
@@ -409,6 +409,22 @@ def test_metrics_count_requests_tools_tokens_and_first_tokens() -> None:
     assert 'route="/chat/stream"' in exposed  # the template, not the path
 
 
+def test_counters_with_fixed_labels_are_exposed_at_zero_before_anything_happens() -> None:
+    # Otherwise a series appears already at 1 and the dashboard's increase() misses that count.
+    with client_for(scripted(), tools=[make_lookup_tool()]) as client:
+        exposed = client.get("/metrics").text
+    for series in [
+        'chatbot_approval_decisions_total{decision="edit"}',
+        'chatbot_limited_total{limit="budget"}',
+        'chatbot_memory_recalls_total{result="hit"}',
+        'chatbot_run_errors_total{kind="user_model"}',
+        'chatbot_memory_pushes_total{kind="idle",outcome="failed"}',
+        'chatbot_pii_redactions_total{source="reply",type="ip"}',
+        'chatbot_tool_calls_total{outcome="error",tool="lookup"}',
+    ]:
+        assert series in exposed, series
+
+
 def test_readyz_answers_ready_once_the_database_does(client: TestClient) -> None:
     app.dependency_overrides[get_readiness] = lambda: True
     assert client.get("/readyz").json() == {"status": "ready"}
@@ -429,3 +445,14 @@ async def test_readiness_is_false_when_resources_cant_start(
 
     monkeypatch.setattr(dependencies.resources, "ensure", down)
     assert await get_readiness() is False
+
+
+def test_metrics_move_off_the_public_port_when_a_metrics_port_is_set(
+    client: TestClient,
+) -> None:
+    app.dependency_overrides[get_settings] = lambda: Settings(
+        _env_file=None,  # type: ignore[call-arg]
+        jwt_secret="test-secret-that-is-long-enough-for-hs256",
+        metrics_port=9100,
+    )
+    assert client.get("/metrics").status_code == 404

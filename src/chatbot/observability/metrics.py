@@ -1,12 +1,12 @@
-"""Prometheus metrics, served at GET /metrics (Phase 8).
+"""Prometheus metrics, served at GET /metrics (Phase 8), or on METRICS_PORT if set (Phase 9).
 
-Prometheus scrapes them (`docker compose up` runs it, with the alert rules in
-`ops/prometheus/alerts.yml`) and Grafana charts them (the "Chatbot" dashboard). Labels are
-kept to small fixed sets (route templates, tool and model names, PII types), never users or
-threads: those are in the traces (tracing.py).
+Prometheus scrapes them (in the cluster, with the alert rules in deploy/base/monitoring.yaml)
+and Grafana charts them (the "Chatbot" dashboard). Labels are kept to small fixed sets (route
+templates, tool and model names, PII types), never users or threads: those are in the traces
+(tracing.py).
 
-The counts are per process. With several API processes each needs scraping (Phase 9); the
-dashboards sum them.
+The counts are per process: Prometheus scrapes every API pod and the worker, and the dashboards
+sum them.
 """
 
 from prometheus_client import Counter, Gauge, Histogram
@@ -27,6 +27,10 @@ FIRST_TOKEN_SECONDS = Histogram(
     "chatbot_time_to_first_token_seconds",
     "From the start of a streamed run to the first token of its reply",
     buckets=SLOW_BUCKETS,
+)
+ACTIVE_STREAMS = Gauge(
+    "chatbot_active_streams",
+    "SSE streams open right now; the API pod's preStop waits for 0 (api/drain.py)",
 )
 RUN_ERRORS = Counter(
     "chatbot_run_errors_total",
@@ -95,3 +99,18 @@ QUEUE_JOB_AGE = Histogram(
     "How long a push waited on the queue before the worker received it",
     buckets=(0.5, 1, 5, 15, 60, 300, 900, 3600),
 )
+
+# Every fixed label set starts at 0. A series that first appears already at 1 has no earlier
+# sample, so rate() and increase() miss that first count, and a ratio with no matching series
+# is blank instead of 0. (PII types and tool names start at 0 where they're defined.)
+for _kind in ("user_model", "internal"):
+    RUN_ERRORS.labels(_kind)
+for _decision in ("approve", "edit", "reject"):
+    APPROVAL_DECISIONS.labels(_decision)
+for _result in ("hit", "miss"):
+    MEMORY_RECALLS.labels(_result)
+for _limit in ("user", "ip", "login", "budget"):
+    LIMITED.labels(_limit)
+for _kind in ("summary", "idle", "remember"):
+    for _outcome in ("ok", "failed"):
+        MEMORY_PUSHES.labels(_kind, _outcome)

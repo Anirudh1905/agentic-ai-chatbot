@@ -209,7 +209,7 @@
         "overrides": []
       },
       "options": {},
-      "description": "From ops/prometheus/alerts.yml"
+      "description": "From the chatbot PrometheusRule (deploy/base/monitoring.yaml)"
     },
     {
       "id": 6,

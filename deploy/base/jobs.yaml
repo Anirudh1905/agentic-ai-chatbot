@@ -1,0 +1,110 @@
+# One-off and scheduled work (Phase 9), from the app image.
+---
+# The schema: Alembic, then the checkpointer's and the store's tables. Runs before the API and
+# the worker (Tilt orders it); a failure stops the rollout instead of breaking pods.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: migrate
+spec:
+  backoffLimit: 3
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: migrate
+          image: chatbot
+          command: [python, -m, chatbot.migrate]
+          env:
+            - name: DATABASE_URL
+              valueFrom: {secretKeyRef: {name: postgres-app, key: uri}}
+          envFrom:
+            - configMapRef: {name: app-config}
+---
+# The reranker model (about 570 MB), downloaded once into the shared volume the API mounts
+# read-only.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: reranker-model
+spec:
+  # kind's storage is ReadWriteOnce, which every pod on its one node can mount. A multi-node
+  # cluster needs ReadOnlyMany storage here.
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests: {storage: 2Gi}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: reranker-model
+spec:
+  backoffLimit: 3
+  template:
+    spec:
+      restartPolicy: OnFailure
+      securityContext: {fsGroup: 10001}
+      containers:
+        - name: download
+          image: chatbot
+          command: [python, -m, chatbot.tools.rerank]
+          env:
+            # Plain HTTPS from Hugging Face: its newer xet transfer fails from inside the cluster.
+            - {name: HF_HUB_DISABLE_XET, value: "1"}
+          envFrom:
+            - configMapRef: {name: app-config}
+          volumeMounts:
+            - {name: models, mountPath: /models}
+      volumes:
+        - name: models
+          persistentVolumeClaim: {claimName: reranker-model}
+---
+# Loads the sample knowledge base (data/sample, in the image). Re-run from Tilt; unchanged
+# chunks are skipped.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ingest
+spec:
+  backoffLimit: 2
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: ingest
+          image: chatbot
+          command: [python, -m, chatbot.ingestion, data/sample, --prune]
+          env:
+            - name: DATABASE_URL
+              valueFrom: {secretKeyRef: {name: postgres-app, key: uri}}
+          envFrom:
+            - configMapRef: {name: app-config}
+          volumeMounts:
+            - {name: secrets, mountPath: /run/secrets, readOnly: true}
+      automountServiceAccountToken: false  # no Kubernetes API calls; frees /run/secrets
+      volumes:
+        - name: secrets
+          secret: {secretName: app-secrets}
+---
+# Keeps only the latest checkpoint of threads idle CHECKPOINT_RETENTION_DAYS (Phase 3), nightly.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: retention
+spec:
+  schedule: "30 3 * * *"
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: retention
+              image: chatbot
+              command: [python, -m, chatbot.memory.retention]
+              env:
+                - name: DATABASE_URL
+                  valueFrom: {secretKeyRef: {name: postgres-app, key: uri}}
+              envFrom:
+                - configMapRef: {name: app-config}
