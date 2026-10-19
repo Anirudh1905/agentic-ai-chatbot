@@ -15,7 +15,7 @@ from langgraph.types import Command
 from chatbot.agent.approvals import interrupt_on
 from chatbot.agent.builder import build_graph
 from chatbot.config import Settings
-from chatbot.db import Pool, open_pool
+from chatbot.storage.db import Pool, open_pool
 
 pytestmark = pytest.mark.integration
 

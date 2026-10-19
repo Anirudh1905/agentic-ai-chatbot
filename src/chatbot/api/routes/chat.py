@@ -7,13 +7,14 @@ from sse_starlette.sse import EventSourceResponse
 
 from chatbot.agent.approvals import pending_request
 from chatbot.agent.builder import Agent
-from chatbot.api.dependencies import Callbacks, Graph, Threads, UserId
+from chatbot.api.dependencies import Callbacks, Graph, Threads
 from chatbot.api.runs import chat_response, redact, run_config, thread_config
 from chatbot.api.schemas import ChatRequest, ChatResponse
+from chatbot.api.security import BudgetedUserId, UserCredentials
 from chatbot.api.streaming import stream_run
 from chatbot.config import RunContext
 from chatbot.memory.threads import ThreadStore, make_title
-from chatbot.observability import thread_id as thread_id_var
+from chatbot.observability.logs import thread_id as thread_id_var
 
 logger = logging.getLogger(__name__)
 
@@ -49,28 +50,40 @@ async def open_thread(
 
 @router.post("")
 async def chat(
-    body: ChatRequest, graph: Graph, threads: Threads, user_id: UserId, callbacks: Callbacks
+    body: ChatRequest,
+    graph: Graph,
+    threads: Threads,
+    user_id: BudgetedUserId,
+    callbacks: Callbacks,
+    credentials: UserCredentials,
 ) -> ChatResponse:
     thread_id, message = await open_thread(body, user_id, threads, graph)
+    context = RunContext(user_id, credentials)
     result = await graph.ainvoke(
         {"messages": [HumanMessage(message)]},
-        config=run_config(thread_id, callbacks),
-        context=RunContext(user_id),
+        config=run_config("chat", thread_id, context, callbacks),
+        context=context,
     )
     return await chat_response(graph, result, thread_id)
 
 
 @router.post("/stream")
 async def chat_stream(
-    body: ChatRequest, graph: Graph, threads: Threads, user_id: UserId, callbacks: Callbacks
+    body: ChatRequest,
+    graph: Graph,
+    threads: Threads,
+    user_id: BudgetedUserId,
+    callbacks: Callbacks,
+    credentials: UserCredentials,
 ) -> EventSourceResponse:
     thread_id, message = await open_thread(body, user_id, threads, graph)
+    context = RunContext(user_id, credentials)
     return EventSourceResponse(
         stream_run(
             graph,
             {"messages": [HumanMessage(message)]},
-            run_config(thread_id, callbacks),
-            RunContext(user_id),
+            run_config("chat", thread_id, context, callbacks),
+            context,
             thread_id,
         )
     )

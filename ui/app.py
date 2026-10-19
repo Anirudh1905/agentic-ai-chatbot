@@ -1,6 +1,7 @@
 import itertools
 import json
 import os
+import time
 import uuid
 from collections.abc import Iterator
 from typing import Any
@@ -10,8 +11,6 @@ import streamlit as st
 from httpx_sse import connect_sse
 
 API_URL = os.environ.get("CHATBOT_API_URL", "http://localhost:8000")
-# No login until Phase 8: the API trusts this header to say whose threads these are.
-DEFAULT_USER = os.environ.get("CHATBOT_USER_ID", "demo-user")
 
 TOOL_LABELS = {
     "search_knowledge_base": "Searching the knowledge base",
@@ -25,21 +24,114 @@ class StreamError(Exception):
 
 
 def api() -> httpx.Client:
+    """The API, as the signed-in user (the token from POST /auth/login), with their own model
+    endpoint and key if they logged in with one (checked at login, kept only in this session)."""
+    headers = {"Authorization": f"Bearer {st.session_state.token}"}
+    if key := st.session_state.get("openai_api_key"):
+        headers["X-OpenAI-Key"] = key
+        if base_url := st.session_state.get("openai_base_url"):
+            headers["X-OpenAI-Base-URL"] = base_url
     return httpx.Client(
         base_url=API_URL,
-        headers={"X-User-Id": st.session_state.user_id},
+        headers=headers,
         timeout=httpx.Timeout(10.0, read=300.0),
+        event_hooks={"response": [log_out_on_401]},
     )
+
+
+def log_out_on_401(response: httpx.Response) -> None:
+    # The token expired (JWT_TTL_MINUTES) or was refused: back to the login screen.
+    if response.status_code == 401:
+        log_out()
+        st.rerun()  # stops this run here, so nothing reads the cleared session
+
+
+def log_out() -> None:
+    for key in list(st.session_state):
+        del st.session_state[key]
+    st.query_params.clear()
+
+
+def login_screen() -> None:
+    """Log in, or create an account (POST /auth/register, then log in). Optionally with the
+    user's own OpenAI-compatible endpoint and key, which the API checks before logging in."""
+    with st.expander("Use your own OpenAI credentials (optional)"):
+        st.text_input("OpenAI base URL", placeholder="https://api.openai.com/v1", key="base-url-in")
+        st.text_input("OpenAI API key", type="password", key="api-key-in")
+        st.caption(
+            "Your chats then run on your key. It's checked at login and kept only in this session."
+        )
+    log_in_tab, register_tab = st.tabs(["Log in", "Create account"])
+    with log_in_tab, st.form("log-in"):
+        email = st.text_input("Email")
+        password = st.text_input("Password", type="password")
+        if st.form_submit_button("Log in", type="primary"):
+            log_in(email, password)
+    with register_tab, st.form("register"):
+        email = st.text_input("Email", key="new-email")
+        password = st.text_input("Password (8 characters or more)", type="password", key="new-pw")
+        if st.form_submit_button("Create account", type="primary"):
+            try:
+                created = httpx.post(
+                    f"{API_URL}/auth/register", json={"email": email, "password": password}
+                )
+            except httpx.HTTPError:
+                st.error(f"Can't reach the API at {API_URL}. Is it running?")
+                return
+            if created.status_code == 201:
+                log_in(email, password)
+            elif created.status_code == 422:
+                st.error("Enter a valid email and a password of at least 8 characters.")
+            else:
+                st.error(created.json().get("detail", "Couldn't create the account."))
+
+
+def log_in(email: str, password: str) -> None:
+    form = {"username": email, "password": password}
+    base_url = st.session_state.get("base-url-in", "").strip()
+    api_key = st.session_state.get("api-key-in", "").strip()
+    if api_key:
+        form |= {"openai_api_key": api_key, **({"openai_base_url": base_url} if base_url else {})}
+    try:
+        with st.spinner("Logging in…" + (" (checking your OpenAI key)" if api_key else "")):
+            # Checking a key makes a small model call, so allow for it.
+            resp = httpx.post(f"{API_URL}/auth/login", data=form, timeout=60)
+    except httpx.HTTPError:
+        st.error(f"Can't reach the API at {API_URL}. Is it running?")
+        return
+    if resp.status_code != 200:
+        st.error(resp.json().get("detail", "Couldn't log in."))
+        return
+    st.session_state.token = resp.json()["access_token"]
+    st.session_state.token_expires = time.time() + resp.json()["expires_in"]
+    st.session_state.email = email.lower()
+    st.session_state.openai_api_key = api_key or None
+    st.session_state.openai_base_url = base_url or None
+    st.rerun()
+
+
+def refused(resp: httpx.Response) -> bool:
+    """True (and a notice, once per page) if the API turned the request down: over a rate
+    limit (429), say. The page keeps working with what it has."""
+    if resp.is_success:
+        return False
+    if not st.session_state.get("_notice_shown"):
+        st.session_state._notice_shown = True
+        if resp.status_code == 429:
+            retry = resp.headers.get("retry-after", "a few")
+            st.toast(f"Too many requests. Try again in {retry} seconds.", icon=":material/timer:")
+        else:
+            st.toast(f"The API answered {resp.status_code}.", icon=":material/error:")
+    return True
 
 
 def list_threads() -> list[dict[str, Any]]:
     try:
         with api() as client:
             resp = client.get("/threads")
-            resp.raise_for_status()
-            return resp.json()
     except httpx.HTTPError:
         return []
+    return [] if refused(resp) else resp.json()
 
 
 def load_thread(thread_id: str) -> None:
@@ -55,7 +147,9 @@ def load_thread(thread_id: str) -> None:
             resp = client.get(f"/threads/{thread_id}/messages")
     except httpx.HTTPError:
         return
-    if resp.status_code == 200:
+    if resp.status_code == 404:
+        return  # a new chat: the thread is created with its first message
+    if not refused(resp):
         body = resp.json()
         st.session_state.messages = body["messages"]
         st.session_state.summary = body["summary"]
@@ -69,6 +163,10 @@ def new_thread() -> None:
 
 def stream_events(path: str, body: dict[str, Any]) -> Iterator[tuple[str, dict[str, Any]]]:
     with api() as client, connect_sse(client, "POST", path, json=body) as source:
+        if source.response.status_code != 200:
+            # Refused before the run started: rate limited (429), or not signed in (401).
+            source.response.read()
+            raise StreamError(source.response.json().get("detail", source.response.text))
         for sse in source.iter_sse():
             data = json.loads(sse.data)
             if sse.event == "error":
@@ -96,9 +194,12 @@ def memory_panel() -> None:
     """What the bot remembers about this user across conversations (long-term memory)."""
     try:
         with api() as client:
-            memories = client.get("/me/memory").json()["memories"]
+            resp = client.get("/me/memory")
     except httpx.HTTPError:
         return
+    if refused(resp):
+        return
+    memories = resp.json()["memories"]
     with st.expander(f"What I remember about you ({len(memories)})"):
         if not memories:
             st.caption(
@@ -129,9 +230,15 @@ st.markdown(
     unsafe_allow_html=True,
 )
 st.title("Agentic AI Chatbot")
+st.session_state._notice_shown = False  # refused() notices: one per page run
 
-if "user_id" not in st.session_state:
-    st.session_state.user_id = DEFAULT_USER
+if time.time() > st.session_state.get("token_expires", 0):
+    if "token" in st.session_state:
+        log_out()
+        st.info("Your session expired. Please log in again.")
+    login_screen()
+    st.stop()
+
 if "thread_id" not in st.session_state:
     if thread := st.query_params.get("thread"):
         load_thread(thread)
@@ -139,10 +246,12 @@ if "thread_id" not in st.session_state:
         new_thread()
 
 with st.sidebar:
-    user = st.text_input("User", value=st.session_state.user_id)
-    if user and user != st.session_state.user_id:
-        st.session_state.user_id = user
-        new_thread()
+    signed_in, out = st.columns([3, 1], vertical_alignment="center")
+    signed_in.caption(f"Signed in as **{st.session_state.email}**")
+    if st.session_state.get("openai_api_key"):
+        st.caption(f"Model: your key, {st.session_state.openai_base_url or 'OpenAI'}")
+    if out.button("", icon=":material/logout:", help="Log out"):
+        log_out()
         st.rerun()
     if st.button("New chat", width="stretch", icon=":material/add:"):
         new_thread()
@@ -171,6 +280,16 @@ with st.sidebar:
             new_thread()
             st.rerun()
     memory_panel()
+    with st.expander("Delete my account"):
+        st.caption("Deletes your account, every chat and everything I remember about you.")
+        if st.checkbox("I understand this can't be undone", key="confirm-delete-me") and st.button(
+            "Delete my account and data", icon=":material/delete_forever:", width="stretch"
+        ):
+            with api() as client:
+                resp = client.delete("/me")
+            if not refused(resp):
+                log_out()
+                st.rerun()
     st.caption(f"API: `{API_URL}` · thread `{st.session_state.thread_id[:8]}`")
 
 if st.session_state.summary:

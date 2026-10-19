@@ -1,4 +1,7 @@
+from pathlib import Path
+
 import pytest
+from pydantic import ValidationError
 
 from chatbot.config import Settings
 
@@ -21,3 +24,19 @@ def test_empty_reranker_model_disables_reranking(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setenv("RERANKER_MODEL", "")
 
     assert not Settings(_env_file=None).reranker_model  # type: ignore[call-arg]
+
+
+def test_a_short_jwt_secret_is_refused() -> None:
+    with pytest.raises(ValidationError, match="at least 32 characters"):
+        Settings(_env_file=None, jwt_secret="too-short")  # type: ignore[call-arg]
+
+
+def test_secrets_can_come_from_files(tmp_path: Path) -> None:
+    (tmp_path / "jwt_secret").write_text("s" * 40)
+    (tmp_path / "openai_api_key").write_text("sk-from-a-file")
+
+    settings = Settings(_env_file=None, _secrets_dir=tmp_path)  # type: ignore[call-arg]
+
+    assert settings.jwt_secret and settings.jwt_secret.get_secret_value() == "s" * 40
+    assert settings.openai_api_key
+    assert settings.openai_api_key.get_secret_value() == "sk-from-a-file"

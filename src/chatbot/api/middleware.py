@@ -4,16 +4,18 @@ import uuid
 
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from chatbot.observability import request_id, thread_id
+from chatbot.observability.logs import request_id, thread_id
+from chatbot.observability.metrics import REQUEST_SECONDS, REQUESTS
 
 logger = logging.getLogger("chatbot.api")
 
-# Tilt's readiness probe hits this every few seconds.
-QUIET_PATHS = {"/healthz"}
+# Tilt's readiness probe hits this every few seconds, and Prometheus the other.
+QUIET_PATHS = {"/healthz", "/metrics"}
 
 
-class RequestLoggingMiddleware:
-    """One log line per request, and a request ID on every log line written while serving it.
+class RequestMiddleware:
+    """One log line and the metrics per request, and a request ID on every log line written while
+    serving it.
 
     Plain ASGI rather than BaseHTTPMiddleware so the context (and the timing) also covers the
     body of streaming responses, where the agent actually runs.
@@ -45,14 +47,21 @@ class RequestLoggingMiddleware:
             await self.app(scope, receive, send_with_id)
         finally:
             path = scope["path"]
+            elapsed = time.monotonic() - start
+            if path not in QUIET_PATHS:
+                # The route's template (/threads/{thread_id}), so each label has few values.
+                route = getattr(scope.get("route"), "path", "unmatched")
+                REQUESTS.labels(scope["method"], route, str(status)).inc()
+                REQUEST_SECONDS.labels(scope["method"], route).observe(elapsed)
             level = logging.DEBUG if path in QUIET_PATHS else logging.INFO
-            user = headers.get(b"x-user-id", b"-").decode()
+            # Set by the auth dependency once the token checks out (api/dependencies.py).
+            user = scope.get("state", {}).get("user_id", "-")
             logger.log(
                 level,
                 "%s %s -> %d in %.2fs (user=%s)",
                 scope["method"],
                 path,
                 status,
-                time.monotonic() - start,
+                elapsed,
                 user,
             )

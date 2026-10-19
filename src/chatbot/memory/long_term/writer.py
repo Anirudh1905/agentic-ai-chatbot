@@ -5,7 +5,7 @@ import asyncio
 import logging
 from collections import Counter, defaultdict
 from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
-from contextlib import asynccontextmanager
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from typing import cast
 
@@ -244,6 +244,10 @@ class MemoryWriter:
             ),
         )
         return await apply_changes(store, user_id, fact, existing, changes)
+
+    def user_lock(self, store: BaseStore, user_id: str) -> AbstractAsyncContextManager[None]:
+        """Waits for the user's push in progress, and holds off new ones (deleting their data)."""
+        return self._user_lock(store, user_id)
 
     @asynccontextmanager
     async def _user_lock(self, store: BaseStore, user_id: str) -> AsyncGenerator[None]:

@@ -10,7 +10,7 @@ target_metadata = None
 
 
 def database_url() -> str:
-    url = get_settings().database_url
+    url = get_settings().require("database_url")
     return url.replace("postgresql://", "postgresql+psycopg://", 1)
 
 

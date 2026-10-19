@@ -14,14 +14,17 @@ from pathlib import Path
 import psycopg
 import pytest
 
+from chatbot.config import get_settings
+
 ROOT = Path(__file__).resolve().parents[2]
-ADMIN_URL = os.environ.get(
-    "TEST_DATABASE_URL", "postgresql://chatbot:chatbot@localhost:5433/chatbot"
-)
+# TEST_DATABASE_URL in CI; locally the DATABASE_URL in .env.
+ADMIN_URL = os.environ.get("TEST_DATABASE_URL") or get_settings().database_url
 
 
 @pytest.fixture(scope="module")
 def database_url() -> Iterator[str]:
+    if not ADMIN_URL:
+        pytest.skip("No database: set TEST_DATABASE_URL, or DATABASE_URL in .env")
     try:
         admin = psycopg.connect(ADMIN_URL, autocommit=True, connect_timeout=3)
     except psycopg.OperationalError as e:

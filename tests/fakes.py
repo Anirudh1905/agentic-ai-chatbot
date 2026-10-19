@@ -2,11 +2,12 @@
 
 import json
 import re
+import secrets
 from collections.abc import Iterator, Sequence
 from dataclasses import replace
 from datetime import UTC, date, datetime
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from langchain_core.callbacks import CallbackManagerForLLMRun
 from langchain_core.language_models import BaseChatModel
@@ -15,8 +16,12 @@ from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResu
 from langchain_core.runnables import Runnable, RunnableLambda
 from langchain_core.tools import BaseTool, tool
 
+from chatbot.accounts.users import DUMMY_HASH, EmailTaken, User, password_hash
 from chatbot.memory.long_term.facts import Change, Changes, Fact, Facts
 from chatbot.memory.threads import Thread
+
+# Made up per test run, so no password is written in the repo (secret scanners flag those).
+TEST_PASSWORD = secrets.token_urlsafe(16)
 
 
 class ScriptedChatModel(BaseChatModel):
@@ -217,9 +222,43 @@ class InMemoryThreadStore:
     async def delete(self, thread_id: UUID) -> None:
         self.rows.pop(thread_id, None)
 
+    async def ids_for_user(self, user_id: str) -> list[UUID]:
+        return [t.id for t in self.rows.values() if t.user_id == user_id]
+
     async def idle_since(self, cutoff: datetime) -> list[UUID]:
         return [t.id for t in self.rows.values() if t.updated_at < cutoff]
 
     async def idle_between(self, since: datetime, until: datetime) -> list[Thread]:
         rows = [t for t in self.rows.values() if since <= t.updated_at < until]
         return sorted(rows, key=lambda t: t.updated_at)
+
+
+class InMemoryUserStore:
+    """UserStore with real argon2 hashing, so the login tests check the same verification."""
+
+    def __init__(self) -> None:
+        self.rows: dict[str, tuple[User, str]] = {}  # by email
+
+    async def create(self, email: str, password: str) -> User:
+        if email.lower() in self.rows:
+            raise EmailTaken(email)
+        user = User(str(uuid4()), email.lower())
+        self.rows[user.email] = (user, password_hash.hash(password))
+        return user
+
+    async def authenticate(self, email: str, password: str) -> User | None:
+        user, hashed = self.rows.get(email.lower(), (None, DUMMY_HASH))
+        ok = password_hash.verify(password, hashed)
+        return user if user and ok else None
+
+    async def get(self, user_id: str) -> User | None:
+        return next((u for u, _ in self.rows.values() if u.id == user_id), None)
+
+    async def delete(self, user_id: str) -> None:
+        self.rows = {e: (u, h) for e, (u, h) in self.rows.items() if u.id != user_id}
+
+    def add(self, user_id: str, password: str = TEST_PASSWORD) -> User:
+        """An account with a known id, for tests that sign their own tokens."""
+        user = User(user_id, f"{user_id}@example.com")
+        self.rows[user.email] = (user, password_hash.hash(password))
+        return user

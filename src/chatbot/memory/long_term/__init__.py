@@ -45,6 +45,7 @@ from chatbot.memory.long_term.middleware import LongTermMemory
 from chatbot.memory.long_term.store import (
     cursor_namespace,
     delete,
+    forget_user,
     list_memories,
     namespace,
     recall,
@@ -56,6 +57,7 @@ __all__ = [
     "MemoryWriter",
     "cursor_namespace",
     "delete",
+    "forget_user",
     "list_memories",
     "namespace",
     "recall",

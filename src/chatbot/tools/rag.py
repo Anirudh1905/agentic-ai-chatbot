@@ -10,7 +10,8 @@ from langchain_core.tools import BaseTool, tool
 from pgvector import Vector
 
 from chatbot.config import Settings
-from chatbot.db import Conn, Pool
+from chatbot.prompts import as_data
+from chatbot.storage.db import Conn, Pool
 
 if TYPE_CHECKING:
     from chatbot.tools.rerank import Reranker
@@ -97,7 +98,7 @@ def format_hits(query: str, hits: list[SearchHit]) -> str:
     if not hits:
         return f'No documents in the knowledge base matched "{query}".'
     results = "\n".join(
-        f'<result cite_as="{escape(h.cite_as)}">\n{h.content}\n</result>' for h in hits
+        f'<result cite_as="{escape(h.cite_as)}">\n{as_data(h.content)}\n</result>' for h in hits
     )
     return f'<kb_results query="{escape(query)}">\n{results}\n</kb_results>'
 

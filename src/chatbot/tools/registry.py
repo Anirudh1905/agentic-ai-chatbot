@@ -6,7 +6,7 @@ from langchain_core.embeddings import Embeddings
 from langchain_core.tools import BaseTool
 
 from chatbot.config import Settings
-from chatbot.db import Pool
+from chatbot.storage.db import Pool
 from chatbot.tools import web_search as web_search_module
 from chatbot.tools.rag import build_knowledge_base_tool
 from chatbot.tools.rerank import Reranker

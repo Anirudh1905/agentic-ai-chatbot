@@ -15,7 +15,7 @@ async def _configure(conn: Conn) -> None:
 
 async def open_pool(settings: Settings) -> Pool:
     pool: Pool = AsyncConnectionPool(
-        settings.database_url,
+        settings.require("database_url"),
         connection_class=AsyncConnection[DictRow],
         min_size=1,
         max_size=10,

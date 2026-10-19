@@ -8,9 +8,21 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ReasoningEffort = Literal["none", "minimal", "low", "medium", "high"]
 
+# Secrets can also come from files here, one per setting, named like it (`jwt_secret`,
+# `openai_api_key`): Docker and Kubernetes secrets are mounted this way. The environment wins
+# over the files, and the files over `.env`.
+SECRETS_DIR = Path("/run/secrets")
+# HS256 is only as strong as its key: at least 32 bytes (RFC 7518, section 3.2).
+MIN_JWT_SECRET_CHARS = 32
+
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+        secrets_dir=SECRETS_DIR if SECRETS_DIR.is_dir() else None,
+    )
 
     openai_api_key: SecretStr | None = None
     # Unset means api.openai.com; set it to route through an OpenAI-compatible gateway.
@@ -47,7 +59,9 @@ class Settings(BaseSettings):
     # The retention job keeps only the latest checkpoint of threads idle this many days.
     checkpoint_retention_days: int = 30
 
-    database_url: str = "postgresql://chatbot:chatbot@localhost:5433/chatbot"
+    # Where the services are (Postgres, Redis, Langfuse) comes from .env or the environment,
+    # never a default here, so nothing silently talks to a localhost (see .env.example).
+    database_url: str | None = None
 
     embedding_model: str = "text-embedding-3-small"
     # Must match the vector column in migrations/versions/0001_chunks.py.
@@ -70,7 +84,7 @@ class Settings(BaseSettings):
     web_search_timeout: float = 15.0
 
     # Redact emails, card numbers, IPs and phone numbers: from user messages before the agent
-    # runs, and from tool results and replies inside it (pii.py).
+    # runs, and from tool results and replies inside it (guardrails/pii.py).
     pii_enabled: bool = True
     # Emails at these domains are never redacted: Acme's own contact addresses must reach
     # customers. JSON list in .env.
@@ -97,7 +111,8 @@ class Settings(BaseSettings):
     # Human approval before risky tool calls (see agent/approvals.py).
     hitl_enabled: bool = True
     # Web searches mentioning any of these (whole words, any case) wait for approval, since the
-    # query goes to a third-party search engine. Emails, phone and order numbers always do.
+    # query goes to a third-party search engine. So do order numbers (emails and phones are
+    # already redacted, Phase 5).
     hitl_sensitive_terms: list[str] = [
         "confidential",
         "internal",
@@ -108,9 +123,29 @@ class Settings(BaseSettings):
         "password",
     ]
 
+    # Accounts log in at POST /auth/login (api/routes/auth.py) for a token signed with JWT_SECRET
+    # (HS256); every request needs it as `Authorization: Bearer <JWT>`. Without a secret,
+    # every request is refused. At least 32 characters: `openssl rand -hex 32`.
+    jwt_secret: SecretStr | None = None
+    # How long a token lasts; then the user logs in again.
+    jwt_ttl_minutes: int = 60
+
+    # Limits (accounts/limits.py), counted in Redis so every API process shares them. In the
+    # `limits` library's notation. 0 for DAILY_TOKEN_BUDGET turns the budget off.
+    rate_limits_enabled: bool = True
+    redis_url: str | None = None
+    # Against abuse, not cost (the token budget is for cost): the UI makes about three reads per
+    # page run (threads, messages, memories), so these leave room for normal use.
+    rate_limit_per_user: str = "120/minute"
+    rate_limit_per_ip: str = "300/minute"
+    # Register and log-in attempts per IP: tighter, against password guessing.
+    rate_limit_login: str = "10/minute"
+    # Model tokens (input + output) a user's runs may use per UTC day.
+    daily_token_budget: int = 500_000
+
     langfuse_public_key: str | None = None
     langfuse_secret_key: SecretStr | None = None
-    langfuse_host: str = "http://localhost:3000"
+    langfuse_host: str | None = None
 
     log_level: str = "INFO"
 
@@ -123,9 +158,25 @@ class Settings(BaseSettings):
             return {k: v for k, v in data.items() if v != "" or k.lower() == "reranker_model"}
         return data
 
+    @model_validator(mode="after")
+    def _strong_jwt_secret(self) -> "Settings":
+        if self.jwt_secret and len(self.jwt_secret.get_secret_value()) < MIN_JWT_SECRET_CHARS:
+            raise ValueError(
+                f"JWT_SECRET must be at least {MIN_JWT_SECRET_CHARS} characters "
+                "(generate one with `openssl rand -hex 32`)"
+            )
+        return self
+
     @property
     def tracing_enabled(self) -> bool:
-        return bool(self.langfuse_public_key and self.langfuse_secret_key)
+        return bool(self.langfuse_public_key and self.langfuse_secret_key and self.langfuse_host)
+
+    def require(self, name: str) -> str:
+        """A setting that has no default and must be set, e.g. `require("database_url")`."""
+        value = getattr(self, name)
+        if not value:
+            raise RuntimeError(f"{name.upper()} isn't set: add it to .env (see .env.example)")
+        return str(value)
 
 
 @lru_cache
@@ -134,9 +185,20 @@ def get_settings() -> Settings:
 
 
 @dataclass(frozen=True)
+class ModelCredentials:
+    """A user's own OpenAI-compatible endpoint and key, for their runs' model calls. Checked at
+    login and sent by the UI with each request; never stored on the server."""
+
+    base_url: str
+    api_key: SecretStr
+
+
+@dataclass(frozen=True)
 class RunContext:
     """Who a run is for: passed as LangGraph's runtime context (`context=` on every invoke and
     stream) and read by middleware and tools as `runtime.context`. The thread is in the run's
-    config, where the checkpointer needs it."""
+    config, where the checkpointer needs it. With `credentials`, the agent's model calls use
+    the user's endpoint and key instead of the server's (agent/middleware.py)."""
 
     user_id: str
+    credentials: ModelCredentials | None = None

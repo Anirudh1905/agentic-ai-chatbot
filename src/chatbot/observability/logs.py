@@ -1,11 +1,11 @@
+"""Logging: one console format, with the request and thread on every line."""
+
 import logging
 from contextvars import ContextVar
 
-from langchain_core.callbacks import BaseCallbackHandler
-
 from chatbot.config import Settings
 
-# Set per request (see api/request_logging.py), so every log line from that request, including
+# Set per request (see api/middleware.py), so every log line from that request, including
 # the graph and tools running under it, says which request and thread it belongs to.
 request_id: ContextVar[str | None] = ContextVar("request_id", default=None)
 thread_id: ContextVar[str | None] = ContextVar("thread_id", default=None)
@@ -44,19 +44,3 @@ def configure_logging(settings: Settings) -> None:
     if root.level > logging.DEBUG:
         for name in NOISY_LOGGERS:
             logging.getLogger(name).setLevel(logging.WARNING)
-
-
-def build_callbacks(settings: Settings) -> list[BaseCallbackHandler]:
-    if not settings.tracing_enabled:
-        return []
-
-    from langfuse import Langfuse
-    from langfuse.langchain import CallbackHandler
-
-    assert settings.langfuse_secret_key is not None
-    Langfuse(
-        public_key=settings.langfuse_public_key,
-        secret_key=settings.langfuse_secret_key.get_secret_value(),
-        host=settings.langfuse_host,
-    )
-    return [CallbackHandler(public_key=settings.langfuse_public_key)]

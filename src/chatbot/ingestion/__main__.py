@@ -6,10 +6,10 @@ import sys
 from pathlib import Path
 
 from chatbot.config import get_settings
-from chatbot.db import open_pool
-from chatbot.embeddings import build_embeddings
 from chatbot.ingestion.pipeline import ingest_path
-from chatbot.observability import configure_logging
+from chatbot.observability.logs import configure_logging
+from chatbot.storage.db import open_pool
+from chatbot.storage.embeddings import build_embeddings
 
 
 async def main(path: Path, prune: bool) -> int:

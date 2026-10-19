@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from evals import check, report
+from evals import agent_runs, check, report
 from evals.agent_runs import Result
 from evals.citations import cited_spans
 from evals.report import Metric, compare
@@ -185,3 +185,44 @@ def test_the_code_only_suites_score_their_cases() -> None:
     assert set(fresh) == {"pii_recall", "pii_no_false_positives", "approval_policy"}
     assert all(isinstance(m, Metric) and m.n > 0 for m in fresh.values())
     assert len(cases["approval_policy"]) == 30
+
+
+# --- scores in Langfuse -----------------------------------------------------------------
+
+
+class FakeLangfuse:
+    def __init__(self) -> None:
+        self.scores: list[dict[str, Any]] = []
+
+    def create_score(self, **score: Any) -> None:
+        self.scores.append(score)
+
+
+def test_each_verdict_goes_to_the_runs_trace(monkeypatch: pytest.MonkeyPatch) -> None:
+    langfuse = FakeLangfuse()
+    monkeypatch.setattr(agent_runs, "langfuse_client", lambda settings: langfuse)
+    run = agent_runs.Run("q", "a", [], [], trace_id="abc")
+    outcomes = {
+        "routing": Outcome(True),
+        "faithfulness": Outcome(False, 0.5, "claim 2 unsupported"),
+        "citations": Outcome.error("TimeoutError"),
+    }
+
+    agent_runs.Agent(Settings()).send_scores(run, outcomes)
+
+    assert langfuse.scores == [
+        {
+            "trace_id": "abc",
+            "name": "routing",
+            "value": 1.0,
+            "data_type": "BOOLEAN",
+            "comment": None,
+        },
+        {
+            "trace_id": "abc",
+            "name": "faithfulness",
+            "value": 0.0,
+            "data_type": "BOOLEAN",
+            "comment": "claim 2 unsupported",
+        },
+    ]  # the error isn't a verdict

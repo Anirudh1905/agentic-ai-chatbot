@@ -4,18 +4,15 @@
 
 [← Phase 1](phase-1-foundation.md) · [Overview](../README.md) · [Next: Phase 3 →](phase-3-short-term-memory-checkpointing.md)
 
-## Scope
+**Status: built.** Approval gates come in Phase 4, PII filtering in Phase 5.
 
-**In scope**
-- Ingestion pipeline: load → clean → chunk → embed → index into pgvector
-- `search_knowledge_base` tool (RAG retrieval with metadata filters)
-- `web_search` tool (DuckDuckGo via `ddgs`, no API key)
-- Agent loop: LLM ↔ tool node until the model returns a final answer
-- Citations in answers (`[Title › Section]` for documents, markdown links for web pages)
-
-**Out of scope:** approval gates (Phase 4), PII filtering of tool inputs (Phase 5).
-
-## Architecture
+| Area | What's built | Section |
+| --- | --- | --- |
+| Ingestion | Load, clean, chunk, embed and index documents into pgvector; incremental and idempotent | [Ingestion](#ingestion) |
+| Knowledge base | `search_knowledge_base`: hybrid search (vector + full-text, fused with RRF), then a local cross-encoder reranker | [Knowledge base search](#knowledge-base-search) |
+| Web | `web_search`: DuckDuckGo via `ddgs`, no API key, with a multi-engine fallback | [Web search](#web-search) |
+| Agent loop | `create_agent` runs model and tools until the model answers; a model-call limit; one retry for a failed search | [The agent loop](#the-agent-loop) |
+| Routing and citations | Tool docstrings and the system prompt decide which tool; answers cite `[Title › Section]` or markdown links | [Routing and citations](#routing-and-citations) |
 
 ```mermaid
 flowchart TB
@@ -23,7 +20,7 @@ flowchart TB
         direction LR
         Src[PDF / DOCX / HTML / MD] --> Load[Loader]
         Load --> Clean[Clean + normalize]
-        Clean --> Chunk[Chunker<br/>~500-800 tokens,<br/>10-15% overlap]
+        Clean --> Chunk[Chunker<br/>600 tokens,<br/>80 overlap]
         Chunk --> Embed[Embedding model]
         Embed --> Idx[(pgvector<br/>chunks table)]
     end
@@ -43,44 +40,17 @@ flowchart TB
     WS --> DDG[DuckDuckGo<br/>fallback: ddgs multi-engine]
 ```
 
-## Tool-use sequence
+## Ingestion
 
-```mermaid
-sequenceDiagram
-    autonumber
-    participant U as User
-    participant L as Model node
-    participant T as Tools node
-    participant KB as Knowledge base
-    participant W as Web search
+`src/chatbot/ingestion/` (`loaders.py`, `chunking.py`, `pipeline.py`), `storage/embeddings.py`, migration `0001_chunks`. Run with `python -m chatbot.ingestion PATH [--prune]`, or `make ingest PATH_TO_DOCS=...` (default `data/sample`, with `--prune`).
 
-    U->>L: "What's our refund policy, and how does it compare to Amazon's?"
-    L->>T: tool_calls: search_knowledge_base("refund policy")
-    T->>KB: hybrid search, rerank top 8, keep 6
-    KB-->>T: chunks + source metadata
-    T-->>L: ToolMessage(chunks)
-    L->>T: tool_calls: web_search("Amazon refund policy 2026")
-    T->>W: query
-    W-->>T: results + URLs
-    T-->>L: ToolMessage(results)
-    L-->>U: Answer with citations [Refund Policy › Sale Items] [Amazon Returns](amazon.com/...)
-```
-
-The model can also issue both tool calls in one turn. The tool node runs them in parallel.
-
-## Components
-
-### Ingestion
-
-| Step | Default | Notes |
-|------|---------|-------|
-| Load | `pymupdf` for PDFs, `python-docx` for Word, `markdownify` for HTML; Markdown and text as-is (`ingestion/loaders.py`) | Keep page numbers and headings as metadata |
-| Chunk | LangChain's `MarkdownHeaderTextSplitter`, then `RecursiveCharacterTextSplitter` (600 tokens, 80 overlap) | Store the heading path in each chunk (`"Refund Policy › Sale Items"`) so retrieval results make sense on their own |
-| Embed | OpenAI `text-embedding-3-small` (1536 dims), through the same endpoint as the chat model | Pin the model version. Changing it means re-embedding everything |
+| Step | How | Notes |
+| --- | --- | --- |
+| Load | `pymupdf` for PDFs, `python-docx` for Word, `markdownify` for HTML; Markdown and text as-is | Keeps page numbers and headings as metadata |
+| Chunk | LangChain's `MarkdownHeaderTextSplitter`, then `RecursiveCharacterTextSplitter` (600 tokens, 80 overlap) | Each chunk stores its heading path (`"Refund Policy › Sale Items"`) so a result makes sense on its own |
+| Embed | OpenAI `text-embedding-3-small` (1536 dims), through the same endpoint as the chat model | Pinned: changing the model means re-embedding everything |
 | Index | pgvector `HNSW` index + Postgres full-text `tsvector` | Both are needed for hybrid search |
-| Dedup | Hash of each chunk's text | Re-ingesting a doc is a no-op; changed chunks are re-embedded, removed ones deleted; `--prune` drops files that no longer exist |
-
-The table (`migrations/versions/0001_chunks.py`):
+| Dedup | Hash of each chunk's text, unique per document | Re-ingesting a doc is a no-op; changed chunks are re-embedded, removed ones deleted; `--prune` drops files that no longer exist |
 
 ```sql
 CREATE TABLE chunks (
@@ -103,9 +73,12 @@ CREATE INDEX ON chunks USING hnsw (embedding vector_cosine_ops);
 CREATE INDEX ON chunks USING gin (content_tsv);
 ```
 
-LangChain's indexing API (`index()` with a record manager) does the same incremental sync, but only for a LangChain vector store. Using one (`langchain-postgres`) would mean its own table schema and losing the full-text tuning below, so the ingestion stays custom.
+- **Why not LangChain's indexing API.** `index()` with a record manager does the same incremental sync, but only for a LangChain vector store. Using one (`langchain-postgres`) would mean its own table schema and losing the full-text tuning below, so the ingestion stays custom.
+- **Chunking is the main quality lever.** If answers are poor, look at chunk boundaries before swapping models.
 
-### `search_knowledge_base` tool
+## Knowledge base search
+
+`src/chatbot/tools/rag.py` and `tools/rerank.py`.
 
 ```python
 @tool(response_format="content_and_artifact")
@@ -114,22 +87,13 @@ async def search_knowledge_base(query: str) -> tuple[str, list[dict]]:
     and the employee handbook. ... Do not use it for news, current events, or other companies."""
 ```
 
-The content (results wrapped in `<kb_results>`, each with a `cite_as`) goes to the model; the artifact (the hits as dicts) goes to the API as `sources`.
+- **Hybrid retrieval:** the top `RETRIEVAL_CANDIDATES` (30) by vector similarity and by full-text, merged with Reciprocal Rank Fusion (k = 60). `plainto_tsquery` ANDs every word, which misses most natural questions, so its `&` is swapped for `|` ("any of these words"), ranked by `ts_rank_cd`.
+- **Reranker:** a local cross-encoder (`BAAI/bge-reranker-v2-m3-int8` via fastembed/ONNX) rescores the top 8 fused results and the best 6 go to the model. If it fails, the fused order is used. It was chosen by measurement ([Measurements](#measurements)): cross-encoder latency grows quickly with the candidate count, so keep `RERANK_CANDIDATES` small.
+- **What it returns:** the content for the model is the hits wrapped in `<kb_results>`, each a `<result cite_as="...">`; the artifact (each hit's `chunk_id`, `doc_id`, `title`, `heading`, `page`, `content`, `score` and `cite_as`) goes to the API as `sources`.
 
-- **Hybrid retrieval:** vector similarity + full-text, merged with Reciprocal Rank Fusion. `plainto_tsquery` ANDs every word, which misses most natural questions, so its `&` is swapped for `|` ("any of these words"), ranked by `ts_rank_cd`.
-- **Reranker:** a local cross-encoder (`BAAI/bge-reranker-v2-m3-int8` via fastembed/ONNX) rescores the top 8 fused results and the best 6 go to the model. If it fails, the fused order is used. Measured on the golden set (M3 Pro CPU):
+## Web search
 
-  | Setup | recall@1 | MRR | Added latency (p50) |
-  |-------|---:|---:|---:|
-  | Hybrid search only | 96% | 0.98 | none |
-  | + bge-reranker-v2-m3-int8, 8 candidates | 100% | 1.00 | ~0.5 s |
-  | + bge-reranker-v2-m3-int8, 20 candidates | 100% | 1.00 | ~3.8 s |
-  | + MiniLM-L-6 / MiniLM-L-12 / jina-tiny | 86–93% | 0.91–0.96 | 0.3–0.7 s |
-
-  The small English rerankers made ranking worse on this corpus. Cross-encoder latency grows quickly with the candidate count, so keep `RERANK_CANDIDATES` small. Re-run `make eval` (it supports `--no-rerank`) when the corpus changes.
-- Return `content`, `source_uri`, `heading`, `page` and a stable `chunk_id` so the model can cite.
-
-### `web_search` tool
+`src/chatbot/tools/web_search.py`.
 
 ```python
 @tool(response_format="content_and_artifact")
@@ -138,22 +102,14 @@ async def web_search(query: str) -> tuple[str, list[dict]]:
     companies, public facts, or anything that changes over time."""
 ```
 
-- Use DuckDuckGo through `ddgs` (no key). It is fast (about 2 s) but sometimes returns nothing, so fall back to `ddgs`'s `auto` backend, which queries several engines. Drop ad links (`/aclick?`). Snippets are short (about 150 characters); Tavily or Brave give richer content if answer quality needs it. `langchain-community`'s DuckDuckGo tool has no fallback, ad filtering or citation artifacts, so this wrapper stays.
-- Each backend call has a timeout. If every backend fails (keyless search is rate-limited), the tool raises.
+- DuckDuckGo through `ddgs` (no key) is fast (about 2 s) but sometimes returns nothing, so the tool falls back to `ddgs`'s `auto` backend, which queries several engines. Ad links (`/aclick?`) are dropped.
+- Results go to the model in `<web_results>`, each with a markdown-link `cite_as`; the sources carry `title`, `url` and `cite_as`. `WEB_SEARCH_MAX_RESULTS` (5) results, each backend call with a `WEB_SEARCH_TIMEOUT` (15 s); `WEB_SEARCH_ENABLED=false` removes the tool.
+- If every backend fails (keyless search is rate-limited), the tool raises, and the retry below takes over.
+- DuckDuckGo's snippets are short (about 150 characters); Tavily or Brave give richer content if answer quality needs it. `langchain-community`'s DuckDuckGo tool has no fallback, ad filtering or citation artifacts, so this wrapper stays.
 
-### Failures
+## The agent loop
 
-Both tools raise on failure. LangChain's `ToolRetryMiddleware` (`tool_retry` in `tools/registry.py`) retries once after 1.5 s, then returns an error result that names only the exception type ("This search failed (TimeoutError). Tell the user it's unavailable right now..."), so the model can still answer. It covers only these two read-only tools: retrying a tool with side effects could do the action twice. If the reranker fails, the search falls back to the fused order instead.
-
-### Tool descriptions matter
-
-The model picks tools based on the docstrings. Write them as routing rules: what the tool is for, what it's *not* for, and an example query. Most "wrong tool" bugs get fixed here rather than in code.
-
-The system prompt (`prompts/system.md`) adds routing by topic rather than wording: anything about Acme goes to the knowledge base however briefly asked ("express shipping"), and anything that changes over time (who holds an office, prices, news) goes to web search even if the model thinks it knows. Without that, short questions like "president of USA" were answered from stale training data.
-
-### Agent changes
-
-`create_agent` provides the loop: it binds the tools to the model, runs the tool node for any tool calls, and loops back until the model answers.
+`src/chatbot/agent/builder.py`, `agent/middleware.py`, `tools/registry.py`.
 
 ```python
 agent = create_agent(model, tools=[search_knowledge_base, web_search], middleware=[
@@ -163,31 +119,93 @@ agent = create_agent(model, tools=[search_knowledge_base, web_search], middlewar
 ])
 ```
 
-`ModelCallLimit` (LangChain's `ModelCallLimitMiddleware`, plus a warning in the log when it fires; `MAX_MODEL_CALLS`, default 6) stops a confused model from looping forever. It ends the run with a short message instead of raising. LangGraph's `recursion_limit` is set too, in every run's config, but only as a backstop (`RECURSION_LIMIT` in `agent/builder.py`, 200): each round is many graph steps, one per middleware hook.
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as User
+    participant L as Model node
+    participant T as Tools node
+    participant KB as Knowledge base
+    participant W as Web search
 
-## Implementation steps
+    U->>L: "What's our refund policy, and how does it compare to Amazon's?"
+    L->>T: tool_calls: search_knowledge_base("refund policy")
+    T->>KB: hybrid search, rerank top 8, keep 6
+    KB-->>T: chunks + source metadata
+    T-->>L: ToolMessage(chunks)
+    L->>T: tool_calls: web_search("Amazon refund policy 2026")
+    T->>W: query
+    W-->>T: results + URLs
+    T-->>L: ToolMessage(results)
+    L-->>U: Answer with citations [Refund Policy › Sale Items] [Amazon Returns](amazon.com/...)
+```
 
-1. Create `chunks` table migration (Alembic).
-2. Build `ingestion/` CLI: `python -m chatbot.ingestion ./data/docs [--prune]`.
-3. Implement hybrid search + RRF in `tools/rag.py`; unit-test the fusion logic.
-4. Implement `tools/web_search.py` with timeouts and result trimming.
-5. Add a `tools/registry.py` that builds the tools (and, since Phase 4, their retry middleware).
-6. Give the agent the tools (`create_agent(..., tools=...)`).
-7. Update the system prompt with citation rules.
-8. Emit `tool_start` / `tool_end` SSE events.
+- `create_agent` binds the tools to the model, runs the tool node for any tool calls, and loops back until the model answers. The model can also issue both tool calls in one turn; the tool node runs them in parallel.
+- **Model-call limit:** `ModelCallLimit` (LangChain's `ModelCallLimitMiddleware`, plus a warning in the log when it fires; `MAX_MODEL_CALLS`, default 6) stops a confused model from looping forever. It ends the run with a short message instead of raising.
+- **Recursion limit:** LangGraph's `recursion_limit` is set in every run's config too, but only as a backstop (`RECURSION_LIMIT` in `agent/builder.py`, 200): each round is many graph steps, one per middleware hook.
+- **Failures:** both tools raise on failure. `ToolRetryMiddleware` (`tool_retry` in `tools/registry.py`) retries once after 1.5 s, then returns an error result that names only the exception type ("This search failed (TimeoutError). Tell the user it's unavailable right now..."), so the model can still answer. It covers only these two read-only tools: retrying a tool with side effects could do the action twice.
+- **Streaming:** tool calls reach the client as `tool_start` (name, input) and `tool_end` (name, sources) SSE events.
+- **Cost:** each tool round trip resends the whole conversation. Prompt caching on the system prompt and tool definitions helps a lot.
 
-## Evaluation
+## Routing and citations
 
-Build a small golden set now (30–50 questions) and keep growing it:
+- **Tool docstrings are routing rules:** what the tool is for, what it's *not* for, and an example query. The model picks tools from them, so most "wrong tool" bugs get fixed there rather than in code.
+- **The system prompt** (`prompts/system.md`) routes by topic rather than wording: anything about Acme goes to the knowledge base however briefly asked ("express shipping"), and anything that changes over time (who holds an office, prices, news) goes to web search even if the model thinks it knows. Without that, short questions like "president of USA" were answered from stale training data.
+- **Citations:** the prompt tells the model to cite every claim from a tool result with its `cite_as`: `[Refund Policy › Sale Items]` for documents, the markdown link as-is for web pages.
+- **Retrieved content is data, not instructions.** Web pages and documents can contain instructions, so tool output is wrapped in delimiters (`<kb_results>`, `<web_results>`), and tool output can't trigger tools with side effects without the Phase 4 approval gate. Phase 8's prompt-injection review added `as_data` (`prompts/__init__.py`), so a document or web page can't close those tags early.
 
-| Metric | How |
-|--------|-----|
-| Retrieval recall@k | Does the correct chunk appear in the top k? Labelled question → chunk pairs |
-| Tool routing accuracy | For each question, the expected tool(s). Did the agent pick them? |
-| Answer faithfulness | LLM-as-judge: are claims supported by retrieved context? Built in Phase 7 (DeepEval) |
-| Citation correctness | Does every cited source actually contain the claim? Built in Phase 7 |
+## Reference
 
-The golden set lives in `tests/evals/golden.jsonl` and runs with `make eval` (or the `evals` button in Tilt). It scores retrieval recall@k and tool routing (44 questions, including short ones like "president of USA" and "express shipping"). Phase 7 made it part of a gate on every PR, added judged faithfulness, citations and correctness, and reference answers for the knowledge base questions; see [the Phase 7 doc](phase-7-eval-gate.md).
+### Settings
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `EMBEDDING_MODEL` / `EMBEDDING_DIMENSIONS` | `text-embedding-3-small` / `1536` | On the chat model's endpoint |
+| `CHUNK_SIZE_TOKENS` / `CHUNK_OVERLAP_TOKENS` | `600` / `80` | Chunker |
+| `RETRIEVAL_CANDIDATES` | `30` | Results from each of vector and full-text search, before fusion |
+| `RETRIEVAL_TOP_K` | `6` | Hits returned to the model |
+| `RERANKER_MODEL` | `BAAI/bge-reranker-v2-m3-int8` | Empty turns reranking off. About 570 MB, cached in `~/.cache/fastembed` |
+| `RERANK_CANDIDATES` | `8` | Fused results the reranker scores |
+| `WEB_SEARCH_ENABLED` | `true` | `false` removes the `web_search` tool |
+| `WEB_SEARCH_MAX_RESULTS` / `WEB_SEARCH_TIMEOUT` | `5` / `15` s | Per search, per backend call |
+| `MAX_MODEL_CALLS` | `6` | Model calls per run |
+
+### Files
+
+| File | What it does |
+| --- | --- |
+| `migrations/versions/0001_chunks.py` | The `chunks` table (Alembic) |
+| `src/chatbot/ingestion/` | `loaders.py`, `chunking.py`, `pipeline.py` (sync and prune), `__main__.py` (the CLI) |
+| `src/chatbot/storage/embeddings.py` | The embedding model |
+| `src/chatbot/tools/rag.py`, `tools/rerank.py` | Hybrid search, RRF, `search_knowledge_base`; the reranker |
+| `src/chatbot/tools/web_search.py` | `web_search`, backends and fallback |
+| `src/chatbot/tools/registry.py` | `build_tools`, `tool_retry` |
+| `src/chatbot/agent/builder.py`, `agent/middleware.py` | The tools and middleware in `create_agent`; `ModelCallLimit` |
+| `src/chatbot/prompts/system.md` | Routing and citation rules |
+| `src/chatbot/api/streaming.py` | `tool_start` / `tool_end` events |
+
+### Tests
+
+- `tests/unit/test_ingestion.py`: chunks carry the heading path; long sections split with overlap; the content hash ignores whitespace; the HTML, DOCX and PDF loaders.
+- `tests/unit/test_rag.py`, `test_rerank.py`: RRF; `cite_as`; results wrapped and escaped; a failed search is retried once, then reported to the model; the reranker's order and its off switch.
+- `tests/unit/test_web_search.py`: trimmed results and sources; ads dropped; fallback to `auto`; raising when every backend fails; no results isn't an error; the agent retries a rate-limited search once, then tells the model.
+- `tests/integration/test_knowledge_base.py`: ingest is idempotent and tracks changes; prune; hybrid search finds a keyword match; the tool returns citable results; rerank then keep top k; fall back to fused order when the reranker fails.
+
+### Measurements
+
+The golden set, `tests/evals/golden.jsonl` (44 questions, including short ones like "president of USA" and "express shipping"), runs with `make eval` (or the `evals` button in Tilt). This phase scored retrieval recall@k (labelled question-to-chunk pairs) and tool routing (the expected tools per question). Phase 7 made it a gate on every PR and added judged faithfulness, citations and correctness, with reference answers for the knowledge base questions; see [the Phase 7 doc](phase-7-eval-gate.md).
+
+- **Routing:** 44/44 with `gpt-5.4`. **Recall:** recall@6 100%, recall@1 100%.
+- **Reranker** (golden set, M3 Pro CPU):
+
+  | Setup | recall@1 | MRR | Added latency (p50) |
+  | --- | ---: | ---: | ---: |
+  | Hybrid search only | 96% | 0.98 | none |
+  | + bge-reranker-v2-m3-int8, 8 candidates | 100% | 1.00 | ~0.5 s |
+  | + bge-reranker-v2-m3-int8, 20 candidates | 100% | 1.00 | ~3.8 s |
+  | + MiniLM-L-6 / MiniLM-L-12 / jina-tiny | 86–93% | 0.91–0.96 | 0.3–0.7 s |
+
+  The small English rerankers made ranking worse on this corpus. Re-run `make eval` when the corpus changes; `RERANKER_MODEL=` (empty) runs it without the reranker for comparison.
 
 ## Exit criteria
 
@@ -196,9 +214,3 @@ The golden set lives in `tests/evals/golden.jsonl` and runs with `make eval` (or
 - [x] Answers include citations that resolve to real chunks or URLs (`cite_as` on every result; sources returned by the API)
 - [x] Recall@6 ≥ 0.8 on the golden set (`make eval`: recall@6 100%, recall@1 100%)
 - [x] Tool failures produce a graceful answer rather than a 500 (`test_agent_tells_the_model_when_search_keeps_failing`, `test_failed_search_is_retried_once_then_reported_to_the_model`)
-
-## Risks and notes
-
-- **Prompt injection through retrieved content.** Web pages and documents can contain instructions. Wrap tool output in clear delimiters, tell the model that tool content is data, and never let tool output trigger tools with side effects without the Phase 4 approval gate.
-- **Chunking is the main quality lever.** If answers are poor, look at chunk boundaries before swapping models.
-- **Cost.** Each tool round trip resends the whole conversation. Prompt caching on the system prompt and tool definitions helps a lot.

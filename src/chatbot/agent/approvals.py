@@ -12,7 +12,7 @@ from langgraph.types import StateSnapshot
 
 # Order numbers aren't redacted (the bot needs them to help with an order), so a web search
 # containing one asks first. Emails, cards, IPs and phones never get this far: they're
-# redacted from the user's message before the agent runs (chatbot/pii.py).
+# redacted from the user's message before the agent runs (chatbot/guardrails/pii.py).
 ORDER_NUMBER = re.compile(r"\bAC-\d{4,}\b", re.IGNORECASE)
 
 # Tools that never need approval: they only read Acme's own data.

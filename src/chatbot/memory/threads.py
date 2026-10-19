@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
-from chatbot.db import Pool
+from chatbot.storage.db import Pool
 
 TITLE_CHARS = 80
 
@@ -41,6 +41,10 @@ class ThreadStore(Protocol):
     async def list_for_user(self, user_id: str, limit: int) -> list[Thread]: ...
 
     async def delete(self, thread_id: UUID) -> None: ...
+
+    async def ids_for_user(self, user_id: str) -> list[UUID]:
+        """Every thread of the user's (deleting their data)."""
+        ...
 
     async def idle_since(self, cutoff: datetime) -> list[UUID]: ...
 
@@ -106,6 +110,12 @@ class PostgresThreadStore:
     async def delete(self, thread_id: UUID) -> None:
         async with self.pool.connection() as conn:
             await conn.execute("DELETE FROM threads WHERE id = %s", (thread_id,))
+
+    async def ids_for_user(self, user_id: str) -> list[UUID]:
+        async with self.pool.connection() as conn:
+            cur = await conn.execute("SELECT id FROM threads WHERE user_id = %s", (user_id,))
+            rows = await cur.fetchall()
+        return [r["id"] for r in rows]
 
     async def idle_since(self, cutoff: datetime) -> list[UUID]:
         async with self.pool.connection() as conn:

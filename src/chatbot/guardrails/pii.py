@@ -24,6 +24,7 @@ from langchain.agents.middleware.pii import detect_email as builtin_detect_email
 from langgraph.runtime import Runtime
 
 from chatbot.config import get_settings
+from chatbot.observability.metrics import PII_REDACTIONS
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +78,7 @@ class LoggedPIIMiddleware(PIIMiddleware):
     ) -> dict[str, Any] | None:
         update = await super().abefore_model(state, runtime)
         if update:
+            PII_REDACTIONS.labels(self.pii_type, "tool_result").inc()
             logger.info("redacted PII from a tool result: %s", self.pii_type)
         return update
 
@@ -85,6 +87,7 @@ class LoggedPIIMiddleware(PIIMiddleware):
     ) -> dict[str, Any] | None:
         update = await super().aafter_model(state, runtime)
         if update:
+            PII_REDACTIONS.labels(self.pii_type, "reply").inc()
             logger.info("redacted PII from the reply: %s", self.pii_type)
         return update
 

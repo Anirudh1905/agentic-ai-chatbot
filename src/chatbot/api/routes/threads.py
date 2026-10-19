@@ -17,7 +17,6 @@ from chatbot.api.dependencies import (
     Graph,
     Store,
     Threads,
-    UserId,
     Writer,
 )
 from chatbot.api.runs import chat_response, redact, run_config
@@ -30,12 +29,14 @@ from chatbot.api.schemas import (
     ThreadInfo,
     ThreadMessages,
 )
+from chatbot.api.security import BudgetedUserId, UserCredentials, UserId
 from chatbot.api.streaming import stream_run
 from chatbot.config import RunContext
 from chatbot.memory.long_term import cursor_namespace
 from chatbot.memory.short_term import summary_text
 from chatbot.memory.threads import Thread, ThreadStore
-from chatbot.observability import thread_id as thread_id_var
+from chatbot.observability.logs import thread_id as thread_id_var
+from chatbot.observability.metrics import APPROVAL_DECISIONS
 
 logger = logging.getLogger(__name__)
 
@@ -181,11 +182,12 @@ async def prepare_resume(
     thread_id: UUID,
     body: ResumeRequest | None,
     graph: Agent,
+    context: RunContext,
     callbacks: list[BaseCallbackHandler],
 ) -> tuple[RunnableConfig, Command[Any] | None]:
     """The config and graph input that continue the thread, or raise if it can't continue."""
     body = body or ResumeRequest()
-    config = run_config(thread_id, callbacks, body.checkpoint_id)
+    config = run_config("resume", thread_id, context, callbacks, body.checkpoint_id)
     state = await graph.aget_state(config)
     if state.created_at is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Checkpoint not found")
@@ -212,6 +214,7 @@ async def prepare_resume(
         )
         decisions = [d.model_dump(exclude_none=True) for d in body.decisions]
         for d in decisions:
+            APPROVAL_DECISIONS.labels(d["type"]).inc()
             # The reviewer's text goes into the thread too, so it's redacted like a message.
             if d["type"] == "edit":
                 args = d["edited_action"]["args"]
@@ -244,8 +247,9 @@ async def resume_thread(
     thread_id: UUID,
     graph: Graph,
     threads: Threads,
-    user_id: UserId,
+    user_id: BudgetedUserId,
     callbacks: Callbacks,
+    credentials: UserCredentials,
     body: ResumeRequest | None = None,
 ) -> ChatResponse:
     """Continue a paused or interrupted run.
@@ -256,8 +260,9 @@ async def resume_thread(
       from it and become the thread's latest state; the old branch stays in the history.
     """
     await owned_thread(thread_id, user_id, threads)
-    config, graph_input = await prepare_resume(thread_id, body, graph, callbacks)
-    result = await graph.ainvoke(graph_input, config=config, context=RunContext(user_id))
+    context = RunContext(user_id, credentials)
+    config, graph_input = await prepare_resume(thread_id, body, graph, context, callbacks)
+    result = await graph.ainvoke(graph_input, config=config, context=context)
     return await chat_response(graph, result, thread_id)
 
 
@@ -266,16 +271,16 @@ async def resume_thread_stream(
     thread_id: UUID,
     graph: Graph,
     threads: Threads,
-    user_id: UserId,
+    user_id: BudgetedUserId,
     callbacks: Callbacks,
+    credentials: UserCredentials,
     body: ResumeRequest | None = None,
 ) -> EventSourceResponse:
     """Same as POST .../resume, streamed like /chat/stream."""
     await owned_thread(thread_id, user_id, threads)
-    config, graph_input = await prepare_resume(thread_id, body, graph, callbacks)
-    return EventSourceResponse(
-        stream_run(graph, graph_input, config, RunContext(user_id), thread_id)
-    )
+    context = RunContext(user_id, credentials)
+    config, graph_input = await prepare_resume(thread_id, body, graph, context, callbacks)
+    return EventSourceResponse(stream_run(graph, graph_input, config, context, thread_id))
 
 
 @router.delete("/{thread_id}", status_code=status.HTTP_204_NO_CONTENT)

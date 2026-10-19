@@ -19,9 +19,9 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from chatbot.config import get_settings
-from chatbot.db import Pool, open_pool
 from chatbot.memory.threads import PostgresThreadStore
-from chatbot.observability import configure_logging
+from chatbot.observability.logs import configure_logging
+from chatbot.storage.db import Pool, open_pool
 
 # Checkpoint IDs are time-ordered UUIDv6 strings, so the highest one is the latest.
 # This is only safe because the graph has no DeltaChannel state, which would need the
