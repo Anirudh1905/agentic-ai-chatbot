@@ -17,6 +17,7 @@ from evals.golden import Case, load_cases
 from evals.judge import JudgeModel
 from evals.report import (
     CALIBRATION,
+    JUDGED,
     MIN_AGREEMENT,
     REPORT,
     Metric,
@@ -33,7 +34,6 @@ from evals.scoring import Outcome, majority
 from evals.settings import eval_settings
 from evals.suites import judged, retrieval, routing
 
-JUDGED = ("faithfulness", "citations", "correctness")
 # A case that passed on main and fails now is run this many more times; it fails on a majority.
 RERUNS = 2
 # Tries per question when the agent or judge errors (a gateway timeout, usually).

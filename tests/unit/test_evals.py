@@ -44,11 +44,20 @@ def test_the_report_itself_is_not_an_input() -> None:
 
 
 def test_a_drop_past_the_tolerance_blocks_and_one_within_it_does_not() -> None:
-    main = {"metrics": metrics(routing=(0.95, 40, True), correctness=(0.90, 30, True))}
-    # Routing: one case of 40 is 2.5 points, so 92.5% is within it; correctness drops 2 cases.
-    now = metrics(routing=(0.925, 40, True), correctness=(0.8333, 30, True))
+    main = {"metrics": metrics(routing=(0.95, 40, True), retrieval=(1.0, 28, True))}
+    # Routing: one case of 40 is 2.5 points, so 92.5% is within it; retrieval drops 2 cases.
+    now = metrics(routing=(0.925, 40, True), retrieval=(26 / 28, 28, True))
     rows = {r.metric: r for r in compare(main, now)}
     assert not rows["routing"].blocks
+    assert rows["retrieval"].blocks
+
+
+def test_judged_metrics_may_drop_three_cases() -> None:
+    main = {"metrics": metrics(faithfulness=(31 / 40, 40, True), correctness=(1.0, 30, True))}
+    # Faithfulness drops 2 cases (the Phase 9 run), correctness 4.
+    now = metrics(faithfulness=(29 / 40, 40, True), correctness=(26 / 30, 30, True))
+    rows = {r.metric: r for r in compare(main, now)}
+    assert not rows["faithfulness"].blocks
     assert rows["correctness"].blocks
 
 
