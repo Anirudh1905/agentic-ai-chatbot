@@ -1,0 +1,4 @@
+# The CloudNativePG operator; the Postgres Cluster itself (pgvector, one instance) is in
+# deploy/base/postgres.yaml.
+resources:
+  requests: {cpu: 50m, memory: 128Mi}

@@ -1,0 +1,47 @@
+# Prometheus, Alertmanager and Grafana through the Prometheus Operator, kept lean for a laptop:
+# no node-exporter and none of the stock Kubernetes dashboards or control-plane monitors, which
+# kind doesn't expose anyway. Our ServiceMonitors, PrometheusRule and dashboard are in
+# deploy/base/monitoring.yaml.
+nodeExporter:
+  enabled: false
+kubeEtcd: {enabled: false}
+kubeScheduler: {enabled: false}
+kubeControllerManager: {enabled: false}
+kubeProxy: {enabled: false}
+defaultRules:
+  create: false
+
+prometheus:
+  prometheusSpec:
+    # Pick up every ServiceMonitor and rule, not only the chart's own.
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+    retention: 15d
+    routePrefix: /prometheus
+    externalUrl: http://localhost:8088/prometheus
+    resources:
+      requests: {cpu: 100m, memory: 400Mi}
+
+alertmanager:
+  alertmanagerSpec:
+    routePrefix: /alertmanager
+    externalUrl: http://localhost:8088/alertmanager
+    resources:
+      requests: {cpu: 10m, memory: 32Mi}
+
+grafana:
+  defaultDashboardsEnabled: false
+  adminPassword: admin
+  grafana.ini:
+    server:
+      root_url: http://localhost:8088/grafana
+      serve_from_sub_path: true
+    auth.anonymous:
+      enabled: true
+      org_role: Viewer
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      searchNamespace: ALL

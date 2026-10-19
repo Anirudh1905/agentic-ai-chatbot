@@ -1,4 +1,4 @@
-.PHONY: dev worker ui tilt test test-unit lint fmt typecheck up down check migrate ingest eval eval-calibrate eval-check retention
+.PHONY: dev worker ui tilt langfuse cluster cluster-delete secrets test test-unit lint fmt typecheck up down check migrate ingest eval eval-calibrate eval-check retention
 
 dev:
 	uv run uvicorn chatbot.api.main:app --reload
@@ -11,7 +11,23 @@ ui:
 	uv run --group ui streamlit run ui/app.py
 
 tilt:
-	tilt up
+	tilt up --context kind-chatbot
+
+# Langfuse only (Docker Compose); everything else runs in the cluster.
+langfuse:
+	docker compose up -d
+
+# The local Kubernetes cluster (kind) and the services it runs on: Envoy Gateway,
+# CloudNativePG, kube-prometheus-stack. Run once; safe to run again.
+cluster:
+	./deploy/cluster.sh
+
+cluster-delete:
+	kind delete cluster --name chatbot
+
+# deploy/local/secrets.env (gitignored) from .env: the keys the cluster's Secret holds.
+secrets:
+	./deploy/local/make-secrets.sh
 
 test:
 	uv run pytest
@@ -60,8 +76,7 @@ typecheck:
 
 check: lint typecheck test
 
-up:
-	docker compose up -d
+up: langfuse
 
 down:
 	docker compose down

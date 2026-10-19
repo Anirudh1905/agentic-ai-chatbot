@@ -1,0 +1,13 @@
+# The local Kubernetes cluster (Phase 9): one kind node. Host port 8088 reaches the Envoy Gateway
+# through the NodePort it's given in deploy/local (30080), so the app is at
+# http://localhost:8088 (80 and 8080 are often taken, by Rancher Desktop for one).
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: chatbot
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      - containerPort: 30080
+        hostPort: 8088
+        listenAddress: 127.0.0.1
+        protocol: TCP

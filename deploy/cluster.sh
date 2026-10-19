@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# make cluster: the kind cluster and the third-party services the app runs on (Phase 9).
+# Safe to run again: it creates what's missing and upgrades the charts in place.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+CLUSTER=chatbot
+CONTEXT=kind-$CLUSTER
+
+if ! kind get clusters | grep -qx "$CLUSTER"; then
+  # kind makes the new cluster your current context; put back the one you had.
+  previous=$(kubectl config current-context 2>/dev/null || true)
+  kind create cluster --config deploy/kind.yaml
+  if [ -n "$previous" ]; then kubectl config use-context "$previous" >/dev/null; fi
+fi
+
+helm repo add cnpg https://cloudnative-pg.github.io/charts >/dev/null
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts >/dev/null
+helm repo update cnpg prometheus-community >/dev/null
+
+helm upgrade --install eg oci://docker.io/envoyproxy/gateway-helm --version 1.9.2 \
+  --kube-context "$CONTEXT" --namespace envoy-gateway-system --create-namespace \
+  --values deploy/helm/envoy-gateway.yaml --wait
+helm upgrade --install cnpg cnpg/cloudnative-pg --version 0.29.1 \
+  --kube-context "$CONTEXT" --namespace cnpg-system --create-namespace \
+  --values deploy/helm/cloudnative-pg.yaml --wait
+helm upgrade --install monitoring prometheus-community/kube-prometheus-stack --version 92.10.1 \
+  --kube-context "$CONTEXT" --namespace monitoring --create-namespace \
+  --values deploy/helm/kube-prometheus-stack.yaml --wait --timeout 10m
+
+echo "cluster $CLUSTER ready (context $CONTEXT)"
