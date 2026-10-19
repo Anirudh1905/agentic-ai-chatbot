@@ -1,0 +1,30 @@
+# The CI overlay (Phase 9): the kind overlay with the image CI builds and loads (chatbot:ci), and
+# without what the smoke test doesn't need: the ingest Job calls the embeddings model (CI has no
+# key), the reranker-model Job downloads 570 MB, and pgweb is a dev tool. (postgres-host stays:
+# a NodePort, harmless.)
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../local
+images:
+  - name: chatbot
+    newTag: ci
+patches:
+  - target: {kind: Job, name: ingest}
+    patch: |-
+      $patch: delete
+      apiVersion: batch/v1
+      kind: Job
+      metadata: {name: ingest}
+  - target: {kind: Job, name: reranker-model}
+    patch: |-
+      $patch: delete
+      apiVersion: batch/v1
+      kind: Job
+      metadata: {name: reranker-model}
+  - target: {kind: Deployment, name: pgweb}
+    patch: |-
+      $patch: delete
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata: {name: pgweb}
