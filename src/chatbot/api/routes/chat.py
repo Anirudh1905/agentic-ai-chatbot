@@ -14,7 +14,7 @@ from chatbot.api.schemas import ChatRequest, ChatResponse
 from chatbot.api.streaming import stream_run
 from chatbot.config import RunContext
 from chatbot.memory.threads import ThreadStore, make_title
-from chatbot.observability import thread_id as thread_id_var
+from chatbot.observability.logs import thread_id as thread_id_var
 
 logger = logging.getLogger(__name__)
 

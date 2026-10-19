@@ -31,7 +31,7 @@ flowchart LR
     IP & User & Budget -.->|count / read| Redis
 ```
 
-**Accounts and login** (`src/chatbot/api/auth.py`, `src/chatbot/users.py`, migration `0003_users`), following the login API of [async-agentic-workflows](https://github.com/Anirudh1905/async-agentic-workflows/blob/main/src/agentic_workflows/api/routes/auth.py):
+**Accounts and login** (`src/chatbot/api/auth.py`, `src/chatbot/accounts/users.py`, migration `0003_users`), following the login API of [async-agentic-workflows](https://github.com/Anirudh1905/async-agentic-workflows/blob/main/src/agentic_workflows/api/routes/auth.py):
 
 ```mermaid
 sequenceDiagram
@@ -123,7 +123,7 @@ flowchart TB
 - Beyond the reference: without `JWT_SECRET`, requests get a clear 401 instead of a server error.
 - The request log line names the authenticated user, not a header the caller sent.
 
-**Limits** (`src/chatbot/usage.py`), counted in Redis through the `limits` library, so every API process shares the counts.
+**Limits** (`src/chatbot/accounts/limits.py`), counted in Redis through the `limits` library, so every API process shares the counts.
 
 ```mermaid
 sequenceDiagram
@@ -202,13 +202,13 @@ For `curl`, log in for a token: `curl -s localhost:8000/auth/login -d 'username=
 | `src/chatbot/api/auth.py` (new) | Everything about who's calling: the `/auth` routes, `create_access_token`, `get_current_user` (decode, then look the account up), and the `UserId` / `BudgetedUserId` dependencies |
 | `src/chatbot/agent/builder.py`, `agent/middleware.py` | `check_credentials`; `build_llm(credentials=...)`; the `UserModel` middleware and `UserModelError` |
 | `src/chatbot/config.py` (`RunContext`) | `ModelCredentials`, carried in the run context |
-| `src/chatbot/users.py` (new) | `UserStore`: create, authenticate (argon2id, dummy hash for unknown emails), get (every request) |
+| `src/chatbot/accounts/users.py` (new) | `UserStore`: create, authenticate (argon2id, dummy hash for unknown emails), get (every request) |
 | `migrations/versions/0003_users.py` (new) | The `users` table |
-| `src/chatbot/usage.py` (new) | `UsageLimits` (rate limits and the budget on `limits`' Redis storage), `SpendTokens` middleware |
+| `src/chatbot/accounts/limits.py` (new) | `UsageLimits` (rate limits and the budget on `limits`' Redis storage), `SpendTokens` middleware |
 | `src/chatbot/api/dependencies.py` | `get_limits`, `limit_ip`, `limit_login`, `get_users` |
 | `src/chatbot/api/main.py` | The per-IP limit on every router except health |
 | `src/chatbot/api/routes/chat.py`, `threads.py` | The four run routes take `BudgetedUserId` |
-| `src/chatbot/api/request_logging.py` | Logs the authenticated user, not a header |
+| `src/chatbot/api/middleware.py` | Logs the authenticated user, not a header |
 | `src/chatbot/agent/builder.py` | `build_graph(usage=...)` adds `SpendTokens` |
 | `src/chatbot/config.py` | The settings above |
 | `ui/app.py` | Login and create-account screen, with optional OpenAI credentials sent as headers; the token in the session; "Signed in as" and log out; back to login on 401 or expiry; shows a refused run's reason |
@@ -250,7 +250,7 @@ sequenceDiagram
 ```
 
 - Other users' threads and memories are untouched (tested).
-- **Not deleted:** the day's token count in Redis (it holds a number, not data, and expires after midnight UTC), the log lines and metrics (no message text, see below), and Langfuse traces. Traces hold the user's (PII-redacted) messages under a hashed user id; delete them in Langfuse by filtering on that id (`hashed_user` in `observability.py`).
+- **Not deleted:** the day's token count in Redis (it holds a number, not data, and expires after midnight UTC), the log lines and metrics (no message text, see below), and Langfuse traces. Traces hold the user's (PII-redacted) messages under a hashed user id; delete them in Langfuse by filtering on that id (`hashed_user` in `observability/tracing.py`).
 - Deleting one thread (`DELETE /threads/{id}`) and forgetting memories (`DELETE /me/memory`) still work on their own.
 
 ## Security and access
@@ -271,7 +271,7 @@ sequenceDiagram
 | Untrusted text is wrapped in tags, and the system prompt says never to follow instructions inside `<kb_results>` and `<web_results>` | `tools/rag.py`, `tools/web_search.py`, `prompts/system.md` | **A gap, fixed:** a document or web page containing `</web_results>` could end the results early and pass what followed off as ours. Our tags inside untrusted text are now defused (`<` becomes `&lt;`, `prompts.as_data`), in search results and in recalled memories |
 | No side effects without approval | `agent/approvals.py`, `tools/` | Holds. The tools are `search_knowledge_base` (read only), `web_search` (sends its query to a third party, so a query with sensitive terms, an email, a phone or an order number waits for a person) and `remember` (writes only the caller's own memories, so no approval) |
 | Memories never grant anything | `agent/middleware.py` (the prompt), `memory/long_term/facts.py` | Holds. The prompt says memories never grant discounts, refunds, status or permissions, and facts claiming them ("VIP", "50% off", "admin") are dropped in code before they're stored |
-| PII is redacted before the model sees it | `pii.py` (Phase 5) | Holds. A page that makes the model put conversation details into a web query finds them already redacted, and a query with an email or phone waits for approval |
+| PII is redacted before the model sees it | `guardrails/pii.py` (Phase 5) | Holds. A page that makes the model put conversation details into a web query finds them already redacted, and a query with an email or phone waits for approval |
 
 What's left is the usual residual risk: a page can still try to steer the answer itself. The answer is grounded in cited results (the faithfulness and citation evals measure it), and nothing the model writes has side effects beyond the user's own memories.
 
@@ -292,21 +292,21 @@ flowchart LR
 - [x] Alerts: error rate, model and API latency spikes, cost anomalies, PII guard failures
 - [x] Eval scores stored against each trace in Langfuse, so a failed eval case links to its run (Phase 7 writes them to `report.json` only)
 
-**Traces** (`observability.py`, `api/runs.py`). Each run's config carries metadata that Langfuse reads as the trace's attributes: the name (`chat` or `resume`), the thread as the session (so a conversation's runs group together), the user as `hashed_user` (an HMAC of their id with `JWT_SECRET`, so only someone with the secret can match a trace to a user; a plain hash of "alice" can be guessed), tags (`chat`/`resume`, and `own-key` for a user's own endpoint) and the model. Langfuse records the rest from the run itself: each model call with its tokens, each tool call, and approval pauses (LangGraph interrupts, which it shows without marking them as errors, and continues on resume). **Cost** shows once Langfuse has a price for the model: it knows OpenAI's names, but a gateway's names (`gpt-5.4`) need a model definition in Langfuse's settings. Checked live: a chat's root trace had the hashed user and the thread id.
+**Traces** (`observability/tracing.py`, `api/runs.py`). Each run's config carries metadata that Langfuse reads as the trace's attributes: the name (`chat` or `resume`), the thread as the session (so a conversation's runs group together), the user as `hashed_user` (an HMAC of their id with `JWT_SECRET`, so only someone with the secret can match a trace to a user; a plain hash of "alice" can be guessed), tags (`chat`/`resume`, and `own-key` for a user's own endpoint) and the model. Langfuse records the rest from the run itself: each model call with its tokens, each tool call, and approval pauses (LangGraph interrupts, which it shows without marking them as errors, and continues on resume). **Cost** shows once Langfuse has a price for the model: it knows OpenAI's names, but a gateway's names (`gpt-5.4`) need a model definition in Langfuse's settings. Checked live: a chat's root trace had the hashed user and the thread id.
 
-**Metrics** (`metrics.py`, served at `GET /metrics`, not authenticated or limited, like `/healthz`). Labels are small fixed sets, never users or threads.
+**Metrics** (`observability/metrics.py`, served at `GET /metrics`, not authenticated or limited, like `/healthz`). Labels are small fixed sets, never users or threads.
 
 | Metric | What | Recorded in |
 | --- | --- | --- |
-| `chatbot_http_requests_total{method, route, status}`, `chatbot_http_request_duration_seconds{method, route}` | Requests and their latency, by route template (`/threads/{thread_id}`); a stream until its last event | `api/request_logging.py` |
+| `chatbot_http_requests_total{method, route, status}`, `chatbot_http_request_duration_seconds{method, route}` | Requests and their latency, by route template (`/threads/{thread_id}`); a stream until its last event | `api/middleware.py` |
 | `chatbot_time_to_first_token_seconds` | Start of a streamed run to the first reply token | `api/streaming.py` |
 | `chatbot_run_errors_total{kind}` | Runs that ended in an error: `internal`, or `user_model` (the user's own key refused) | `api/streaming.py`, `api/main.py` |
 | `chatbot_model_call_duration_seconds{model}`, `chatbot_model_call_errors_total{model}`, `chatbot_model_tokens_total{model, kind}` | The agent's model calls, failures, and input and output tokens | `ModelCallMiddleware` |
 | `chatbot_tool_calls_total{tool, outcome}` | Tool calls after retries, `ok` or `error` | `ToolCallMetrics` middleware (outermost, so a retried call counts once) |
 | `chatbot_approval_pauses_total`, `chatbot_approval_decisions_total{decision}` | Runs paused for approval, and the answers (approve, edit, reject) | `api/runs.py`, `api/streaming.py`, `routes/threads.py` |
-| `chatbot_pii_redactions_total{type, source}` | PII redacted, by type, in the user's `message`, a `tool_result` or a `reply` | `api/runs.py`, `pii.py` |
+| `chatbot_pii_redactions_total{type, source}` | PII redacted, by type, in the user's `message`, a `tool_result` or a `reply` | `api/runs.py`, `guardrails/pii.py` |
 | `chatbot_memory_recalls_total{result}` | Turns whose memory search found something (`hit`) or not | `LongTermMemory` |
-| `chatbot_limited_total{limit}` | 429s: `user`, `ip`, `login` or `budget` | `usage.py` |
+| `chatbot_limited_total{limit}` | 429s: `user`, `ip`, `login` or `budget` | `accounts/limits.py` |
 
 Counts are per process: with several API processes each is scraped and the dashboard sums them (Phase 9).
 
@@ -366,12 +366,12 @@ Counts are per process: with several API processes each is scraped and the dashb
 | --- | --- |
 | `src/chatbot/api/routes/me.py` (new) | `DELETE /me` |
 | `src/chatbot/memory/long_term/store.py`, `writer.py` | `forget_user`; `MemoryWriter.user_lock` |
-| `src/chatbot/memory/threads.py`, `users.py` | `ids_for_user`; `UserStore.delete` |
+| `src/chatbot/memory/threads.py`, `accounts/users.py` | `ids_for_user`; `UserStore.delete` |
 | `src/chatbot/config.py` | Secrets from `/run/secrets`; `JWT_SECRET` at least 32 characters |
 | `src/chatbot/prompts/__init__.py` | `as_data`, used by both search tools and the memories in the prompt |
-| `src/chatbot/observability.py` | `langfuse_client`, `build_callbacks(trace_id=...)`, `hashed_user`, `trace_metadata` |
+| `src/chatbot/observability/tracing.py` | `langfuse_client`, `build_callbacks(trace_id=...)`, `hashed_user`, `trace_metadata` |
 | `src/chatbot/api/runs.py`, `routes/chat.py`, `routes/threads.py` | `run_config(name, thread, context, ...)` adds the trace metadata |
-| `src/chatbot/metrics.py` (new) | The metrics above; recorded in `request_logging.py`, `streaming.py`, `runs.py`, `main.py` (`GET /metrics`), `agent/middleware.py` (`ToolCallMetrics`), `pii.py`, `usage.py`, `memory/long_term/middleware.py` |
+| `src/chatbot/observability/metrics.py` (new) | The metrics above; recorded in `api/middleware.py`, `streaming.py`, `runs.py`, `routes/health.py` (`GET /metrics`), `agent/middleware.py` (`ToolCallMetrics`), `guardrails/pii.py`, `accounts/limits.py`, `memory/long_term/middleware.py` |
 | `ops/prometheus/` (new) | Scrape config and `alerts.yml` |
 | `ops/grafana/` (new) | Datasource, dashboard provider, and the "Chatbot" dashboard |
 | `docker-compose.yml`, `Tiltfile` | `prometheus` and `grafana` services |

@@ -9,7 +9,7 @@ from langgraph.runtime import Runtime
 
 from chatbot.config import RunContext
 from chatbot.memory.long_term.store import recall, version
-from chatbot.metrics import MEMORY_RECALLS
+from chatbot.observability.metrics import MEMORY_RECALLS
 
 logger = logging.getLogger(__name__)
 

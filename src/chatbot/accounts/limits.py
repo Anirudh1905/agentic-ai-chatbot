@@ -29,7 +29,7 @@ from limits.aio.strategies import MovingWindowRateLimiter
 from limits.storage import storage_from_string
 
 from chatbot.config import RunContext, Settings
-from chatbot.metrics import LIMITED
+from chatbot.observability.metrics import LIMITED
 
 logger = logging.getLogger(__name__)
 

@@ -8,7 +8,7 @@ that must be redacted. A case with an empty list must come back unchanged.
 import json
 from pathlib import Path
 
-from chatbot.pii import redact_pii
+from chatbot.guardrails.pii import redact_pii
 from evals.scoring import Outcome
 
 CASES = Path(__file__).parents[1] / "pii_cases.jsonl"

@@ -25,7 +25,12 @@ from langgraph.types import Command
 
 from chatbot.config import ModelCredentials, RunContext, Settings
 from chatbot.memory.short_term import close_dangling_tool_calls
-from chatbot.metrics import MODEL_CALL_ERRORS, MODEL_CALL_SECONDS, MODEL_TOKENS, TOOL_CALLS
+from chatbot.observability.metrics import (
+    MODEL_CALL_ERRORS,
+    MODEL_CALL_SECONDS,
+    MODEL_TOKENS,
+    TOOL_CALLS,
+)
 from chatbot.prompts import as_data, load_prompt
 
 logger = logging.getLogger(__name__)

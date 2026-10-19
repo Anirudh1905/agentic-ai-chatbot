@@ -17,11 +17,11 @@ from fastapi import APIRouter, Depends, Form, Header, HTTPException, Request, st
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import SecretStr
 
+from chatbot.accounts.users import EmailTaken, User
 from chatbot.agent.builder import OPENAI_BASE_URL, check_credentials
 from chatbot.api.dependencies import Limits, Users, limit_login
 from chatbot.api.schemas import RegisterRequest, TokenResponse, UserResponse
 from chatbot.config import ModelCredentials, Settings, get_settings
-from chatbot.users import EmailTaken, User
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 logger = logging.getLogger(__name__)
@@ -79,7 +79,7 @@ CurrentUser = Annotated[User, Depends(get_current_user)]
 
 async def limited_user(request: Request, user: CurrentUser, limits: Limits) -> str:
     """The signed-in user's id, within their rate limit."""
-    request.state.user_id = user.id  # for the request's log line (api/request_logging.py)
+    request.state.user_id = user.id  # for the request's log line (api/middleware.py)
     if limits:
         await limits.limit_user(user.id)
     return user.id

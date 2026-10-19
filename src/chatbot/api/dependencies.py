@@ -12,18 +12,18 @@ from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.store.base import BaseStore
 from langgraph.store.postgres.aio import AsyncPostgresStore
 
+from chatbot.accounts.limits import UsageLimits
+from chatbot.accounts.users import PostgresUserStore, UserStore
 from chatbot.agent.approvals import interrupt_on
 from chatbot.agent.builder import Agent, build_graph, build_llm
 from chatbot.config import get_settings
-from chatbot.db import Pool, open_pool
-from chatbot.embeddings import build_embeddings
 from chatbot.memory.long_term import MemoryWriter
 from chatbot.memory.threads import PostgresThreadStore, ThreadStore
-from chatbot.observability import build_callbacks
+from chatbot.observability.tracing import build_callbacks
+from chatbot.storage.db import Pool, open_pool
+from chatbot.storage.embeddings import build_embeddings
 from chatbot.tools.registry import build_tools
 from chatbot.tools.rerank import build_reranker
-from chatbot.usage import UsageLimits
-from chatbot.users import PostgresUserStore, UserStore
 
 logger = logging.getLogger(__name__)
 

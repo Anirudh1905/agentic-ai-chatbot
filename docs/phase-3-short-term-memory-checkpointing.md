@@ -162,7 +162,7 @@ Checkpoints pile up quickly (one per step, several per turn). Two mechanisms:
 
 ### Debugging and observability
 
-- **Logs.** One line per request, plus what each turn did, each tagged with the request ID and thread (`ContextFilter` in `observability.py`, `RequestLoggingMiddleware` in `api/request_logging.py`). `grep thread=<first 8 chars>` follows a conversation:
+- **Logs.** One line per request, plus what each turn did, each tagged with the request ID and thread (`ContextFilter` in `observability/logs.py`, `RequestMiddleware` in `api/middleware.py`). `grep thread=<first 8 chars>` follows a conversation:
 
   ```text
   chatbot.api.routes.chat  [req=daf6ce1f thread=ee996bd2]: continuing thread, message of 28 chars

@@ -16,6 +16,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.store.base import BaseStore
 
+from chatbot.accounts.limits import SpendTokens, UsageLimits
 from chatbot.agent.middleware import (
     ModelCallLimit,
     ModelCallMiddleware,
@@ -24,12 +25,11 @@ from chatbot.agent.middleware import (
     system_prompt,
 )
 from chatbot.config import ModelCredentials, RunContext, Settings
+from chatbot.guardrails.pii import output_middleware
 from chatbot.memory.long_term import LongTermMemory, MemoryWriter
 from chatbot.memory.short_term import summarization
-from chatbot.pii import output_middleware
 from chatbot.tools.memory import build_remember_tool
 from chatbot.tools.registry import tool_retry
-from chatbot.usage import SpendTokens, UsageLimits
 
 # create_agent's state: the messages, plus a few internal keys its middleware uses.
 AgentState = _AgentState[Any]
@@ -153,8 +153,8 @@ def build_graph(
     agent/approvals.py), matching tool calls pause for a human; this needs a checkpointer. With
     a `store` (and MEMORY_ENABLED), every turn recalls the user's long-term memories
     (memory/long_term/); with a `memory_writer` too, the turns a summary folds away are
-    pushed into them. With `usage` (chatbot/usage.py), every model call's tokens count against
-    the user's daily budget.
+    pushed into them. With `usage` (chatbot/accounts/limits.py), every model call's tokens
+    count against the user's daily budget.
     """
     model = llm or build_llm(settings)
     summary_model = summarizer or llm or build_llm(settings, settings.summary_model, False)

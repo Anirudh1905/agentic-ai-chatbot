@@ -4,9 +4,9 @@ from collections.abc import AsyncIterator
 
 import pytest
 
+from chatbot.accounts.users import EmailTaken, PostgresUserStore
 from chatbot.config import Settings
-from chatbot.db import Pool, open_pool
-from chatbot.users import EmailTaken, PostgresUserStore
+from chatbot.storage.db import Pool, open_pool
 
 pytestmark = pytest.mark.integration
 

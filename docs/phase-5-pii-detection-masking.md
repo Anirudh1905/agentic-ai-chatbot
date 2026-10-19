@@ -37,7 +37,7 @@ flowchart TB
         Tools --> Before
     end
 
-    Model -->|tokens| Stream["StreamRedactor<br/>(pii.py, used by api/streaming.py)"]
+    Model -->|tokens| Stream["StreamRedactor<br/>(guardrails/pii.py, used by api/streaming.py)"]
     Stream -->|"redacted SSE tokens"| User
     Agent -->|"checkpoints: redacted<br/>(see gaps)"| CP[(Checkpointer)]
     Agent -.->|"trace: redacted input"| Obs[Langfuse]
@@ -48,9 +48,9 @@ flowchart TB
 | The user's message, a reviewer's edited query and reject reason | `redact()` in `api/runs.py`, before the agent is invoked | LangGraph checkpoints the input before any middleware runs, so this is the only place that keeps the raw value out of every checkpoint and the trace |
 | Tool results (knowledge base chunks, web snippets) | `PIIMiddleware(apply_to_tool_results=True)` | Redacted before the model reads them, so the model can't repeat a third party's details |
 | The model's reply, as stored | `PIIMiddleware(apply_to_output=True)` | The thread, `/chat` replies and `GET /messages` get the redacted reply |
-| The reply as it streams to the UI | `StreamRedactor` (`pii.py`), used by `api/streaming.py` | The middleware rewrites the reply only after the model has finished, so the tokens the user watches need redacting on the way out too |
+| The reply as it streams to the UI | `StreamRedactor` (`guardrails/pii.py`), used by `api/streaming.py` | The middleware rewrites the reply only after the model has finished, so the tokens the user watches need redacting on the way out too |
 
-All three share the same rules (`chatbot/pii.py`), built from LangChain's `RedactionRule`.
+All three share the same rules (`chatbot/guardrails/pii.py`), built from LangChain's `RedactionRule`.
 
 ### Why the stream has its own redactor
 
@@ -80,7 +80,7 @@ The first version did that. It redacts in `before_model`, but LangGraph writes t
 
 ## Components
 
-### `chatbot/pii.py`
+### `chatbot/guardrails/pii.py`
 
 ```python
 RULES = [

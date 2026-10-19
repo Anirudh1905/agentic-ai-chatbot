@@ -15,9 +15,9 @@ from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResu
 from langchain_core.runnables import Runnable, RunnableLambda
 from langchain_core.tools import BaseTool, tool
 
+from chatbot.accounts.users import DUMMY_HASH, EmailTaken, User, password_hash
 from chatbot.memory.long_term.facts import Change, Changes, Fact, Facts
 from chatbot.memory.threads import Thread
-from chatbot.users import DUMMY_HASH, EmailTaken, User, password_hash
 
 
 class ScriptedChatModel(BaseChatModel):

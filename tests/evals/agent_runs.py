@@ -16,9 +16,9 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from chatbot.agent.builder import RECURSION_LIMIT, build_graph
 from chatbot.config import Settings
-from chatbot.db import Pool, open_pool
-from chatbot.embeddings import build_embeddings
-from chatbot.observability import build_callbacks, langfuse_client
+from chatbot.observability.tracing import build_callbacks, langfuse_client
+from chatbot.storage.db import Pool, open_pool
+from chatbot.storage.embeddings import build_embeddings
 from chatbot.tools.registry import build_tools
 from chatbot.tools.rerank import build_reranker
 from evals.scoring import Outcome

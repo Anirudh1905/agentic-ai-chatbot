@@ -12,8 +12,8 @@ from langchain_core.messages import HumanMessage
 from langgraph.store.postgres.aio import AsyncPostgresStore
 
 from chatbot.config import Settings
-from chatbot.db import Pool, open_pool
 from chatbot.memory.long_term import MemoryWriter, list_memories, namespace
+from chatbot.storage.db import Pool, open_pool
 
 pytestmark = pytest.mark.integration
 

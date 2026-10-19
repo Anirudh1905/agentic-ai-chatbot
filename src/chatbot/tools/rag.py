@@ -10,8 +10,8 @@ from langchain_core.tools import BaseTool, tool
 from pgvector import Vector
 
 from chatbot.config import Settings
-from chatbot.db import Conn, Pool
 from chatbot.prompts import as_data
+from chatbot.storage.db import Conn, Pool
 
 if TYPE_CHECKING:
     from chatbot.tools.rerank import Reranker

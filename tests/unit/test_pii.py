@@ -12,7 +12,7 @@ from chatbot.api import runs
 from chatbot.api.dependencies import get_graph
 from chatbot.api.main import app
 from chatbot.config import Settings
-from chatbot.pii import StreamRedactor, detect_phone, redact_pii
+from chatbot.guardrails.pii import StreamRedactor, detect_phone, redact_pii
 
 EMAIL = "jane@example.com"
 

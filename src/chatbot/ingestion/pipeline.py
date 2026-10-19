@@ -6,9 +6,9 @@ from langchain_core.embeddings import Embeddings
 from psycopg.types.json import Jsonb
 
 from chatbot.config import Settings
-from chatbot.db import Conn, Pool
 from chatbot.ingestion.chunking import Chunk, chunk_document
 from chatbot.ingestion.loaders import is_supported, load
+from chatbot.storage.db import Conn, Pool
 
 logger = logging.getLogger(__name__)
 

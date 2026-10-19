@@ -142,7 +142,7 @@ Facts that change are updated when they're pushed: "my favourite colour is now r
 | `agent/builder.py` | Adds `LongTermMemory`, the `remember` tool and the summarization hook when a `store` is passed and `MEMORY_ENABLED` is on; `create_agent(store=..., context_schema=RunContext)` |
 | `config.py` (`RunContext`), `api/runs.py` | Every run gets the user as LangGraph's runtime context (`context=RunContext(user_id)`; middleware and tools read `runtime.context.user_id`) and the thread in its config |
 | `api/dependencies.py` | Creates `AsyncPostgresStore` on the shared pool (vector index on `content`, TTL config), runs its `setup()` and TTL sweeper, creates the `MemoryWriter` and starts its TTL loop; on shutdown, stops both and waits up to 30 s for running pushes |
-| `api/routes/memory.py` | `GET /me/memory`, `DELETE /me/memory/{id}`, `DELETE /me/memory` |
+| `api/routes/me.py` | `GET /me/memory`, `DELETE /me/memory/{id}`, `DELETE /me/memory` |
 | `api/routes/threads.py` | `POST /threads/{id}/messages/{index}/remember`; `DELETE /threads/{id}` also deletes the thread's cursor |
 | `ui/app.py` | The "Remember this" button beside each of the bot's replies, and the "What I remember about you" sidebar panel |
 
@@ -309,7 +309,7 @@ chatbot.api.routes.threads [req=… thread=…]:      user asked to remember mes
 chatbot.memory.short_term [req=… thread=…]:       summarized older messages in 5.9s; thread now 2 messages, ~479 tokens
 chatbot.memory.long_term.writer [req=… thread=…]: pushed 4 messages to long-term memory: 1 add, 1 dropped (entitlement claim), 1 update
 chatbot.memory.long_term.middleware [req=… thread=…]: recalled 3 long-term memories
-chatbot.api.routes.memory [req=…]: user demo-user deleted all 3 long-term memories
+chatbot.api.routes.me [req=…]: user demo-user deleted all 3 long-term memories
 ```
 
 A failed push is logged with its traceback (`updating long-term memory failed`). The thread's cursor doesn't move, so the next trigger retries it. A failed fact (`updating a long-term memory failed`) is counted as `failed`, and the other facts are still written. In the counts:

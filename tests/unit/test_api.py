@@ -27,7 +27,8 @@ from chatbot.api.dependencies import (
 )
 from chatbot.api.main import app
 from chatbot.config import ModelCredentials, RunContext, get_settings
-from chatbot.observability import ContextFilter, hashed_user, trace_metadata
+from chatbot.observability.logs import ContextFilter
+from chatbot.observability.tracing import hashed_user, trace_metadata
 
 SOURCE = {"type": "kb", "cite_as": "Doc › Section", "doc_id": "d"}
 

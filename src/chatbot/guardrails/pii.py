@@ -24,7 +24,7 @@ from langchain.agents.middleware.pii import detect_email as builtin_detect_email
 from langgraph.runtime import Runtime
 
 from chatbot.config import get_settings
-from chatbot.metrics import PII_REDACTIONS
+from chatbot.observability.metrics import PII_REDACTIONS
 
 logger = logging.getLogger(__name__)
 

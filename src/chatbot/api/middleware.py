@@ -4,8 +4,8 @@ import uuid
 
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from chatbot.metrics import REQUEST_SECONDS, REQUESTS
-from chatbot.observability import request_id, thread_id
+from chatbot.observability.logs import request_id, thread_id
+from chatbot.observability.metrics import REQUEST_SECONDS, REQUESTS
 
 logger = logging.getLogger("chatbot.api")
 
@@ -13,8 +13,9 @@ logger = logging.getLogger("chatbot.api")
 QUIET_PATHS = {"/healthz", "/metrics"}
 
 
-class RequestLoggingMiddleware:
-    """One log line per request, and a request ID on every log line written while serving it.
+class RequestMiddleware:
+    """One log line and the metrics per request, and a request ID on every log line written while
+    serving it.
 
     Plain ASGI rather than BaseHTTPMiddleware so the context (and the timing) also covers the
     body of streaming responses, where the agent actually runs.

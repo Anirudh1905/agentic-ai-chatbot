@@ -16,8 +16,8 @@ from chatbot.agent.builder import MODEL_NODE, Agent, AgentState
 from chatbot.agent.middleware import UserModelError
 from chatbot.api.schemas import StreamEvent
 from chatbot.config import RunContext, get_settings
-from chatbot.metrics import APPROVAL_PAUSES, FIRST_TOKEN_SECONDS, RUN_ERRORS
-from chatbot.pii import StreamRedactor
+from chatbot.guardrails.pii import StreamRedactor
+from chatbot.observability.metrics import APPROVAL_PAUSES, FIRST_TOKEN_SECONDS, RUN_ERRORS
 
 logger = logging.getLogger(__name__)
 

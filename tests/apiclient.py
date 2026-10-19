@@ -14,6 +14,7 @@ from langchain_core.tools import BaseTool
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.store.base import BaseStore
 
+from chatbot.accounts.limits import UsageLimits
 from chatbot.agent.builder import build_graph
 from chatbot.api.auth import create_access_token
 from chatbot.api.dependencies import (
@@ -29,7 +30,6 @@ from chatbot.api.dependencies import (
 from chatbot.api.main import app
 from chatbot.config import Settings, get_settings
 from chatbot.memory.long_term import MemoryWriter
-from chatbot.usage import UsageLimits
 
 # Tokens are signed with this secret; the API under test verifies them with it.
 AUTH = Settings(jwt_secret="test-secret-that-is-long-enough-for-hs256")

@@ -7,8 +7,8 @@ import pytest
 from langchain_core.embeddings import DeterministicFakeEmbedding
 
 from chatbot.config import Settings
-from chatbot.db import Pool, open_pool
 from chatbot.ingestion.pipeline import ingest_path
+from chatbot.storage.db import Pool, open_pool
 from chatbot.tools.rag import SearchHit, build_knowledge_base_tool, hybrid_search, retrieve
 
 pytestmark = pytest.mark.integration

@@ -2,8 +2,8 @@
 top k? Scored in code against the labelled document and heading."""
 
 from chatbot.config import Settings
-from chatbot.db import open_pool
-from chatbot.embeddings import build_embeddings
+from chatbot.storage.db import open_pool
+from chatbot.storage.embeddings import build_embeddings
 from chatbot.tools.rag import SearchHit, retrieve
 from chatbot.tools.rerank import build_reranker
 from evals.golden import Case

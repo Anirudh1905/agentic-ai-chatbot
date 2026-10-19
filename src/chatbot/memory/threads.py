@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
-from chatbot.db import Pool
+from chatbot.storage.db import Pool
 
 TITLE_CHARS = 80
 

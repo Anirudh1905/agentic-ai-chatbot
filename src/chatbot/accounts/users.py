@@ -11,7 +11,7 @@ from uuid import UUID
 from psycopg.errors import UniqueViolation
 from pwdlib import PasswordHash
 
-from chatbot.db import Pool
+from chatbot.storage.db import Pool
 
 password_hash = PasswordHash.recommended()  # argon2id
 # Checked when the email is unknown, so a miss takes as long as a wrong password and the

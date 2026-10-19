@@ -120,12 +120,12 @@ LOG_LEVEL=INFO
 
 ### Logging
 
-Every log line carries the request ID and thread (`observability.py`, `api/request_logging.py`), and each model call logs its time and token counts. HTTP client and access logs only show with `LOG_LEVEL=DEBUG`.
+Every log line carries the request ID and thread (`observability/logs.py`, `api/middleware.py`), and each model call logs its time and token counts. HTTP client and access logs only show with `LOG_LEVEL=DEBUG`.
 
 ## Implementation steps
 
 1. `uv init`, add deps: `langchain`, `langgraph`, `langchain-openai`, `fastapi`, `uvicorn`, `sse-starlette`, `pydantic-settings`, `langfuse`.
-2. Add `docker-compose.yml` with `pgvector/pgvector:pg16`, plus a self-hosted Langfuse stack (`docker-compose.langfuse.yml`).
+2. Add `docker-compose.yml` with `pgvector/pgvector:pg16`, plus a self-hosted Langfuse stack (`ops/langfuse/docker-compose.yml`).
 3. Write `config.py`, `agent/builder.py`, `agent/middleware.py`.
 4. Write the API with the three endpoints; stream with `agent.astream_events(..., version="v2")` and forward `on_chat_model_stream` chunks from the `model` node.
 5. Wire up the tracing callback handler.

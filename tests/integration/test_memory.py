@@ -19,9 +19,9 @@ from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
 from chatbot.agent.builder import Agent, build_graph
 from chatbot.config import Settings
-from chatbot.db import Pool, open_pool
 from chatbot.memory.retention import prune_checkpoints
 from chatbot.memory.threads import PostgresThreadStore
+from chatbot.storage.db import Pool, open_pool
 
 pytestmark = pytest.mark.integration
 
@@ -96,7 +96,7 @@ KILLED_RUN = textwrap.dedent("""
     from langchain_core.tools import tool
     from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
     from chatbot.config import Settings
-    from chatbot.db import open_pool
+    from chatbot.storage.db import open_pool
     from chatbot.agent.builder import build_graph
 
     @tool

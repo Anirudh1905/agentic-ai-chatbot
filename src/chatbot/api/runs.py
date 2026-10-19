@@ -13,9 +13,9 @@ from chatbot.agent.approvals import pending_request
 from chatbot.agent.builder import RECURSION_LIMIT, Agent
 from chatbot.api.schemas import ChatResponse
 from chatbot.config import RunContext, get_settings
-from chatbot.metrics import APPROVAL_PAUSES, PII_REDACTIONS
-from chatbot.observability import trace_metadata
-from chatbot.pii import redact_pii
+from chatbot.guardrails.pii import redact_pii
+from chatbot.observability.metrics import APPROVAL_PAUSES, PII_REDACTIONS
+from chatbot.observability.tracing import trace_metadata
 
 logger = logging.getLogger(__name__)
 

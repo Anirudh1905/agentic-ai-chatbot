@@ -35,8 +35,8 @@ from chatbot.config import RunContext
 from chatbot.memory.long_term import cursor_namespace
 from chatbot.memory.short_term import summary_text
 from chatbot.memory.threads import Thread, ThreadStore
-from chatbot.metrics import APPROVAL_DECISIONS
-from chatbot.observability import thread_id as thread_id_var
+from chatbot.observability.logs import thread_id as thread_id_var
+from chatbot.observability.metrics import APPROVAL_DECISIONS
 
 logger = logging.getLogger(__name__)
 

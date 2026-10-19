@@ -42,7 +42,7 @@ This phase builds **tool approval**. Clarification and low-confidence pauses can
 | A term from `HITL_SENSITIVE_TERMS`, whole word, any case | `Project Falcon launch date` | `The query mentions "Project Falcon", which may be internal information.` |
 | Acme order number (`AC-` + 4 or more digits) | `order AC-55821` | `The query contains an order number.` |
 
-Emails, card numbers and phone numbers used to be checks here too. Since Phase 5 they're redacted from the user's message before the model writes a query (`chatbot/pii.py`, applied by the API before the agent runs), so they can't reach a search and the checks were removed. Order numbers aren't redacted, so they still pause.
+Emails, card numbers and phone numbers used to be checks here too. Since Phase 5 they're redacted from the user's message before the model writes a query (`chatbot/guardrails/pii.py`, applied by the API before the agent runs), so they can't reach a search and the checks were removed. Order numbers aren't redacted, so they still pause.
 
 `interrupt_on(tools, terms)` turns that into the middleware's config, one entry per tool:
 

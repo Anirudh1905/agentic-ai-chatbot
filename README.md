@@ -26,21 +26,20 @@ The phase plans and as-built docs are in [docs/](docs/); the [Status](#status) t
 
 ```text
 src/chatbot/
-├── agent/          # builder.py (create_agent + middleware), middleware.py (prompt, call limit), approvals.py (HITL rules)
-├── api/            # main.py, routes/ (chat, threads, memory, me, health), auth.py (accounts, login, JWT), runs.py, streaming.py (SSE), dependencies.py
+├── config.py       # every setting (env, /run/secrets, .env), and RunContext (the run's user)
+├── agent/          # builder.py (create_agent + middleware), middleware.py (prompt, call limit, metrics), approvals.py (HITL rules)
+├── api/            # main.py, routes/ (chat, threads, me: memories and account, health: /healthz and /metrics), auth.py (accounts, login, JWT), runs.py, streaming.py (SSE), dependencies.py
+├── accounts/       # users.py (email and argon2id hash), limits.py (rate limits and the daily token budget, Redis)
+├── guardrails/     # pii.py: redaction rules, PIIMiddleware for outputs, the SSE stream redactor
 ├── memory/         # short_term.py (summarization), long_term/ (user memories: facts, store, writer, middleware), threads.py, retention.py
 ├── tools/          # rag.py (knowledge base), web_search.py, rerank.py, memory.py (remember), registry.py
 ├── ingestion/      # loaders, chunking, indexing CLI
-├── prompts/        # system.md, summarize.md, memory_extract.md, memory_decide.md
-├── pii.py          # redaction rules, PIIMiddleware for outputs, the SSE stream redactor
-├── usage.py        # rate limits and the daily token budget (Redis)
-├── users.py        # accounts: email and argon2id password hash
-├── config.py       # every setting, from .env, and RunContext (the run's user)
-├── metrics.py      # Prometheus metrics (GET /metrics)
-├── db.py, embeddings.py, observability.py (logging, Langfuse)
-ui/app.py           # Streamlit chat UI: threads, approval card, memory panel
+├── prompts/        # system.md, summarize.md, memory_extract.md, memory_decide.md; as_data (defuses untrusted text)
+├── observability/  # logs.py (request and thread on every line), tracing.py (Langfuse), metrics.py (Prometheus, GET /metrics)
+└── storage/        # db.py (Postgres pool), embeddings.py
+ui/app.py           # Streamlit chat UI: login, threads, approval card, memory panel
 migrations/         # Alembic: chunks, threads, users (checkpoints and the memory store create their own tables)
-ops/                # Prometheus (scrape config, alerts.yml) and Grafana (datasource, dashboard)
+ops/                # langfuse/ (its compose file), prometheus/ (scrape config, alerts.yml), grafana/ (datasource, dashboard)
 tests/              # unit/, integration/ (need `make up`), evals/ (golden sets, judge, report)
 data/sample/        # the fictional Acme Outfitters docs
 docs/               # phase plans and as-built docs, images/
@@ -179,7 +178,7 @@ Long-term memory is written separately, in the background (see above). Nothing o
 
 ### PII redaction
 
-Emails, card numbers, IP addresses and phone numbers in the user's messages are replaced as soon as the API receives them: `my email is jane@x.com` becomes `my email is [REDACTED_EMAIL]`. The redaction uses LangChain's `RedactionRule` detectors (`src/chatbot/pii.py`) and runs before the agent is invoked, so the model, the summarizer, web search queries, every checkpoint, the trace, the logs and the thread title only get the redacted text. Reviewer edits and reject reasons on approvals are redacted too. Order numbers are kept, since the bot needs them.
+Emails, card numbers, IP addresses and phone numbers in the user's messages are replaced as soon as the API receives them: `my email is jane@x.com` becomes `my email is [REDACTED_EMAIL]`. The redaction uses LangChain's `RedactionRule` detectors (`src/chatbot/guardrails/pii.py`) and runs before the agent is invoked, so the model, the summarizer, web search queries, every checkpoint, the trace, the logs and the thread title only get the redacted text. Reviewer edits and reject reasons on approvals are redacted too. Order numbers are kept, since the bot needs them.
 
 Third-party PII in search results and in the model's replies is redacted as well, by LangChain's `PIIMiddleware` inside the agent (tool results before the model reads them, the stored reply after) and by a small redactor on the SSE stream. Emails at `PII_ALLOWED_EMAIL_DOMAINS` (Acme's own) are kept, so the bot can still give out the support address.
 
@@ -216,7 +215,7 @@ HTTP client, OpenAI SDK, uvicorn access and `/healthz` lines are hidden unless `
 
 ### Tracing
 
-Langfuse runs locally from `docker-compose.langfuse.yml`, which `docker-compose.yml` includes. On first start it creates a project with fixed API keys, and `.env.example` already contains them, so every chat request is traced with no setup. The first `tilt up` pulls about 2 GB of images, and Langfuse takes a minute or two to become healthy.
+Langfuse runs locally from `ops/langfuse/docker-compose.yml`, which `docker-compose.yml` includes. On first start it creates a project with fixed API keys, and `.env.example` already contains them, so every chat request is traced with no setup. The first `tilt up` pulls about 2 GB of images, and Langfuse takes a minute or two to become healthy.
 
 The credentials in that file are local-only placeholders. To trace somewhere else, such as Langfuse Cloud, change the `LANGFUSE_*` values in `.env`.
 
