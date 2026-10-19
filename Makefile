@@ -16,7 +16,7 @@ test-unit:
 	uv run pytest tests/unit
 
 migrate:
-	uv run alembic upgrade head
+	uv run python -m chatbot.migrate
 
 # make ingest PATH_TO_DOCS=path/to/docs
 PATH_TO_DOCS ?= data/sample

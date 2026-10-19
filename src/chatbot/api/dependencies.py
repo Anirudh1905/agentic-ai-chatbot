@@ -22,6 +22,7 @@ from chatbot.memory.threads import PostgresThreadStore, ThreadStore
 from chatbot.observability.tracing import build_callbacks
 from chatbot.storage.db import Pool, open_pool
 from chatbot.storage.embeddings import build_embeddings
+from chatbot.storage.langgraph import build_checkpointer, build_store
 from chatbot.tools.registry import build_tools
 from chatbot.tools.rerank import build_reranker
 
@@ -48,23 +49,10 @@ class Resources:
             settings = get_settings()
             if self.pool is None:
                 self.pool = await open_pool(settings)
-            checkpointer = AsyncPostgresSaver(self.pool)
-            # Creates and migrates the checkpoint tables; a no-op once they're current.
-            await checkpointer.setup()
+            # Their tables come from `python -m chatbot.migrate`, run before this process.
+            checkpointer = build_checkpointer(self.pool)
             embeddings = build_embeddings(settings)
-            # Long-term memory (memory/long_term/), searched by meaning. Creates and
-            # migrates its own tables, including the vector index, too. Temporary items get a
-            # TTL: reads skip them once expired, and the sweeper deletes them.
-            store = AsyncPostgresStore(
-                self.pool,
-                index={
-                    "dims": settings.embedding_dimensions,
-                    "embed": embeddings,
-                    "fields": ["content"],
-                },
-                ttl={"refresh_on_read": False, "omit_expired": True, "sweep_interval_minutes": 60},
-            )
-            await store.setup()
+            store = build_store(self.pool, settings, embeddings)
             if settings.background_jobs:
                 await store.start_ttl_sweeper()
             reranker = build_reranker(settings)

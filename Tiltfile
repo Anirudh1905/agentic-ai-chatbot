@@ -13,7 +13,7 @@ for name in ['langfuse-worker', 'langfuse-postgres', 'langfuse-clickhouse', 'lan
 
 local_resource(
     'migrate',
-    cmd='uv run alembic upgrade head',
+    cmd='uv run python -m chatbot.migrate',
     deps=['migrations'],
     resource_deps=['postgres'],
     labels=['infra'],
