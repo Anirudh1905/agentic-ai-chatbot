@@ -1,30 +1,21 @@
-# Phase 3: Short-Term Memory & Checkpointing
+# Phase 3: Short-term memory and checkpointing
 
 **Goal:** Conversations persist. A user can close the tab, come back, and continue the same thread. The graph saves its state after every step, so a crash mid-run can be resumed. Long threads stay within the context window.
 
 [← Phase 2](phase-2-tools-rag-web-search.md) · [Overview](../README.md) · [Next: Phase 4 →](phase-4-human-in-the-loop.md)
 
-## Concepts
+**Status: built.** Cross-thread memory is Phase 6; interrupts for a human are Phase 4, which uses this phase's checkpointer.
 
-| Term | Meaning here |
-|------|--------------|
-| **Thread** | One conversation. Identified by `thread_id` |
-| **Checkpoint** | A snapshot of graph state saved after each super-step, keyed by `(thread_id, checkpoint_id)` |
-| **Short-term memory** | Everything in the thread's state: messages, including the running summary. Scoped to one thread |
-| **Long-term memory** | Facts that outlive a thread. Phase 6, not this one |
+| Area | What's built | Section |
+| --- | --- | --- |
+| Checkpointing | `AsyncPostgresSaver`, one per process on the shared pool; a checkpoint after every graph step | [Checkpointing](#checkpointing) |
+| Threads | Create, list, read, delete; ownership checks; a `threads` metadata table | [Threads](#threads) |
+| Resume and time travel | Finish a run that stopped early; inspect and fork from earlier checkpoints | [Resume and time travel](#resume-and-time-travel) |
+| Context window | A rolling summary of older turns (`SummarizationMiddleware`, with five adjustments) | [Context-window management](#context-window-management) |
+| Retention | A nightly job that prunes idle threads' history; hard delete on request | [Retention](#retention) |
+| Debugging | Logs tagged with request and thread, the history endpoint, pgweb | [Debugging](#debugging) |
 
-## Scope
-
-**In scope**
-- `AsyncPostgresSaver` checkpointer
-- Thread lifecycle API: create, list, get history, delete
-- Context-window management: a rolling summary of older turns
-- Resume after a crash or a client disconnect
-- Time travel (inspect and fork from earlier checkpoints) for debugging
-
-**Out of scope:** cross-thread memory, interrupts for humans (Phase 4 uses this phase's checkpointer).
-
-## Architecture
+Terms used below: a **thread** is one conversation (`thread_id`). A **checkpoint** is a snapshot of graph state saved after each super-step, keyed by `(thread_id, checkpoint_id)`. **Short-term memory** is everything in the thread's state: its messages, including the running summary.
 
 ```mermaid
 flowchart TB
@@ -45,7 +36,16 @@ flowchart TB
     API -->|thread metadata| Threads[(threads table<br/>user_id, title,<br/>created_at, updated_at)]
 ```
 
-## Checkpoint lifecycle
+## Checkpointing
+
+`src/chatbot/api/dependencies.py`, with the pool from `storage/db.py`.
+
+```python
+pool = await open_pool(settings)            # shared with the RAG tool
+checkpointer = AsyncPostgresSaver(pool)
+await checkpointer.setup()                  # creates and migrates the checkpoint tables
+agent = build_graph(settings, tools=tools, checkpointer=checkpointer)
+```
 
 ```mermaid
 sequenceDiagram
@@ -74,11 +74,40 @@ sequenceDiagram
     G->>P: put checkpoint n+5
 ```
 
-With the Phase 4 middleware there are a few more steps per round trip (one per middleware hook), each with its own checkpoint.
+- **One saver per process**, on the connection pool the RAG tool also uses, not one per request. Like the other resources it's built on the first request, so the API still starts when Postgres is down.
+- **Two kinds of tables.** `setup()` manages the checkpoint tables. The `threads` table is an Alembic migration (`0002_threads`).
+- **More steps than the diagram shows.** Every middleware hook is its own graph step with its own checkpoint, so later phases add several per round trip.
+- **State must be serializable.** Don't put clients, DB connections or open files in state.
+
+## Threads
+
+`src/chatbot/api/routes/threads.py`, `routes/chat.py`, and the metadata store in `memory/threads.py`.
+
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /threads` | Create a thread, return its ID |
+| `GET /threads` | List the caller's threads, most recent first (from the `threads` table, not by scanning checkpoints) |
+| `GET /threads/{id}/messages` | User messages and replies (with each reply's tools and sources), the summary, and any pending approval |
+| `GET /threads/{id}/history` | Checkpoints, for debugging and time travel ([below](#resume-and-time-travel)) |
+| `POST /threads/{id}/resume` | Finish a run that stopped early, or fork from an earlier checkpoint ([below](#resume-and-time-travel)) |
+| `DELETE /threads/{id}` | `checkpointer.adelete_thread(id)`, then delete the metadata row |
+
+- **`thread_id` is optional** on `POST /chat` and `/chat/stream` (a UUID). Without one a new thread is created. An unknown ID creates a thread with that ID, so clients can generate their own. The `done` SSE event carries the ID either way.
+- **Every request checks that the thread belongs to the caller**, or a guessed or leaked ID would expose someone else's conversation. Someone else's thread answers 404, the same as a missing one, so IDs can't be probed. Ownership denials are logged as warnings. The caller comes from the login token (`get_current_user` in `api/security.py`, Phase 8); before that it was an `X-User-Id` header.
+- **Dangling tool calls.** If a run dies mid tool call and the user sends a new message instead of resuming, the thread holds a tool call with no result, which the model API rejects. `ModelCallMiddleware` (`agent/middleware.py`) calls `close_dangling_tool_calls` (`memory/short_term.py`), which adds a placeholder result to what the model is sent. The stored state isn't changed. LangChain has no built-in for this.
+
+## Resume and time travel
+
+`POST /threads/{id}/resume` and `GET /threads/{id}/history`, both in `routes/threads.py`.
+
+- **Resume** re-invokes the thread with `None` input, which continues from the last checkpoint: a run killed by a crash, a restart or a client disconnect finishes where it stopped. A thread whose run finished answers 409.
+- **History** (`agent.aget_state_history`) lists the checkpoints with their step, source, next node and last message.
+- **Fork:** `/resume` with a `checkpoint_id` from the history replays from that checkpoint.
+- Phase 4 adds approval decisions to the same endpoint.
 
 ## Context-window management
 
-Messages grow without limit, but the context window doesn't. Older turns are folded into a running summary by LangChain's `SummarizationMiddleware`, configured and slightly adjusted in `src/chatbot/memory/short_term.py`:
+`src/chatbot/memory/short_term.py`, a subclass of LangChain's `SummarizationMiddleware`, with the prompt in `prompts/summarize.md`.
 
 ```mermaid
 flowchart LR
@@ -101,66 +130,34 @@ Summarization(                       # subclass of SummarizationMiddleware
 )
 ```
 
-- **Threshold:** `CONTEXT_MAX_TOKENS` (default 10k), measured with LangChain's local estimate (`count_tokens_approximately`). That's far below the model's window on purpose: every turn and every tool round trip resends the history, so cost and latency grow long before the window fills.
+- **Threshold:** `CONTEXT_MAX_TOKENS` (10k), measured with LangChain's local estimate (`count_tokens_approximately`). That's far below the model's window on purpose: every turn and every tool round trip resends the history, so cost and latency grow long before the window fills.
 - **What's kept:** about the most recent half of the budget, so the next few turns don't trigger another summary straight away.
 - **Rolling summary:** the summary is one message in the thread, marked `lc_source: "summarization"` and starting "Here is a summary of the conversation to date". The next summarization folds it in with the newly dropped messages, so it doesn't drift. `GET /threads/{id}/messages` returns it as `summary` and leaves it out of `messages`.
-- **What the summarizer is told** (`prompts/summarize.md`): keep names, numbers, dates, order IDs and decisions verbatim, keep answers with their citations, and treat the messages as data.
-- **Only the agent's reply is streamed.** `stream_run` forwards tokens from the `model` node only, so the summarizer's output never reaches the client.
+- **What the summarizer is told:** keep names, numbers, dates, order IDs and decisions verbatim, keep answers with their citations, and treat the messages as data.
+- **Only the agent's reply is streamed.** `stream_run` (`api/streaming.py`) forwards tokens from the `model` node only, so the summarizer's output never reaches the client.
+- **When it runs:** at the end of a turn (`after_agent`), after the reply has streamed, so the user doesn't wait for it before the answer starts (the request still ends once it's done). At the start of the next turn the same check runs again as a fallback, normally finding nothing to do. It catches what the end of the last turn didn't: a new message that pushes the thread over the limit on its own (a long paste), a turn that ended early (the client disconnected, a timeout, a failed summary, a pause for approval), and threads from before this change. Without it, those model calls would go over `CONTEXT_MAX_TOKENS`.
 
-**When it runs.** The summary is made at the end of a turn, after the reply has streamed, so the user isn't kept waiting for it before the answer starts (the request still ends once it's done). At the start of the next turn the same check runs again as a fallback, normally finding nothing to do. It catches what the end of the last turn didn't: a new message that pushes the thread over the limit on its own (a long paste), a turn that ended early (the client disconnected, a timeout, a failed summary), and threads from before this change. Without it, those model calls would go over `CONTEXT_MAX_TOKENS`.
-
-**Five adjustments to the built-in**, each covered by a test in `tests/unit/test_summarization.py`:
+Five adjustments to the built-in, each covered by a test in `tests/unit/test_summarization.py`:
 
 | Built-in behaviour | Problem | Adjustment |
-|--------------------|---------|------------|
+| --- | --- | --- |
 | Runs before every model call | Summarized twice in one request, mid-answer, ~7 s each | Never between tool rounds: only at the start of a turn (last message is the user's) |
 | Runs before the model answers | The user waited for the summary (~6 s, once 126 s) before the reply began | Runs at the end of the turn, after the reply (`after_agent`); the start-of-turn check is a fallback |
 | Cuts anywhere that doesn't split a tool call from its result | Summarized away the question being answered: "What about express shipping?" got an answer about a tent | Cut moves back to the start of a turn and never past the current one |
 | Raises if the summary model fails (after its own retries) | The turn fails | The turn goes ahead with the full history; the next turn tries again |
 | Summarizes whenever the thread is over the limit | Once the summary alone was near the limit, every turn re-summarized nothing but the previous summary (5–6 s each) | Skips a summary that would fold away only the previous one |
 
-How fast threads grow, measured on the sample docs: a turn with a knowledge base search is about 600 tokens (most of it the tool result), and plain chat is 50–150. With the defaults (10k tokens) that's about 16 search turns before the first summary. To watch it happen, set `CONTEXT_MAX_TOKENS=1000`: the third message of a search-heavy thread triggers it.
+**How fast threads grow**, measured on the sample docs: a turn with a knowledge base search is about 600 tokens (most of it the tool result), and plain chat is 50–150. With the default 10k that's about 16 search turns before the first summary. To watch it happen, set `CONTEXT_MAX_TOKENS=1000`: the third message of a search-heavy thread triggers it.
 
-## Components
+## Retention
 
-### Checkpointer setup
+`src/chatbot/memory/retention.py` (`make retention`, or `python -m chatbot.memory.retention [--idle-days N] [--dry-run]`).
 
-```python
-from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+- **Pruning:** for threads idle more than `CHECKPOINT_RETENTION_DAYS` (30), keeps only the latest checkpoint plus its pending writes (an interrupted run needs them to resume), and deletes the blobs nothing points to any more. The thread still continues normally; only its time-travel history is gone. Run it nightly.
+- **Plain SQL:** the Postgres saver doesn't implement `aprune` (checked up to 3.1.3). It's safe because the graph has no `DeltaChannel` state, which would need the parent chain to reconstruct.
+- **Hard delete** of a whole thread is `DELETE /threads/{id}`, not this job.
 
-pool = await open_pool(settings)            # shared with the RAG tool
-checkpointer = AsyncPostgresSaver(pool)
-await checkpointer.setup()                  # creates and migrates the checkpoint tables
-agent = build_graph(settings, tools=tools, checkpointer=checkpointer)
-```
-
-The saver is created once per process with the shared connection pool, not per request (`api/dependencies.py`). Like the rest of the resources it's built on the first request, so the API still starts when Postgres is down. The checkpoint tables are managed by `setup()`; the `threads` table is an Alembic migration (`0002`).
-
-### Thread API
-
-| Endpoint | Purpose |
-|----------|---------|
-| `POST /threads` | Create a thread, return its ID |
-| `GET /threads` | List the caller's threads, most recent first (from the `threads` table, not by scanning checkpoints) |
-| `GET /threads/{id}/messages` | User messages and replies (with each reply's tools and sources), the summary, and any pending approval |
-| `GET /threads/{id}/history` | `agent.aget_state_history(config)` for debugging and time travel |
-| `POST /threads/{id}/resume` | Re-invoke with `None` input to finish a run that stopped early. With `checkpoint_id`, replay from an earlier checkpoint (a fork). Phase 4 adds approval decisions |
-| `DELETE /threads/{id}` | `checkpointer.adelete_thread(id)`, then delete the metadata row |
-
-`POST /chat` and `/chat/stream` take an optional `thread_id` (a UUID). Without one a new thread is created. An unknown ID creates a thread with that ID, so clients can generate their own; the `done` SSE event carries the ID either way.
-
-Always check that the `thread_id` belongs to the authenticated user. A guessable or leaked thread ID otherwise exposes someone else's conversation. The user comes from the caller's login token since Phase 8 (`get_current_user` in `api/security.py`; before that, an `X-User-Id` header). Someone else's thread answers 404, the same as a missing one, so IDs can't be probed.
-
-If a run dies mid tool call and the user sends a new message instead of resuming, the thread holds a tool call with no result, which the model API rejects. `ModelCallMiddleware` (`close_dangling_tool_calls`) adds a placeholder result to what the model is sent; the stored state isn't changed. LangChain has no built-in for this.
-
-### Retention
-
-Checkpoints pile up quickly (one per step, several per turn). Two mechanisms:
-
-- `python -m chatbot.memory.retention` (`make retention`) keeps only the latest checkpoint, plus its pending writes, for threads idle more than `CHECKPOINT_RETENTION_DAYS` (30), and deletes the blobs nothing points to any more. The thread still continues normally; only its time-travel history is gone. Run it nightly. The Postgres saver doesn't implement `aprune` (checked up to 3.1.3), so this is plain SQL. It's safe because the graph has no `DeltaChannel` state, which would need the parent chain to reconstruct.
-- Hard delete on user request (`DELETE /threads/{id}`, needed for Phase 5 compliance)
-
-### Debugging and observability
+## Debugging
 
 - **Logs.** One line per request, plus what each turn did, each tagged with the request ID and thread (`ContextFilter` in `observability/logs.py`, `RequestMiddleware` in `api/middleware.py`). `grep thread=<first 8 chars>` follows a conversation:
 
@@ -173,19 +170,51 @@ Checkpoints pile up quickly (one per step, several per turn). Two mechanisms:
   chatbot.api              [req=daf6ce1f thread=ee996bd2]: POST /chat -> 200 in 9.01s (user=log-check)
   ```
 
-  Token counts come from the API (`stream_usage=True`; streamed responses don't report usage otherwise). HTTP client, OpenAI SDK, uvicorn access and `/healthz` lines only show with `LOG_LEVEL=DEBUG`. Ownership denials are logged as warnings.
-- **`GET /threads/{id}/history`** lists the checkpoints with their step, source, next node and last message; `POST /threads/{id}/resume` with a `checkpoint_id` replays from one.
+  Token counts come from the API (`stream_usage=True`; streamed responses don't report usage otherwise). HTTP client, OpenAI SDK, uvicorn access and `/healthz` lines only show with `LOG_LEVEL=DEBUG`.
+
+- **State:** `GET /threads/{id}/history` reads the checkpoints ([Resume and time travel](#resume-and-time-travel)).
 - **pgweb** (<http://localhost:8081>, part of `docker compose` and Tilt) browses the `threads` and checkpoint tables directly. Checkpoint blobs are msgpack, so use the history endpoint to read state.
 
-## Implementation steps
+## Reference
 
-1. Add `langgraph-checkpoint-postgres` and create the saver once per process with the shared pool (on the first request rather than in the lifespan, so the API starts without Postgres).
-2. Pass `checkpointer` into `build_graph`. `thread_id` stays optional in the request; the API generates one if it's absent, so the agent always runs with one.
-3. Add the `threads` metadata table (migration `0002`) and the thread endpoints with ownership checks.
-4. Add summarization: `SummarizationMiddleware`, adjusted to run once per turn and cut at turn boundaries.
-5. Add the retention job (`chatbot.memory.retention`).
-6. Add `GET /threads/{id}/history` and `POST /threads/{id}/resume` for state history, resuming and forking.
-7. Add per-request logging with request and thread IDs.
+### Settings
+
+| Setting | Default | |
+| --- | --- | --- |
+| `CONTEXT_MAX_TOKENS` | `10000` | When a thread is summarized; the most recent half is kept verbatim |
+| `SUMMARY_MODEL` | `gpt-4.1-mini` | Writes the summaries, on the same endpoint as `MODEL`. Chosen over `gpt-5-nano`, which took 4–70 s with 8 summaries at once (3 hit the timeout) against 4–11 s |
+| `CHECKPOINT_RETENTION_DAYS` | `30` | Idle days before the retention job prunes a thread's history |
+| `LOG_LEVEL` | `INFO` | `DEBUG` adds HTTP client, SDK, access and `/healthz` lines |
+
+### Files
+
+| File | What it does |
+| --- | --- |
+| `src/chatbot/api/dependencies.py` | Creates the saver once per process, on the first request |
+| `src/chatbot/storage/db.py` | `open_pool`, the shared connection pool |
+| `src/chatbot/memory/short_term.py` | `Summarization`, `summarization(settings, model)`, `close_dangling_tool_calls` |
+| `src/chatbot/prompts/summarize.md` | The summary prompt |
+| `src/chatbot/memory/threads.py`, `migrations/versions/0002_threads.py` | The `threads` metadata table and its store |
+| `src/chatbot/api/routes/threads.py`, `routes/chat.py` | Thread endpoints, ownership checks, resume and history; optional `thread_id` on `/chat` |
+| `src/chatbot/api/streaming.py` | `stream_run`: only the `model` node's tokens |
+| `src/chatbot/memory/retention.py` | The retention job |
+| `src/chatbot/observability/logs.py`, `api/middleware.py` | `ContextFilter`, `RequestMiddleware`: request and thread IDs on every line |
+| `docker-compose.yml` | `pgweb` |
+
+### Tests
+
+| Test file | Covers |
+| --- | --- |
+| `tests/unit/test_summarization.py` | The five adjustments; the dangling-call placeholder; threads remember earlier turns and stay isolated; a crash mid tool call resumes; a long thread stays under budget |
+| `tests/unit/test_api.py` | Threads over HTTP: create, list, continue, messages, ownership, delete, history, resume and fork; the summary isn't streamed; request and thread IDs in the logs |
+| `tests/integration/test_memory.py` | On Postgres: a thread survives an API restart; a SIGKILLed run resumes; delete removes every checkpoint row; pruning keeps only the latest checkpoint; thread ownership |
+
+### Known issues and notes
+
+- **Summarized messages disappear from the thread view.** Replacing them keeps checkpoints small (each step stores the whole message list), but `GET /threads/{id}/messages` then returns only the recent turns plus the summary. Keeping a full transcript for display would need a separate append-only table.
+- **Summaries lose detail.** Exact numbers, names and decisions are often what users ask about later, which is why the summarizer is told to keep them verbatim. Phase 6 long-term memory is the real fix for "remember this forever".
+- **Concurrent requests on one thread** both read the same checkpoint and the later write wins. The UI sends one message at a time; a per-thread lock is a Phase 9 concern.
+- **Checkpoints and logs hold user text.** Checkpoints keep every message, and logs keep search queries as the model wrote them. Since Phase 5 the API redacts PII from the user's message before the agent runs, so both hold the redacted text. Still treat the checkpoint tables as sensitive (encryption at rest, restricted access).
 
 ## Exit criteria
 
@@ -194,12 +223,3 @@ Checkpoints pile up quickly (one per step, several per turn). Two mechanisms:
 - [x] A 200-turn synthetic conversation stays under the token threshold and still answers questions about early turns via the summary (`test_long_thread_is_summarized_and_stays_under_budget`)
 - [x] Users cannot read or write threads they don't own (`test_users_cannot_touch_other_users_threads`)
 - [x] Deleting a thread removes all its checkpoints (`test_delete_thread_removes_every_checkpoint_row`)
-
-## Risks and notes
-
-- **Serialization.** Everything in state must be serializable by the checkpointer. Don't put clients, DB connections or open files in state.
-- **Summarized messages disappear from the thread view.** Replacing them keeps checkpoints small (each step stores the whole message list), but `GET /threads/{id}/messages` then returns only the recent turns plus the summary. Keeping a full transcript for display would need a separate append-only table.
-- **Concurrent requests on one thread** both read the same checkpoint and the later write wins. The UI sends one message at a time; a per-thread lock is a Phase 9 concern.
-- **Summaries lose detail.** Exact numbers, names and decisions are often what users ask about later, so the summarizer is told to keep those verbatim. Phase 6 long-term memory is the real fix for "remember this forever".
-- **Logs contain search queries** as the model wrote them, which can include personal data from the user's message. Phase 5 masks them; until then treat logs like the checkpoint tables.
-- **Checkpoints contain raw user text.** Until Phase 5, that includes PII. Treat the checkpoint tables as sensitive from day one (encryption at rest, restricted access).

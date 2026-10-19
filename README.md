@@ -1,23 +1,23 @@
 # agentic-ai-chatbot
 
-An agentic chatbot with RAG and web search tools, human-in-the-loop approvals, PII detection and masking, and short-term plus long-term memory.
+An agentic chatbot with RAG and web search tools, human-in-the-loop approvals, PII detection and masking, short-term and long-term memory, accounts with rate limits, and traces, metrics and alerts.
 
 The phase plans and as-built docs are in [docs/](docs/); the [Status](#status) table below links them. The agent is LangChain's `create_agent` with middleware, using the built-ins wherever LangChain has one.
 
-<img alt="Architecture: the Streamlit UI calls the FastAPI API with a JWT; auth and limits check the token against the users table and count requests and tokens in Redis. The API redacts PII and invokes the agent loop. The agent calls the OpenAI-compatible API, the knowledge base search (pgvector chunks, embeddings) and, through an approval gate, web search on DuckDuckGo. Threads, checkpoints, long-term memories and chunks live in Postgres with pgvector; a background MemoryWriter turns conversations into memories (at the token breach, after 30 idle minutes, or on request), a retention job prunes checkpoints, and an ingestion CLI loads the knowledge base. The eval suites run the agent on golden questions and judge its answers with gpt-4.1; CI checks their report." src="docs/images/architecture-dark.png">
+<img alt="Architecture: the Streamlit UI calls the FastAPI API with a JWT; auth and limits check the token against the users table and count requests and tokens in Redis. The API redacts PII and invokes the agent loop, which calls the OpenAI-compatible API (the server's key or the user's own), the knowledge base search (pgvector chunks, embeddings) and, through an approval gate, web search on DuckDuckGo. Threads, checkpoints, users, long-term memories and chunks live in Postgres with pgvector; a background MemoryWriter turns conversations into memories, a retention job prunes checkpoints, and an ingestion CLI loads the knowledge base. Runs are traced to Langfuse; Prometheus scrapes /metrics for the Grafana dashboard and alerts. The eval suites run the agent on golden questions, judge its answers with gpt-4.1 and send the scores to Langfuse; CI checks their report. src="docs/images/architecture-dark.png">
 
 ## Status
 
 | Phase | What it adds | Status |
-|-------|--------------|--------|
+| --- | --- | --- |
 | [1. Foundation](docs/phase-1-foundation.md) | FastAPI service, streaming chat, Streamlit UI, Langfuse tracing, logging | Built |
 | [2. Tools](docs/phase-2-tools-rag-web-search.md) | Knowledge base search (hybrid vector + full-text, reranked) and DuckDuckGo web search | Built |
 | [3. Short-term memory](docs/phase-3-short-term-memory-checkpointing.md) | Threads checkpointed to Postgres, resume and time travel, summarization of old turns, retention | Built |
 | [4. Approvals](docs/phase-4-human-in-the-loop.md) | `HumanInTheLoopMiddleware`: risky tool calls wait for a person | Built |
 | [5. PII redaction](docs/phase-5-pii-detection-masking.md) | Emails, cards, phones and IPs redacted from messages, tool results, replies and the stream | Built |
 | [6. Long-term memory](docs/phase-6-long-term-memory.md) | Per-fact memories per user across threads: pushed at the token breach, after 30 idle minutes, or on request; recalled each turn, closest to the message | Built ([PR #7](https://github.com/Anirudh1905/agentic-ai-chatbot/pull/7)) |
-| [7. Eval gate](docs/phase-7-eval-gate.md) | Golden sets, a judge model (DeepEval) and a regression gate on every PR | Built |
-| [8. Security and observability](docs/phase-8-security-observability.md) | Accounts and login (JWT), Redis rate limits and token budgets, deleting a user's data, trace metadata, Prometheus metrics, a Grafana dashboard and alerts | Built |
+| [7. Eval gate](docs/phase-7-eval-gate.md) | Golden sets, a judge model (DeepEval) and a regression gate on every PR | Built ([PR #8](https://github.com/Anirudh1905/agentic-ai-chatbot/pull/8)) |
+| [8. Security and observability](docs/phase-8-security-observability.md) | Accounts and login (JWT), your own model key, Redis rate limits and token budgets, deleting a user's data, trace metadata, Prometheus metrics, a Grafana dashboard and alerts | Built (on `phase-8-security-observability`, not merged yet) |
 | [9. Reliability and deployment](docs/phase-9-reliability-deployment.md) | Retries and fallbacks, cost controls, container deployment, load test | Planned |
 
 `make check` runs ruff, mypy and the tests (220 at the moment, unit and Postgres integration). `make eval` runs the eval suites against the real model and writes `tests/evals/report.json`, which CI checks on every PR (see [Evals](#evals)).
@@ -27,8 +27,8 @@ The phase plans and as-built docs are in [docs/](docs/); the [Status](#status) t
 ```text
 src/chatbot/
 ├── config.py       # every setting (env, /run/secrets, .env), and RunContext (the run's user)
-├── agent/          # builder.py (create_agent + middleware), middleware.py (prompt, call limit, metrics), approvals.py (HITL rules)
-├── api/            # main.py, routes/ (auth, chat, threads, me: memories and account, health: /healthz and /metrics), security.py (the JWT and the signed-in user), runs.py, streaming.py (SSE), dependencies.py
+├── agent/          # builder.py (create_agent + middleware), middleware.py (prompt, call limit, the user's own model, metrics), approvals.py (HITL rules)
+├── api/            # main.py, routes/ (auth, chat, threads, me, health), security.py (the JWT and the signed-in user), middleware.py (request log and metrics), runs.py, streaming.py (SSE), schemas.py, dependencies.py
 ├── accounts/       # users.py (email and argon2id hash), limits.py (rate limits and the daily token budget, Redis)
 ├── guardrails/     # pii.py: redaction rules, PIIMiddleware for outputs, the SSE stream redactor
 ├── memory/         # short_term.py (summarization), long_term/ (user memories: facts, store, writer, middleware), threads.py, retention.py
@@ -37,7 +37,7 @@ src/chatbot/
 ├── prompts/        # system.md, summarize.md, memory_extract.md, memory_decide.md; as_data (defuses untrusted text)
 ├── observability/  # logs.py (request and thread on every line), tracing.py (Langfuse), metrics.py (Prometheus, GET /metrics)
 └── storage/        # db.py (Postgres pool), embeddings.py
-ui/app.py           # Streamlit chat UI: login, threads, approval card, memory panel
+ui/app.py           # Streamlit chat UI: login, threads, approval card, memory panel, account deletion
 migrations/         # Alembic: chunks, threads, users (checkpoints and the memory store create their own tables)
 ops/                # langfuse/ (its compose file), prometheus/ (scrape config, alerts.yml), grafana/ (datasource, dashboard)
 tests/              # unit/, integration/ (need `make up`), evals/ (golden sets, judge, report)
@@ -51,14 +51,15 @@ Requires [uv](https://docs.astral.sh/uv/), Docker and [Tilt](https://docs.tilt.d
 
 ```bash
 cp .env.example .env        # add OPENAI_API_KEY (and OPENAI_BASE_URL for a gateway)
+echo "JWT_SECRET=$(openssl rand -hex 32)" >> .env   # signs login tokens; without it every request gets 401
 uv sync --all-groups
 tilt up                     # Postgres, Redis, Langfuse, Prometheus, Grafana, migrations, sample docs, API and chat UI
 ```
 
-Tilt's dashboard is at http://localhost:10350. From there:
+Tilt's dashboard is at http://localhost:10350. Open the chat UI, create an account and log in. From there:
 
 | Service | URL |
-|---------|-----|
+| --- | --- |
 | Chat UI (Streamlit) | http://localhost:8501 |
 | API | http://localhost:8000 (OpenAPI docs at `/docs`) |
 | Langfuse (tracing) | http://localhost:3000, login `dev@local.test` / `password` |
@@ -66,8 +67,9 @@ Tilt's dashboard is at http://localhost:10350. From there:
 | pgweb (database browser) | http://localhost:8081 |
 | Grafana (the Chatbot dashboard) | http://localhost:3001/d/chatbot, read only without a login (admin/admin to edit) |
 | Prometheus (metrics, alerts) | http://localhost:9091/alerts |
+| Redis (rate limits) | `localhost:6380` |
 
-Postgres is mapped to host port 5433 so it doesn't clash with a local Postgres on 5432. Set `POSTGRES_PORT` to change it. pgweb browses the same database (chunks, threads, checkpoints, the memory store); `PGWEB_PORT` changes its port.
+The host ports avoid the usual ones (Postgres 5433, Redis 6380, Prometheus 9091, Grafana 3001) so they don't clash with local services or Langfuse; `POSTGRES_PORT`, `REDIS_PORT`, `PGWEB_PORT`, `PROMETHEUS_PORT` and `GRAFANA_PORT` change them. pgweb browses the same database (chunks, threads, checkpoints, users, the memory store).
 
 Without Tilt: `make up`, `make migrate`, `make ingest`, then `make dev` and `make ui` in separate terminals.
 
@@ -76,6 +78,20 @@ Try asking "Can I return a tent I bought at 40% off?" (answered from the sample 
 <img alt="The chat UI: a question about returning a clearance jacket and packing for a trek, answered from the refund policy with citations and a Sources list, and a Remember this button beside the reply. The sidebar shows the user, their chats, and what the bot remembers about them (a Ladakh trek in April, lives in Bangalore), which the answer used." src="docs/images/ui-dark.png" width="800">
 
 The answer cites the refund policy, lists its sources, and uses two long-term memories from an earlier conversation (the sidebar's "What I remember about you"). The bookmark button beside the reply saves it to memory.
+
+## How it works
+
+### Accounts and limits
+
+Every request needs a JWT in `Authorization: Bearer <token>`; the user is its `sub`, and every thread and memory is visible only to its owner. The API checks the token's signature (HS256, `JWT_SECRET`, which `/auth/login` signs with) and expiry, and that its account still exists. The chat UI opens on a login screen: create an account with an email and a password, then log in. Optionally give your own OpenAI-compatible base URL and API key there: the login checks them (and fails, saying so, if they don't work), and your chats then run on them instead of the server's key. They stay in your browser session, sent with each request; the server doesn't store them. To call the API yourself:
+
+```bash
+curl -s localhost:8000/auth/register -H 'content-type: application/json' -d '{"email": "me@example.com", "password": "a-long-password"}'
+TOKEN=$(curl -s localhost:8000/auth/login -d 'username=me@example.com&password=a-long-password' | jq -r .access_token)
+curl -N localhost:8000/chat/stream -H 'content-type: application/json' -H "Authorization: Bearer $TOKEN" -d '{"message": "hi"}'
+```
+
+Requests are limited per user (`RATE_LIMIT_PER_USER`, 120 a minute) and per IP (`RATE_LIMIT_PER_IP`, 300 a minute), and each user's agent runs to `DAILY_TOKEN_BUDGET` model tokens a day (500,000). Over a limit, the API answers 429 with `Retry-After`. The counts live in Redis (`make up` starts it), so every API process shares them; if Redis is down, requests go through. `DELETE /me` (the sidebar's "Delete my account") deletes the account with every thread, checkpoint and memory. Details in [the Phase 8 doc](docs/phase-8-security-observability.md).
 
 ### Knowledge base
 
@@ -98,15 +114,6 @@ Behind a TLS-inspecting proxy (such as Cloudflare Gateway or Zscaler), Python us
 ### Conversations and memory
 
 Every conversation is a thread, saved to Postgres after each graph step by LangGraph's `AsyncPostgresSaver`. Restarting the API, closing the tab or opening the chat in another browser picks the thread up where it left off. The chat UI lists your threads in the sidebar and keeps the current one in the URL (`?thread=...`).
-
-Every request needs a JWT in `Authorization: Bearer <token>`; the user is its `sub`, and every thread is visible only to the user who created it. The API checks the token's signature (HS256, `JWT_SECRET`, which `/auth/login` signs with) and expiry, and that its account still exists. The chat UI opens on a login screen: create an account with an email and a password, then log in. Optionally give your own OpenAI-compatible base URL and API key there: the login checks them (and fails, saying so, if they don't work), and your chats then run on them instead of the server's key. They stay in your browser session, sent with each request; the server doesn't store them. To call the API yourself:
-
-```bash
-curl -s localhost:8000/auth/register -H 'content-type: application/json' -d '{"email": "me@example.com", "password": "a-long-password"}'
-TOKEN=$(curl -s localhost:8000/auth/login -d 'username=me@example.com&password=a-long-password' | jq -r .access_token)
-```
-
-Requests are limited per user (`RATE_LIMIT_PER_USER`, 120 a minute) and per IP (`RATE_LIMIT_PER_IP`, 300 a minute), and each user's agent runs to `DAILY_TOKEN_BUDGET` model tokens a day (500,000). Over a limit, the API answers 429 with `Retry-After`. The counts live in Redis (`make up` starts it), so every API process shares them; if Redis is down, requests go through. Details in [the Phase 8 doc](docs/phase-8-security-observability.md).
 
 Long threads stay small: once the messages pass `CONTEXT_MAX_TOKENS`, older turns are folded into a running summary by `SUMMARY_MODEL` and removed from the thread, keeping about the most recent half (and always the current turn) verbatim. This is LangChain's `SummarizationMiddleware`, adjusted to cut only at turn boundaries and to run at the end of a turn, after the reply has streamed (with a check at the start of the next turn as a fallback). Removed messages no longer appear in the chat history; the UI shows the summary in their place.
 
@@ -170,6 +177,7 @@ Every time the agent calls the model (once per turn, plus once more per round of
 ```
 
 What's **not** sent:
+
 - your other threads' messages or summaries. Only the facts extracted from them reach a new thread, as memories.
 - anything that never became a memory, such as a one-off question or the bot's own advice
 - raw PII, which is redacted before it reaches the thread
@@ -194,24 +202,25 @@ INFO    chatbot.api.routes.chat  [req=59a1dee8 thread=598b8934]: new thread, mes
 INFO    chatbot.memory.short_term [req=59a1dee8 thread=598b8934]: context: 1 messages, ~39 tokens
 INFO    chatbot.agent.middleware [req=59a1dee8 thread=598b8934]: model replied in 3.0s (855 tokens in, 27 out): tool calls: search_knowledge_base
 INFO    chatbot.tools.rag        [req=59a1dee8 thread=598b8934]: knowledge base search 'refund timing': 6 hits in 2.2s (top: Refund Policy › Refund Timing)
-INFO    chatbot.pii              [req=59a1dee8 thread=598b8934]: redacted PII from a tool result: email
-INFO    chatbot.pii              [req=59a1dee8 thread=598b8934]: redacted PII from the reply: phone
-INFO    chatbot.api              [req=59a1dee8 thread=598b8934]: POST /chat/stream -> 200 in 6.94s (user=me)
+INFO    chatbot.guardrails.pii   [req=59a1dee8 thread=598b8934]: redacted PII from a tool result: email
+INFO    chatbot.guardrails.pii   [req=59a1dee8 thread=598b8934]: redacted PII from the reply: phone
+INFO    chatbot.api              [req=59a1dee8 thread=598b8934]: POST /chat/stream -> 200 in 6.94s (user=bb1dbc66-…)
 INFO    chatbot.memory.long_term.writer [req=91be2e70 thread=def8932c]: pushed 4 messages to long-term memory: 1 add, 2 delete, 2 update
 ```
 
 What's logged:
 
 | Area | Lines |
-|------|-------|
-| API | every request (method, path, status, time, user); new or continuing thread; ownership denials (warning) |
+| --- | --- |
+| API | every request (method, path, status, time, the signed-in user's id); new or continuing thread; ownership denials (warning) |
+| Accounts and limits | registrations and logins by account id, a failed login by client address (never the email), why a token was refused, a rate limit or spent budget, Redis being unreachable (warning), an account deleted |
 | Agent | context size and summarizing, every model call (time, tokens, tool calls or answer length), placeholder results for interrupted tool calls, a summarizer failure, and a warning when `MAX_MODEL_CALLS` stops a run |
 | Tools | every search (query, hits, time, top result), web search backend failures, a search that failed after retrying, reranker load and fallback |
 | Approvals | paused for approval (tool and args), the decisions, resume and delete |
 | PII | each redaction, by type only, from the message, a tool result or the reply |
-| Memory | memories recalled (at a thread's start, or after they change), what each push changed (`2 add, 1 dropped (entitlement claim), 1 update`), a remember request, a failed push or fact, the user deleting a memory or all of them. Never the memories themselves |
+| Memory | memories recalled (every turn that finds new ones), what each push changed (`2 add, 1 dropped (entitlement claim), 1 update`), a remember request, a failed push or fact, the user deleting a memory or all of them. Never the memories themselves |
 
-HTTP client, OpenAI SDK, uvicorn access and `/healthz` lines are hidden unless `LOG_LEVEL=DEBUG`. PII values are never logged: messages are logged by length, search queries are written by the model from redacted text, and redactions are logged by type.
+HTTP client, OpenAI SDK, uvicorn access, `/healthz` and `/metrics` lines are hidden unless `LOG_LEVEL=DEBUG`. PII values are never logged: messages are logged by length, search queries are written by the model from redacted text, and redactions are logged by type.
 
 ### Tracing
 
@@ -223,18 +232,12 @@ Each run's trace is named `chat` or `resume`, grouped by thread (Langfuse's sess
 
 ### Metrics and alerts
 
-`GET /metrics` serves Prometheus metrics: requests and latency by route, time to first token, model latency, tokens and errors by model, tool calls by outcome, approval pauses and decisions, PII redactions by type, memory recall hits, and 429s by limit. Prometheus (port 9091) scrapes it, Grafana (port 3001) charts it on the provisioned "Chatbot" dashboard, and `ops/prometheus/alerts.yml` defines seven alerts (API down, error rate, slow first token, slow or failing model, token spike, PII in replies). They show as firing in Prometheus and on the dashboard; nothing pages. Details in [the Phase 8 doc](docs/phase-8-security-observability.md#observability-as-built).
-
-```bash
-curl -N localhost:8000/chat/stream \
-  -H 'content-type: application/json' -H "Authorization: Bearer $TOKEN" \
-  -d '{"message": "hi"}'
-```
+`GET /metrics` serves Prometheus metrics: requests and latency by route, time to first token, model latency, tokens and errors by model, tool calls by outcome, approval pauses and decisions, PII redactions by type, memory recall hits, and 429s by limit. Prometheus (port 9091) scrapes it, Grafana (port 3001) charts it on the provisioned "Chatbot" dashboard, and `ops/prometheus/alerts.yml` defines seven alerts (API down, error rate, slow first token, slow or failing model, token spike, PII in replies). They show as firing in Prometheus and on the dashboard; nothing pages. Details in [the Phase 8 doc](docs/phase-8-security-observability.md#observability).
 
 ## Endpoints
 
 | Endpoint | Purpose |
-|----------|---------|
+| --- | --- |
 | `POST /chat` | Full reply, its sources and the `thread_id` as JSON, or `pending` tool calls if it paused for approval. Omit `thread_id` to start a new thread. 409 while the thread waits for approval |
 | `POST /chat/stream` | Server-Sent Events: `tool_start` / `tool_end` (with sources) and `token`, then `done` with the `thread_id` (or `error`). An `interrupt` event before `done` means the run is waiting for approval |
 | `POST /threads` | Create an empty thread |
@@ -262,16 +265,20 @@ All endpoints except `/healthz`, `/metrics`, `/auth/register` and `/auth/login` 
 Set in `.env` (see `.env.example`), the environment, or, for secrets, files in `/run/secrets` named like the setting (`jwt_secret`, `openai_api_key`), as Docker and Kubernetes mount them:
 
 | Variable | Default | Notes |
-|----------|---------|-------|
+| --- | --- | --- |
 | `OPENAI_API_KEY` | unset | Required |
 | `OPENAI_BASE_URL` | unset (api.openai.com) | Set to use an OpenAI-compatible gateway |
 | `MODEL` | `gpt-5.4` | Any chat model the endpoint serves. `gpt-5-mini` costs about a tenth as much per token |
 | `REASONING_EFFORT` | `low` | `none` to `high`. Reasoning models only (gpt-5.x, o-series). It can't be unset from `.env` (a missing or empty value means `low`), so for gpt-4.x change the default in `config.py`. `minimal` is a little faster but often skips the search for short questions |
 | `MAX_TOKENS` | unset | Optional cap on output tokens |
-| `EMBEDDING_MODEL` | `text-embedding-3-small` | Must produce 1536-dim vectors, or add a migration and re-ingest |
+| `DATABASE_URL` | unset, required | Postgres; `.env.example` has the Compose service's (`postgresql://chatbot:chatbot@localhost:5433/chatbot`) |
+| `EMBEDDING_MODEL` / `EMBEDDING_DIMENSIONS` | `text-embedding-3-small` / `1536` | The dimensions must match the vector column (`0001_chunks`); changing them needs a migration and a re-ingest |
+| `CHUNK_SIZE_TOKENS` / `CHUNK_OVERLAP_TOKENS` | `600` / `80` | How documents are split at ingestion |
 | `WEB_SEARCH_ENABLED` | `true` | DuckDuckGo web search; no key needed |
-| `RETRIEVAL_TOP_K` | `6` | Chunks returned per knowledge base search |
+| `WEB_SEARCH_MAX_RESULTS` / `WEB_SEARCH_TIMEOUT` | `5` / `15` | Results per search, and seconds before a search gives up |
+| `RETRIEVAL_CANDIDATES` / `RETRIEVAL_TOP_K` | `30` / `6` | Candidates from each of vector and full-text search before fusion, and chunks returned per knowledge base search |
 | `RERANKER_MODEL` | `BAAI/bge-reranker-v2-m3-int8` | Local cross-encoder that reorders the top `RERANK_CANDIDATES` (8) results. Empty turns it off |
+| `RERANKER_CACHE_DIR` | `~/.cache/fastembed` | Where the reranker model is downloaded |
 | `MAX_MODEL_CALLS` | `6` | Model calls per request (`ModelCallLimitMiddleware`); each can be followed by tool calls |
 | `SUMMARY_MODEL` | `gpt-4.1-mini` | Summarizes older turns of long threads |
 | `CONTEXT_MAX_TOKENS` | `10000` | Summarize older turns once a thread's messages pass this (estimated) |
@@ -287,15 +294,16 @@ Set in `.env` (see `.env.example`), the environment, or, for secrets, files in `
 | `PII_ALLOWED_EMAIL_DOMAINS` | `["acme-outfitters.example"]` | JSON list. Emails at these domains are never redacted |
 | `HITL_ENABLED` | `true` | Pause risky tool calls for approval |
 | `HITL_SENSITIVE_TERMS` | see `config.py` | JSON list. Web searches mentioning these wait for approval |
-| `JWT_SECRET` | unset | What `/auth/login` signs tokens with (HS256) and the API verifies them with. At least 32 characters (`openssl rand -hex 32`). Without it, every request is refused |
+| `JWT_SECRET` | unset | What `/auth/login` signs tokens with (HS256) and the API verifies them with. At least 32 characters (`openssl rand -hex 32`); a shorter one stops the app from starting, and without one every request gets 401 |
 | `JWT_TTL_MINUTES` | `60` | How long a login lasts |
 | `RATE_LIMITS_ENABLED` | `true` | Rate limits and the token budget |
-| `REDIS_URL` | `redis://localhost:6380/0` | Where the limits are counted |
+| `REDIS_URL` | unset, required with rate limits on | Where the limits are counted; `.env.example` has the Compose service's (`redis://localhost:6380/0`) |
 | `RATE_LIMIT_PER_USER` / `RATE_LIMIT_PER_IP` | `120/minute` / `300/minute` | Requests allowed, in the `limits` library's notation |
 | `RATE_LIMIT_LOGIN` | `10/minute` | Register and log-in attempts per IP |
 | `DAILY_TOKEN_BUDGET` | `500000` | Model tokens per user per UTC day for agent runs; 0 turns it off |
 | `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` | local dev keys | Tracing turns on when both are set |
-| `LANGFUSE_HOST` | `http://localhost:3000` | |
+| `LANGFUSE_HOST` | unset | Tracing needs it with both keys; `.env.example` has the local Langfuse (`http://localhost:3000`) |
+| `JUDGE_MODEL` | `gpt-4.1` | Scores answers in the evals; changing it means `make eval-calibrate` |
 | `LOG_LEVEL` | `INFO` | `DEBUG` adds HTTP client and access logs |
 
 ## Evals
@@ -305,7 +313,7 @@ Every PR is checked for whether it made the bot worse. The model endpoint is an 
 - **`make eval`**, on a machine that can reach the gateway, runs every suite and writes `tests/evals/report.json`, which is committed with the PR. It uses every setting at its default, whatever `.env` says.
 - **CI** (`make eval-check`, no model calls) runs the code-only suites again, fails if `report.json` was made for different code, prompts, knowledge base or evals than the PR's, and compares it with the report on `main`.
 
-| Suite | Scored by | Latest |
+| Suite | Scored by | On `main` |
 | --- | --- | --- |
 | Retrieval: the right section in the top 6 | code, 28 labelled questions | 100% |
 | Routing: exactly the right tools | DeepEval `ToolCorrectnessMetric` (code), 44 questions | 100% |
@@ -315,7 +323,7 @@ Every PR is checked for whether it made the bot worse. The model endpoint is an 
 | PII: labelled values redacted, look-alikes left alone | code (`redact_pii`) | 95% recall, 92% clean (misses IPv6; reads "1.2.3.4" as an IP) |
 | Approval policy: the right web searches wait for approval | code (`sensitive_reason`) | 100% |
 
-A metric blocks a PR when it drops below `main` by more than 2 points or one case (any drop, for the code-only suites); a case that regressed is run twice more and fails on a majority. A judged metric only gates once the judge agrees with labelled answers at least 90% of the time (`make eval-calibrate`: citations 98%, faithfulness 91%, correctness 90%). The labels and reference answers were written by Claude, not a person. Details in [the Phase 7 doc](docs/phase-7-eval-gate.md).
+A metric blocks a PR when it drops below `main` by more than 2 points or one case (any drop, for the code-only suites); a case that regressed is run twice more and fails on a majority. A judged metric only gates once the judge agrees with labelled answers at least 90% of the time (`make eval-calibrate`: citations 98%, faithfulness 91%, correctness 90%). The labels and reference answers were written by Claude, not a person. With the Langfuse keys set, each eval run is traced and gets a score per metric, so a failed case links to its run. Details in [the Phase 7 doc](docs/phase-7-eval-gate.md).
 
 ## Development
 
