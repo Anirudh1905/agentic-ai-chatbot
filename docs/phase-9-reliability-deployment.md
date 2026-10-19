@@ -138,6 +138,91 @@ There is no chat call: CI has no model access. About 6 to 8 minutes.
   - deleting the worker pod mid-push: the message comes back and the memory is written once
   - a push that fails 5 times reaches the dead-letter queue and fires its alert
 
+### Implementation plan
+
+Each step is tested and committed on its own, in order. Steps 1 to 4 are app code that also works outside Kubernetes. The cluster comes in at step 5. Each step lists what proves it done.
+
+1. **Readiness and background switch.**
+   - Add `GET /readyz`, which checks that the pool answers `SELECT 1` and returns 503 otherwise.
+   - Add the `BACKGROUND_JOBS` setting, so the API pods neither start the idle-thread loop nor the store's TTL sweeper.
+   - Done when: unit tests cover both `/readyz` states, and an app with `BACKGROUND_JOBS=false` starts neither. `make check` passes.
+2. **Migrations as one command.**
+   - `python -m chatbot.migrate` runs Alembic, `checkpointer.setup()` and `store.setup()`.
+   - `make migrate` and Tilt call it.
+   - `Resources.ensure` stops running `setup()`.
+   - Done when: the integration tests (which migrate a throwaway database) pass with it, and the API starts against a migrated database without creating tables.
+3. **The job queue.**
+   - Add a `chatbot/jobs/` package:
+     - the `JobQueue` protocol
+     - the three job types (summary, idle, remember) as JSON
+     - `SqsJobQueue` on `aioboto3`
+     - `InMemoryJobQueue` for tests
+     - settings `SQS_ENDPOINT_URL` and `SQS_QUEUE_URL`
+   - FIFO group id is the user, plus a deduplication id per push.
+   - Done when: unit tests cover encode, decode, group and dedupe ids, and integration tests run against ElasticMQ, which CI gets as a service container.
+4. **Pushes through the queue, and the worker.**
+   - Change `MemoryWriter.schedule`, `remember` and the idle scan to enqueue when a queue is configured. Without one, they keep running in-process as today.
+   - Enqueueing retries twice, then falls back to an in-process push and counts it.
+   - `python -m chatbot.worker` long-polls, runs each push with the existing writing code, acks on success, and leaves the message on failure. It also runs the idle scan and the sweeper.
+   - Queue metrics: depth, the oldest message's age, the dead-letter count, pushes by outcome, fallbacks.
+   - Done when: unit tests show each trigger enqueues one job with the right ids, the worker acks success and not failure, and the fallback writes the memory. The live check: a memory written through ElasticMQ on the host.
+5. **The image.**
+   - A multi-stage `Dockerfile` (uv, Python 3.12, non-root) with the app and the `ui` group, and a `.dockerignore` that excludes `.env`, `data/` and caches.
+   - Commands for api (uvicorn with `--root-path /api` and graceful shutdown), worker, ui, migrate, ingest, retention and reranker-model.
+   - Done when: `docker build` works and `docker run … chatbot.migrate --help` runs.
+6. **Cluster and third-party services.**
+   - `deploy/kind.yaml` maps port 80 and sets up port-forwards.
+   - `deploy/helm/` holds values for ingress-nginx, CloudNativePG (operator plus a one-instance pgvector `Cluster`) and kube-prometheus-stack (lean: no node-exporter or kube dashboards).
+   - Done when: the cluster comes up with the three charts healthy.
+7. **Our manifests.** `deploy/base/`:
+   - **api:** Deployment ×2, Service, PodDisruptionBudget, probes, `preStop`, a 60 s grace period, the model volume mounted read-only.
+   - **worker:** Deployment.
+   - **ui:** Deployment and Service.
+   - **Ingress:** `/` → ui, `/api` → api with the prefix stripped, `/api/metrics` refused.
+   - **Jobs:** migrate, reranker-model, ingest; the retention CronJob.
+   - **Data:** Redis Deployment and Service; ElasticMQ StatefulSet with a volume and its queue config (both queues, the dead-letter policy).
+   - **Monitoring:** the `ServiceMonitor`; a `PrometheusRule` with today's 7 alerts plus the 2 queue alerts; the dashboard ConfigMap.
+
+   `deploy/local/`:
+   - ConfigMap and Secret generators
+   - the image tag
+   - a `make secrets` target that writes `secrets.env` from `.env`
+
+   Done when: `kustomize build deploy/local` passes kubeconform.
+8. **Tilt into kind.**
+   - Rewrite the Tiltfile:
+     - create the cluster if needed
+     - install the charts once
+     - `docker_build` with live update for `src/`
+     - `k8s_yaml(kustomize('deploy/local'))`
+     - the migrate Job before the api and worker, then the reranker and ingest Jobs
+     - port-forwards for Postgres, Redis and ElasticMQ
+     - manual resources for checks, evals, retention and ingest
+   - `docker-compose.yml` keeps only Langfuse, attached to kind's network; verify pods reach `langfuse-web:3000`, else add a Service with manual Endpoints.
+   - Done when: `tilt up` from nothing serves a chat through `http://localhost`, the trace shows up in Langfuse, and Grafana shows both api pods.
+9. **CI.**
+   - A `deploy` job:
+     - build the image
+     - kustomize plus kubeconform
+     - kind with the charts
+     - deploy with a placeholder model key
+     - wait for migrate
+     - check `/readyz`, register and login, scrape targets and queues
+   - Done when: it passes on the PR.
+10. **Live checks and docs.**
+    - Live checks, each with its result written in this doc:
+      - chats spread over both api pods
+      - a rolling restart during a streaming reply doesn't break it
+      - deleting the worker mid-push writes the memory once
+      - a push failing 5 times reaches the dead-letter queue and alerts
+    - Update:
+      - the README quickstart (`tilt up` into kind, the Ingress URLs)
+      - the architecture diagram, with a cluster view
+      - this section: designed becomes built
+    - Done when: the exit criteria above are ticked.
+
+**Execution:** I build the steps in order, with tests first where there's logic (steps 1 to 4). I commit each step, run `make check` before each commit, and stop to report after steps 4, 8 and 10, or earlier if a step turns out different from the design.
+
 ### Not in this piece
 
 - **Reliability, then cost and latency, then proof**, in that order, each with its own design ([below](#reliability)).
