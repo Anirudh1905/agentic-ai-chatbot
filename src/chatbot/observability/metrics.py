@@ -3,7 +3,7 @@
 Prometheus scrapes them (`docker compose up` runs it, with the alert rules in
 `ops/prometheus/alerts.yml`) and Grafana charts them (the "Chatbot" dashboard). Labels are
 kept to small fixed sets (route templates, tool and model names, PII types), never users or
-threads: those are in the traces (observability.py).
+threads: those are in the traces (tracing.py).
 
 The counts are per process. With several API processes each needs scraping (Phase 9); the
 dashboards sum them.

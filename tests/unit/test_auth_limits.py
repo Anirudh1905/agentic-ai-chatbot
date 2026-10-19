@@ -248,7 +248,8 @@ def test_the_users_model_sends_the_key_both_ways() -> None:
     assert llm.openai_api_base == "https://llm.example/v1"
     assert llm.openai_api_key.get_secret_value() == "sk-mine"  # sent as Bearer
     assert llm.default_headers == {"api-key": "sk-mine"}
-    assert builder.build_llm(Settings()).default_headers is None  # the server's model: unchanged
+    server = builder.build_llm(Settings(openai_api_key=SecretStr("sk-server")))
+    assert server.default_headers is None  # the server's model: unchanged
 
 
 def test_login_fails_when_the_users_credentials_dont_work(monkeypatch: pytest.MonkeyPatch) -> None:

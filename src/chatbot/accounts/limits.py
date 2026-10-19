@@ -41,7 +41,7 @@ def seconds_to_midnight(now: datetime) -> int:
 
 class UsageLimits:
     def __init__(self, settings: Settings, storage_uri: str | None = None) -> None:
-        uri = storage_uri or settings.redis_url
+        uri = storage_uri or settings.require("redis_url")
         storage = storage_from_string(uri if uri.startswith("async+") else f"async+{uri}")
         assert isinstance(storage, Storage)
         self.storage = storage

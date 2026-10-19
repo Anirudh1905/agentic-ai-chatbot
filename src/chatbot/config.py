@@ -59,7 +59,9 @@ class Settings(BaseSettings):
     # The retention job keeps only the latest checkpoint of threads idle this many days.
     checkpoint_retention_days: int = 30
 
-    database_url: str = "postgresql://chatbot:chatbot@localhost:5433/chatbot"
+    # Where the services are (Postgres, Redis, Langfuse) comes from .env or the environment,
+    # never a default here, so nothing silently talks to a localhost (see .env.example).
+    database_url: str | None = None
 
     embedding_model: str = "text-embedding-3-small"
     # Must match the vector column in migrations/versions/0001_chunks.py.
@@ -109,7 +111,8 @@ class Settings(BaseSettings):
     # Human approval before risky tool calls (see agent/approvals.py).
     hitl_enabled: bool = True
     # Web searches mentioning any of these (whole words, any case) wait for approval, since the
-    # query goes to a third-party search engine. Emails, phone and order numbers always do.
+    # query goes to a third-party search engine. So do order numbers (emails and phones are
+    # already redacted, Phase 5).
     hitl_sensitive_terms: list[str] = [
         "confidential",
         "internal",
@@ -130,7 +133,7 @@ class Settings(BaseSettings):
     # Limits (accounts/limits.py), counted in Redis so every API process shares them. In the
     # `limits` library's notation. 0 for DAILY_TOKEN_BUDGET turns the budget off.
     rate_limits_enabled: bool = True
-    redis_url: str = "redis://localhost:6380/0"
+    redis_url: str | None = None
     # Against abuse, not cost (the token budget is for cost): the UI makes about three reads per
     # page run (threads, messages, memories), so these leave room for normal use.
     rate_limit_per_user: str = "120/minute"
@@ -142,7 +145,7 @@ class Settings(BaseSettings):
 
     langfuse_public_key: str | None = None
     langfuse_secret_key: SecretStr | None = None
-    langfuse_host: str = "http://localhost:3000"
+    langfuse_host: str | None = None
 
     log_level: str = "INFO"
 
@@ -166,7 +169,14 @@ class Settings(BaseSettings):
 
     @property
     def tracing_enabled(self) -> bool:
-        return bool(self.langfuse_public_key and self.langfuse_secret_key)
+        return bool(self.langfuse_public_key and self.langfuse_secret_key and self.langfuse_host)
+
+    def require(self, name: str) -> str:
+        """A setting that has no default and must be set, e.g. `require("database_url")`."""
+        value = getattr(self, name)
+        if not value:
+            raise RuntimeError(f"{name.upper()} isn't set: add it to .env (see .env.example)")
+        return str(value)
 
 
 @lru_cache
