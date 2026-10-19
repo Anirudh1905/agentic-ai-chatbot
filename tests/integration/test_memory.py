@@ -102,7 +102,6 @@ KILLED_RUN = textwrap.dedent("""
     @tool
     async def lookup(query: str) -> str:
         "Look something up."
-        await asyncio.sleep(0.5)  # a slow tool; the previous step's checkpoint lands meanwhile
         os.kill(os.getpid(), signal.SIGKILL)
 
     async def main(url: str, thread: str) -> None:
@@ -110,8 +109,10 @@ KILLED_RUN = textwrap.dedent("""
         llm = ScriptedChatModel(responses=[tool_call("lookup", query="refunds")])
         graph = build_graph(Settings(), tools=[lookup], llm=llm,
                             checkpointer=AsyncPostgresSaver(pool))
+        # sync: each step's checkpoint is written before the next step runs, so the one
+        # before the tool call is saved when the tool kills the process.
         await graph.ainvoke({"messages": [HumanMessage("refunds?")]},
-                            {"configurable": {"thread_id": thread}})
+                            {"configurable": {"thread_id": thread}}, durability="sync")
 
     asyncio.run(main(sys.argv[1], sys.argv[2]))
 """)
