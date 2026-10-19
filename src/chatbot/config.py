@@ -108,6 +108,11 @@ class Settings(BaseSettings):
     # (for its per-user lock) while it waits on the model, so keep it well under the pool size.
     memory_write_concurrency: int = 2
 
+    # Whether this process runs the background loops: the idle-thread memory loop and the
+    # memory store's TTL sweeper. On for `make dev`; in Kubernetes the worker runs them and the
+    # API pods set it to false, so N replicas don't run the same scans N times (Phase 9).
+    background_jobs: bool = True
+
     # Human approval before risky tool calls (see agent/approvals.py).
     hitl_enabled: bool = True
     # Web searches mentioning any of these (whole words, any case) wait for approval, since the

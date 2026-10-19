@@ -20,10 +20,12 @@ from langchain_core.messages import AIMessage, HumanMessage
 from prometheus_client import REGISTRY
 from pydantic import SecretStr
 
+from chatbot.api import dependencies
 from chatbot.api.dependencies import (
     get_callbacks,
     get_checkpointer,
     get_graph,
+    get_readiness,
 )
 from chatbot.api.main import app
 from chatbot.config import ModelCredentials, RunContext, get_settings
@@ -405,3 +407,25 @@ def test_metrics_count_requests_tools_tokens_and_first_tokens() -> None:
     assert sample("chatbot_memory_recalls_total", result="miss") == before["recalls"]  # no store
     assert "chatbot_model_tokens_total" in exposed
     assert 'route="/chat/stream"' in exposed  # the template, not the path
+
+
+def test_readyz_answers_ready_once_the_database_does(client: TestClient) -> None:
+    app.dependency_overrides[get_readiness] = lambda: True
+    assert client.get("/readyz").json() == {"status": "ready"}
+
+
+def test_readyz_answers_503_when_the_database_doesnt(client: TestClient) -> None:
+    app.dependency_overrides[get_readiness] = lambda: False
+    resp = client.get("/readyz")
+    assert resp.status_code == 503
+    assert resp.json() == {"status": "not ready"}
+
+
+async def test_readiness_is_false_when_resources_cant_start(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def down() -> None:
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(dependencies.resources, "ensure", down)
+    assert await get_readiness() is False

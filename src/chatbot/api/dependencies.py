@@ -65,7 +65,8 @@ class Resources:
                 ttl={"refresh_on_read": False, "omit_expired": True, "sweep_interval_minutes": 60},
             )
             await store.setup()
-            await store.start_ttl_sweeper()
+            if settings.background_jobs:
+                await store.start_ttl_sweeper()
             reranker = build_reranker(settings)
             if reranker:
                 # Load the model now rather than during the first search.
@@ -92,7 +93,7 @@ class Resources:
                 if settings.hitl_enabled
                 else None,
             )
-            if self.writer is not None:
+            if self.writer is not None and settings.background_jobs:
                 graph = self.graph
 
                 async def messages_of(thread_id: str) -> list[AnyMessage]:
@@ -163,6 +164,21 @@ async def get_threads() -> ThreadStore:
     await resources.ensure()
     assert resources.threads is not None
     return resources.threads
+
+
+async def get_readiness() -> bool:
+    """Whether this process can serve: its resources are up and the database answers. The
+    readiness probe; a pod that loses Postgres leaves the Service instead of being restarted
+    (that's /healthz, the liveness probe)."""
+    try:
+        await resources.ensure()
+        assert resources.pool is not None
+        async with resources.pool.connection() as conn:
+            await conn.execute("SELECT 1")
+    except Exception:
+        logger.warning("not ready", exc_info=True)
+        return False
+    return True
 
 
 async def get_users() -> UserStore:
