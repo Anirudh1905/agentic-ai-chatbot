@@ -261,6 +261,7 @@ The store keeps `created_at`, `updated_at` and `expires_at`, and indexes memorie
 | `DELETE /me/memory/{id}` | Forget one memory; 404 if it isn't yours |
 | `DELETE /me/memory` | Forget everything |
 | `DELETE /threads/{id}` | Also deletes the thread's cursor. The memories already made from it stay |
+| `DELETE /me` (Phase 8) | Deletes the account with every memory, cursor and thread, after any push in progress for the user finishes |
 
 All are scoped to the caller (their login token since Phase 8; `X-User-Id` before), like the thread endpoints.
 

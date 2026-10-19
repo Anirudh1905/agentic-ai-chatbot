@@ -40,6 +40,8 @@ class UserStore(Protocol):
 
     async def get(self, user_id: str) -> User | None: ...
 
+    async def delete(self, user_id: str) -> None: ...
+
 
 class PostgresUserStore:
     def __init__(self, pool: Pool) -> None:
@@ -78,3 +80,7 @@ class PostgresUserStore:
             cur = await conn.execute("SELECT id::text, email FROM users WHERE id = %s", (user_id,))
             row = await cur.fetchone()
         return User(**row) if row else None
+
+    async def delete(self, user_id: str) -> None:
+        async with self.pool.connection() as conn:
+            await conn.execute("DELETE FROM users WHERE id = %s", (user_id,))

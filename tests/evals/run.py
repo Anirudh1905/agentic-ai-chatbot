@@ -72,7 +72,10 @@ async def main() -> int:
         async def one(case: Case) -> dict[str, Outcome]:
             for attempt in range(ATTEMPTS):
                 try:
-                    return await score(judge, case, await agent.run(case.question))
+                    run = await agent.run(case.question)
+                    outcomes = await score(judge, case, run)
+                    agent.send_scores(run, outcomes)
+                    return outcomes
                 except Exception as e:  # the gateway stalls under load; try the case again
                     error = e
                     await asyncio.sleep(5 * (attempt + 1))

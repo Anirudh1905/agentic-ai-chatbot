@@ -29,6 +29,7 @@ from limits.aio.strategies import MovingWindowRateLimiter
 from limits.storage import storage_from_string
 
 from chatbot.config import RunContext, Settings
+from chatbot.metrics import LIMITED
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +69,7 @@ class UsageLimits:
             logger.warning("rate limits unavailable (is Redis up?); letting the request through")
             return
         retry = max(1, int(reset - time.time()) + 1)
+        LIMITED.labels(kind).inc()
         logger.info("rate limited (%s, %s)", kind, item)
         raise HTTPException(
             status.HTTP_429_TOO_MANY_REQUESTS,
@@ -92,6 +94,7 @@ class UsageLimits:
             return
         if used >= self.budget:
             retry = seconds_to_midnight(datetime.now(UTC))
+            LIMITED.labels("budget").inc()
             logger.info("daily token budget spent (%d of %d)", used, self.budget)
             raise HTTPException(
                 status.HTTP_429_TOO_MANY_REQUESTS,

@@ -16,7 +16,13 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.store.base import BaseStore
 
-from chatbot.agent.middleware import ModelCallLimit, ModelCallMiddleware, UserModel, system_prompt
+from chatbot.agent.middleware import (
+    ModelCallLimit,
+    ModelCallMiddleware,
+    ToolCallMetrics,
+    UserModel,
+    system_prompt,
+)
 from chatbot.config import ModelCredentials, RunContext, Settings
 from chatbot.memory.long_term import LongTermMemory, MemoryWriter
 from chatbot.memory.short_term import summarization
@@ -159,6 +165,7 @@ def build_graph(
         # `interrupt_on`, so it never waits for approval: it only writes the user's own memories.
         tools = [*tools, build_remember_tool(writer)]
     middleware: list[AgentMiddleware[Any, Any]] = [
+        ToolCallMetrics(),
         # Every turn: recall the user's long-term memories closest to their latest message.
         *([LongTermMemory(settings.memory_recall_limit)] if memory else []),
         # PII in tool results and replies (user messages are redacted earlier, by the API).

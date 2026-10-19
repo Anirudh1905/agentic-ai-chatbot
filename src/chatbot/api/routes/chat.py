@@ -58,10 +58,11 @@ async def chat(
     credentials: UserCredentials,
 ) -> ChatResponse:
     thread_id, message = await open_thread(body, user_id, threads, graph)
+    context = RunContext(user_id, credentials)
     result = await graph.ainvoke(
         {"messages": [HumanMessage(message)]},
-        config=run_config(thread_id, callbacks),
-        context=RunContext(user_id, credentials),
+        config=run_config("chat", thread_id, context, callbacks),
+        context=context,
     )
     return await chat_response(graph, result, thread_id)
 
@@ -76,12 +77,13 @@ async def chat_stream(
     credentials: UserCredentials,
 ) -> EventSourceResponse:
     thread_id, message = await open_thread(body, user_id, threads, graph)
+    context = RunContext(user_id, credentials)
     return EventSourceResponse(
         stream_run(
             graph,
             {"messages": [HumanMessage(message)]},
-            run_config(thread_id, callbacks),
-            RunContext(user_id, credentials),
+            run_config("chat", thread_id, context, callbacks),
+            context,
             thread_id,
         )
     )

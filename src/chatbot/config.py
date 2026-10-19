@@ -8,9 +8,21 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ReasoningEffort = Literal["none", "minimal", "low", "medium", "high"]
 
+# Secrets can also come from files here, one per setting, named like it (`jwt_secret`,
+# `openai_api_key`): Docker and Kubernetes secrets are mounted this way. The environment wins
+# over the files, and the files over `.env`.
+SECRETS_DIR = Path("/run/secrets")
+# HS256 is only as strong as its key: at least 32 bytes (RFC 7518, section 3.2).
+MIN_JWT_SECRET_CHARS = 32
+
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+        secrets_dir=SECRETS_DIR if SECRETS_DIR.is_dir() else None,
+    )
 
     openai_api_key: SecretStr | None = None
     # Unset means api.openai.com; set it to route through an OpenAI-compatible gateway.
@@ -110,7 +122,7 @@ class Settings(BaseSettings):
 
     # Accounts log in at POST /auth/login (api/auth.py) for a token signed with JWT_SECRET
     # (HS256); every request needs it as `Authorization: Bearer <JWT>`. Without a secret,
-    # every request is refused.
+    # every request is refused. At least 32 characters: `openssl rand -hex 32`.
     jwt_secret: SecretStr | None = None
     # How long a token lasts; then the user logs in again.
     jwt_ttl_minutes: int = 60
@@ -142,6 +154,15 @@ class Settings(BaseSettings):
         if isinstance(data, dict):
             return {k: v for k, v in data.items() if v != "" or k.lower() == "reranker_model"}
         return data
+
+    @model_validator(mode="after")
+    def _strong_jwt_secret(self) -> "Settings":
+        if self.jwt_secret and len(self.jwt_secret.get_secret_value()) < MIN_JWT_SECRET_CHARS:
+            raise ValueError(
+                f"JWT_SECRET must be at least {MIN_JWT_SECRET_CHARS} characters "
+                "(generate one with `openssl rand -hex 32`)"
+            )
+        return self
 
     @property
     def tracing_enabled(self) -> bool:

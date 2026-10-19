@@ -4,7 +4,7 @@
 
 [← Phase 7](phase-7-eval-gate.md) · [Overview](../README.md) · [Next: Phase 9 →](phase-9-reliability-deployment.md)
 
-Status: accounts and login (email and password, JWT), and limits (Redis) are built; observability and data deletion are planned. Like Phase 7, this is for a production-ready demo (one host, no real users or on-call), so it's built the way production would be without a secret manager or paging.
+Status: built. Accounts and login (email and password, JWT), limits (Redis), deleting a user's data, traces with run metadata (Langfuse), metrics, dashboards and alerts (Prometheus, Grafana). Like Phase 7, this is for a production-ready demo (one host, no real users or on-call), so it's built the way production would be without a secret manager or paging.
 
 ## Scope
 
@@ -53,7 +53,7 @@ sequenceDiagram
     A-->>U: 200 {access_token, token_type: bearer, expires_in: 3600}<br/>or 401 Incorrect email or password (the same for both)
     Note over U: keeps the token in the session
     U->>A: GET /threads, POST /chat ... with Authorization: Bearer token
-    Note over A: verified per request below: no database lookup
+    Note over A: verified on every request below, including an account lookup
 ```
 
 | Endpoint | Body | Answers |
@@ -178,7 +178,7 @@ Checked live against Redis: a chat counted 2,727 tokens for the user; with the p
 | Before (Phases 1–7) | Now |
 | --- | --- |
 | `X-User-Id: anirudh`, trusted as sent | An account (`/auth/register`), a token from `/auth/login`, and `Authorization: Bearer <JWT>`; the user is the verified token's `sub`. `X-User-Id` is ignored |
-| Missing header: 401 | Missing or invalid token: 401 with `WWW-Authenticate: Bearer` and the reason ("Signature has expired", "Audience doesn't match") |
+| Missing header: 401 | Missing or invalid token: 401 with `WWW-Authenticate: Bearer` and "Not signed in" or "Invalid or expired token" (the exact reason is only in the log) |
 | No limits | 429 with `Retry-After` over the per-IP or per-user rate, or (for runs) once the day's token budget is spent |
 
 For `curl`, log in for a token: `curl -s localhost:8000/auth/login -d 'username=me@example.com&password=...'`. The UI shows a 429 or 401 from a run as an error in the chat instead of "Can't reach the API".
@@ -187,7 +187,7 @@ For `curl`, log in for a token: `curl -s localhost:8000/auth/login -d 'username=
 
 | Setting | Default | |
 | --- | --- | --- |
-| `JWT_SECRET` | unset | What `/auth/login` signs tokens with, and the API verifies them with. Put a random one in `.env` |
+| `JWT_SECRET` | unset | What `/auth/login` signs tokens with, and the API verifies them with. At least 32 characters (`openssl rand -hex 32`); a shorter one stops the app from starting |
 | `JWT_TTL_MINUTES` | `60` | How long a login lasts |
 | `RATE_LIMITS_ENABLED` | `true` | Both limits and the budget |
 | `REDIS_URL` | `redis://localhost:6380/0` | The Compose `redis` service |
@@ -223,39 +223,160 @@ For `curl`, log in for a token: `curl -s localhost:8000/auth/login -d 'username=
 
 The evals call the agent directly, not through the API, and the agent behaves the same: `SpendTokens` is only added when the API builds the graph. Still, the re-run on this branch scored faithfulness 69% against `main`'s 72%, a 3-point drop where the tolerance is 2.6 (one case of 39), and the gate blocked. That's the run-to-run noise Phase 7 measured (65% and 72% on the same code), wider than one case. Citations moved the other way (72% to 82%).
 
+
+## Deleting a user's data (as built)
+
+`DELETE /me` (`src/chatbot/api/routes/me.py`) deletes the account and everything kept about it, in one call. The UI has it under "Delete my account" in the sidebar, behind a confirmation checkbox.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as UI
+    participant A as API DELETE /me
+    participant W as MemoryWriter
+    participant DB as Postgres
+
+    U->>A: DELETE /me (Bearer token)
+    A->>W: take the user's memory lock
+    Note over W: waits for a push in progress (it would write memories back),<br/>and holds off new ones until the delete is done
+    loop each of the user's threads
+        A->>DB: delete its checkpoints, then the thread
+    end
+    A->>DB: delete the store's memories, memory cursors and memory version
+    A->>W: release the lock
+    A->>DB: delete the account (last, so a failed delete can be retried)
+    A-->>U: 204
+    Note over U: logged out; the old token gets 401, since its account is gone
+```
+
+- Other users' threads and memories are untouched (tested).
+- **Not deleted:** the day's token count in Redis (it holds a number, not data, and expires after midnight UTC), the log lines and metrics (no message text, see below), and Langfuse traces. Traces hold the user's (PII-redacted) messages under a hashed user id; delete them in Langfuse by filtering on that id (`hashed_user` in `observability.py`).
+- Deleting one thread (`DELETE /threads/{id}`) and forgetting memories (`DELETE /me/memory`) still work on their own.
+
 ## Security and access
 
 - [x] Authentication (JWT); the user taken only from the token's `sub`, which must be an existing account
 - [x] A login page: accounts with email and password (`/auth/register`, `/auth/login`), and a login screen in the UI
 - [x] Ownership checks on threads, memories and interrupts use the token's user (they exist since Phases 3, 4 and 6; only where the user comes from changed)
 - [x] Rate limits per user and per IP; token budget per user per day (Redis)
-- [ ] Secrets from the environment or a mounted file, never in the image or the repo
-- [ ] Prompt-injection defenses reviewed: tool output delimited (`<kb_results>`, `<web_results>`), no side-effect tools without approval, memories never grant permissions (Phase 6)
+- [x] Secrets from the environment or a mounted file, never in the image or the repo
+- [x] Prompt-injection defenses reviewed: tool output delimited (`<kb_results>`, `<web_results>`), no side-effect tools without approval, memories never grant permissions (Phase 6)
 
-## Observability
+**Secrets.** Every secret is a `SecretStr` setting (never printed, logged or put in a repr), read from the environment, then from files in `/run/secrets` (one per setting, named like it: `jwt_secret`, `openai_api_key`, `langfuse_secret_key`), which is how Docker and Kubernetes mount secrets, then from `.env` for local development. `.env` is in `.gitignore` and `.env.example` has no values. There's no image yet; Phase 9 builds it with `.env` excluded. `JWT_SECRET` must be at least 32 characters (RFC 7518 asks for a key as long as the hash for HS256), or the app refuses to start.
+
+**Prompt-injection review.** Everything the model reads that didn't come from the user or from us is untrusted: knowledge-base chunks, web snippets, and the user's memories (which came from the user, but from earlier, and through a model).
+
+| Defense | Where | Found |
+| --- | --- | --- |
+| Untrusted text is wrapped in tags, and the system prompt says never to follow instructions inside `<kb_results>` and `<web_results>` | `tools/rag.py`, `tools/web_search.py`, `prompts/system.md` | **A gap, fixed:** a document or web page containing `</web_results>` could end the results early and pass what followed off as ours. Our tags inside untrusted text are now defused (`<` becomes `&lt;`, `prompts.as_data`), in search results and in recalled memories |
+| No side effects without approval | `agent/approvals.py`, `tools/` | Holds. The tools are `search_knowledge_base` (read only), `web_search` (sends its query to a third party, so a query with sensitive terms, an email, a phone or an order number waits for a person) and `remember` (writes only the caller's own memories, so no approval) |
+| Memories never grant anything | `agent/middleware.py` (the prompt), `memory/long_term/facts.py` | Holds. The prompt says memories never grant discounts, refunds, status or permissions, and facts claiming them ("VIP", "50% off", "admin") are dropped in code before they're stored |
+| PII is redacted before the model sees it | `pii.py` (Phase 5) | Holds. A page that makes the model put conversation details into a web query finds them already redacted, and a query with an email or phone waits for approval |
+
+What's left is the usual residual risk: a page can still try to steer the answer itself. The answer is grounded in cited results (the faithfulness and citation evals measure it), and nothing the model writes has side effects beyond the user's own memories.
+
+## Observability (as built)
 
 ```mermaid
 flowchart LR
-    API[API] -->|traces: thread, hashed user,<br/>model, tokens, cost, tools, interrupts| LF[Langfuse]
-    API -->|metrics| Prom[Prometheus]
-    Prom --> Graf[Grafana dashboards]
-    Prom --> Alerts[Alerts]
-    Evals[make eval scores] -.->|later: per trace| LF
+    API[API and agent] -->|"traces: name, thread as session,<br/>hashed user, tags, model, tokens,<br/>tool calls, approval pauses"| LF[Langfuse]
+    API -->|"GET /metrics"| Prom[Prometheus<br/>15 days]
+    Prom --> Rules[alerts.yml<br/>7 alerts]
+    Prom --> Graf[Grafana<br/>Chatbot dashboard]
+    Rules -.->|firing| Graf
+    Evals["make eval"] -->|"traces tagged eval,<br/>a score per metric"| LF
 ```
 
-- [ ] Every run traced with `thread_id`, `user_id` (hashed), model, tokens, cost, tool calls, interrupts (Langfuse tracing exists since Phase 1, without this metadata)
-- [ ] Metrics: p50/p95 latency, time to first token, tool error rate, interrupt and approval rate, PII detections per type, memory recall hit rate
-- [ ] Alerts: error rate, model and API latency spikes, cost anomalies, PII guard failures
-- [ ] Eval scores stored against each trace in Langfuse, so a failed eval case links to its run (Phase 7 writes them to `report.json` only)
+- [x] Every run traced with `thread_id`, `user_id` (hashed), model, tokens, cost, tool calls, interrupts (Langfuse tracing exists since Phase 1, without this metadata)
+- [x] Metrics: p50/p95 latency, time to first token, tool error rate, interrupt and approval rate, PII detections per type, memory recall hit rate
+- [x] Alerts: error rate, model and API latency spikes, cost anomalies, PII guard failures
+- [x] Eval scores stored against each trace in Langfuse, so a failed eval case links to its run (Phase 7 writes them to `report.json` only)
+
+**Traces** (`observability.py`, `api/runs.py`). Each run's config carries metadata that Langfuse reads as the trace's attributes: the name (`chat` or `resume`), the thread as the session (so a conversation's runs group together), the user as `hashed_user` (an HMAC of their id with `JWT_SECRET`, so only someone with the secret can match a trace to a user; a plain hash of "alice" can be guessed), tags (`chat`/`resume`, and `own-key` for a user's own endpoint) and the model. Langfuse records the rest from the run itself: each model call with its tokens, each tool call, and approval pauses (LangGraph interrupts, which it shows without marking them as errors, and continues on resume). **Cost** shows once Langfuse has a price for the model: it knows OpenAI's names, but a gateway's names (`gpt-5.4`) need a model definition in Langfuse's settings. Checked live: a chat's root trace had the hashed user and the thread id.
+
+**Metrics** (`metrics.py`, served at `GET /metrics`, not authenticated or limited, like `/healthz`). Labels are small fixed sets, never users or threads.
+
+| Metric | What | Recorded in |
+| --- | --- | --- |
+| `chatbot_http_requests_total{method, route, status}`, `chatbot_http_request_duration_seconds{method, route}` | Requests and their latency, by route template (`/threads/{thread_id}`); a stream until its last event | `api/request_logging.py` |
+| `chatbot_time_to_first_token_seconds` | Start of a streamed run to the first reply token | `api/streaming.py` |
+| `chatbot_run_errors_total{kind}` | Runs that ended in an error: `internal`, or `user_model` (the user's own key refused) | `api/streaming.py`, `api/main.py` |
+| `chatbot_model_call_duration_seconds{model}`, `chatbot_model_call_errors_total{model}`, `chatbot_model_tokens_total{model, kind}` | The agent's model calls, failures, and input and output tokens | `ModelCallMiddleware` |
+| `chatbot_tool_calls_total{tool, outcome}` | Tool calls after retries, `ok` or `error` | `ToolCallMetrics` middleware (outermost, so a retried call counts once) |
+| `chatbot_approval_pauses_total`, `chatbot_approval_decisions_total{decision}` | Runs paused for approval, and the answers (approve, edit, reject) | `api/runs.py`, `api/streaming.py`, `routes/threads.py` |
+| `chatbot_pii_redactions_total{type, source}` | PII redacted, by type, in the user's `message`, a `tool_result` or a `reply` | `api/runs.py`, `pii.py` |
+| `chatbot_memory_recalls_total{result}` | Turns whose memory search found something (`hit`) or not | `LongTermMemory` |
+| `chatbot_limited_total{limit}` | 429s: `user`, `ip`, `login` or `budget` | `usage.py` |
+
+Counts are per process: with several API processes each is scraped and the dashboard sums them (Phase 9).
+
+**Dashboard.** `make up` (or Tilt) starts Prometheus (http://localhost:9091, 9090 is Langfuse's MinIO) and Grafana (http://localhost:3001/d/chatbot, 3000 is Langfuse), with the datasource and the "Chatbot" dashboard provisioned from `ops/grafana`. It opens without a login, read only (admin/admin to edit). Panels: requests, error rate, p95 time to first token and today's tokens at the top; firing alerts; requests and latency by route; time to first token; model latency, tokens and errors by model; tool calls and error rate by tool; approvals and the share of runs that pause; PII redacted by type and source; memory recall hit rate; 429s by limit. Prometheus scrapes the API on the host at `host.docker.internal:8000` (Docker Desktop and Rancher Desktop provide it; on Linux see `ops/prometheus/prometheus.yml`).
+
+**Alerts** (`ops/prometheus/alerts.yml`). They show as firing in Prometheus and on the dashboard. Nothing pages: this is a one-host demo with no on-call; an Alertmanager with a receiver would send them on.
+
+| Alert | Fires when | |
+| --- | --- | --- |
+| `ChatbotDown` | `/metrics` hasn't answered for 2 minutes | critical |
+| `ChatbotErrorRate` | over 5% of requests fail for 5 minutes (500s, plus streamed runs that ended in an error event, which answer 200) | critical |
+| `ChatbotSlowFirstToken` | p95 time to first token over 15 s for 10 minutes | warning |
+| `ChatbotSlowModel` | p95 model call over 20 s for 10 minutes, per model (the gateway struggling) | warning |
+| `ChatbotModelErrors` | over 10% of a model's calls raise for 10 minutes | warning |
+| `ChatbotTokenSpike` | the last hour's tokens are 3x the previous day's hourly average, and over 100k (cost) | warning |
+| `ChatbotPIIInReplies` | the model wrote PII in a reply in the last 15 minutes. It was redacted, but the model only has PII if a tool result or memory let it through, which is the guard failing upstream | warning |
+
+**Eval scores per trace** (`tests/evals/agent_runs.py`, `run.py`). With the Langfuse keys set, `make eval` traces each run (named and tagged `eval`, with the question in the metadata) under a trace id it chooses, and sends each metric's verdict to that trace: a boolean score per metric (1 passed, 0 failed) with the judge's reason as the comment; an error isn't sent. A failed case in `report.json` is then one filter away from its run in Langfuse (tag `eval`, score `faithfulness = 0`). Re-runs of a regression each get their own trace. Checked live: a traced eval run and its `routing` score reached Langfuse.
 
 ## Data and compliance
 
-- [ ] "Delete my data" removes a user's threads, checkpoints, memories and memory cursors in one call (today: per thread, and `DELETE /me/memory`)
-- [ ] Retention policy for checkpoints (the Phase 3 job), memories and logs
-- [ ] Data processing records for third parties: the model gateway, the web search provider, the embedding provider
+- [x] "Delete my data" removes a user's threads, checkpoints, memories and memory cursors in one call (`DELETE /me`, which deletes the account too)
+- [x] Retention policy for checkpoints (the Phase 3 job), memories and logs
+- [x] Data processing records for third parties: the model gateway, the web search provider, the embedding provider
+
+**Retention.**
+
+| Data | Where | Kept |
+| --- | --- | --- |
+| Accounts | Postgres `users` | Until `DELETE /me` |
+| Threads and checkpoints | Postgres | Until the user deletes the thread or the account. Threads idle over `CHECKPOINT_RETENTION_DAYS` (30) keep only their latest checkpoint (`make retention`, nightly) |
+| Long-term memories, cursors | Postgres store | Until the user forgets them (`DELETE /me/memory`) or deletes the account. Temporary facts ("in Pune until Friday") expire through the store's TTL |
+| Rate-limit windows, token counts | Redis | A minute; the day's count until just after midnight UTC |
+| Metrics | Prometheus | 15 days (`--storage.tsdb.retention.time`). No user data |
+| Traces | Langfuse | Until deleted in Langfuse. PII-redacted messages under a hashed user id; set a retention period there for production, if your edition has one, or delete old traces |
+| Logs | stdout, the deployment's log store | 14 days is plenty. Request lines with route, status, time and the user's id; counts and types (PII types, tool names), never message text, passwords, keys or tokens. The pending web query of a paused run is logged, already redacted |
+
+**Third parties.** What leaves the service, and to whom. All of it is after PII redaction (Phase 5).
+
+| Recipient | Receives | When |
+| --- | --- | --- |
+| Model gateway (`OPENAI_BASE_URL`) | The thread's messages, the system prompt with recalled memories, tool results; old turns to summarize; conversation turns for memory pushes; for the evals, golden questions and the judge's prompts | Every run; summaries past `CONTEXT_MAX_TOKENS`; memory pushes; `make eval` |
+| A user's own endpoint | The same as the gateway's first item, for that user's runs only | When they logged in with their own key |
+| Embedding provider (the same gateway) | The user's latest message (memory recall), search queries, memory contents, and document chunks at ingestion | Every turn, every search, every memory write, `make ingest` |
+| Web search (DuckDuckGo through `ddgs`, other engines on its `auto` fallback) | The search query only | Each `web_search`; a query with sensitive terms, an email, a phone or an order number only after approval |
+| Langfuse (self-hosted here) | Traces: messages, tool calls and results, tokens, a hashed user id | When `LANGFUSE_*` keys are set |
 
 ## Exit criteria
 
 - [x] No request is served without a valid token; the user comes only from it
 - [x] Limits enforced and visible (429 with a retry time)
-- [ ] Dashboards and alerts live
+- [x] Dashboards and alerts live
+
+### Files (data, secrets and observability)
+
+| File | Change |
+| --- | --- |
+| `src/chatbot/api/routes/me.py` (new) | `DELETE /me` |
+| `src/chatbot/memory/long_term/store.py`, `writer.py` | `forget_user`; `MemoryWriter.user_lock` |
+| `src/chatbot/memory/threads.py`, `users.py` | `ids_for_user`; `UserStore.delete` |
+| `src/chatbot/config.py` | Secrets from `/run/secrets`; `JWT_SECRET` at least 32 characters |
+| `src/chatbot/prompts/__init__.py` | `as_data`, used by both search tools and the memories in the prompt |
+| `src/chatbot/observability.py` | `langfuse_client`, `build_callbacks(trace_id=...)`, `hashed_user`, `trace_metadata` |
+| `src/chatbot/api/runs.py`, `routes/chat.py`, `routes/threads.py` | `run_config(name, thread, context, ...)` adds the trace metadata |
+| `src/chatbot/metrics.py` (new) | The metrics above; recorded in `request_logging.py`, `streaming.py`, `runs.py`, `main.py` (`GET /metrics`), `agent/middleware.py` (`ToolCallMetrics`), `pii.py`, `usage.py`, `memory/long_term/middleware.py` |
+| `ops/prometheus/` (new) | Scrape config and `alerts.yml` |
+| `ops/grafana/` (new) | Datasource, dashboard provider, and the "Chatbot" dashboard |
+| `docker-compose.yml`, `Tiltfile` | `prometheus` and `grafana` services |
+| `tests/evals/agent_runs.py`, `run.py` | Traced eval runs and their scores |
+| `ui/app.py` | "Delete my account"; any 2xx counts as success |
+| `pyproject.toml` | `prometheus-client` |
+
+**Tests:** deleting an account removes its threads, checkpoints, memories and cursors, its token stops working, and other users keep theirs; the thread and user stores' new methods against Postgres; a short `JWT_SECRET` is refused and secrets are read from files; a document, web page or memory can't close its tags early; traces carry the thread as session, a hashed user and the run's tags, and `own-key` for a user's endpoint; the metrics count a streamed run's request (by route template), tool call and first token; each eval verdict goes to its run's trace, and errors don't.

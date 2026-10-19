@@ -113,7 +113,7 @@ def log_in(email: str, password: str) -> None:
 def refused(resp: httpx.Response) -> bool:
     """True (and a notice, once per page) if the API turned the request down: over a rate
     limit (429), say. The page keeps working with what it has."""
-    if resp.status_code == 200:
+    if resp.is_success:
         return False
     if not st.session_state.get("_notice_shown"):
         st.session_state._notice_shown = True
@@ -280,6 +280,16 @@ with st.sidebar:
             new_thread()
             st.rerun()
     memory_panel()
+    with st.expander("Delete my account"):
+        st.caption("Deletes your account, every chat and everything I remember about you.")
+        if st.checkbox("I understand this can't be undone", key="confirm-delete-me") and st.button(
+            "Delete my account and data", icon=":material/delete_forever:", width="stretch"
+        ):
+            with api() as client:
+                resp = client.delete("/me")
+            if not refused(resp):
+                log_out()
+                st.rerun()
     st.caption(f"API: `{API_URL}` · thread `{st.session_state.thread_id[:8]}`")
 
 if st.session_state.summary:

@@ -5,7 +5,7 @@ from collections.abc import Iterator
 from typing import Any
 
 import pytest
-from apiclient import BOB, client_for, parse_sse, scripted
+from apiclient import AUTH, BOB, client_for, parse_sse, scripted
 from fakes import (
     Crash,
     ScriptedChatModel,
@@ -14,15 +14,20 @@ from fakes import (
     tool_call,
 )
 from fastapi.testclient import TestClient
+from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage, HumanMessage
+from prometheus_client import REGISTRY
+from pydantic import SecretStr
 
 from chatbot.api.dependencies import (
+    get_callbacks,
     get_checkpointer,
     get_graph,
 )
 from chatbot.api.main import app
-from chatbot.observability import ContextFilter
+from chatbot.config import ModelCredentials, RunContext, get_settings
+from chatbot.observability import ContextFilter, hashed_user, trace_metadata
 
 SOURCE = {"type": "kb", "cite_as": "Doc › Section", "doc_id": "d"}
 
@@ -336,3 +341,66 @@ def test_several_tool_rounds_fit_in_the_step_limit() -> None:
     assert (
         "".join(str(d["token"]) for n, d in events if n == "token") == "Done after three searches."
     )
+
+
+class RootMetadata(BaseCallbackHandler):
+    """Records each run's metadata, where Langfuse reads the trace's attributes."""
+
+    def __init__(self) -> None:
+        self.seen: list[dict[str, Any]] = []
+
+    def on_chain_start(self, *args: Any, parent_run_id: Any = None, **kwargs: Any) -> None:
+        if parent_run_id is None:
+            self.seen.append(kwargs.get("metadata") or {})
+
+
+def test_traces_carry_the_thread_and_a_hashed_user() -> None:
+    llm = GenericFakeChatModel(messages=iter([AIMessage("hi"), AIMessage("again")]))
+    recorder = RootMetadata()
+    with client_for(llm) as client:
+        app.dependency_overrides[get_callbacks] = lambda: [recorder]
+        thread = client.post("/chat", json={"message": "hello"}).json()["thread_id"]
+        client.post("/chat", json={"message": "more", "thread_id": thread})
+
+    first, second = recorder.seen
+    assert first["langfuse_session_id"] == second["langfuse_session_id"] == thread
+    assert first["langfuse_user_id"] == hashed_user("alice", get_settings()) != "alice"
+    assert first["langfuse_tags"] == ["chat"]
+
+
+def test_a_run_on_the_users_own_key_is_tagged() -> None:
+    own = RunContext("alice", ModelCredentials("https://llm.example/v1", SecretStr("sk")))
+    assert trace_metadata("resume", uuid.uuid4(), own, AUTH)["langfuse_tags"] == [
+        "resume",
+        "own-key",
+    ]
+
+
+def sample(name: str, **labels: str) -> float:
+    return REGISTRY.get_sample_value(name, labels) or 0.0
+
+
+def test_metrics_count_requests_tools_tokens_and_first_tokens() -> None:
+    llm = scripted(
+        tool_call("lookup", query="refunds"),
+        AIMessage(
+            "Five days.", usage_metadata={"input_tokens": 7, "output_tokens": 3, "total_tokens": 10}
+        ),
+    )
+    route = {"method": "POST", "route": "/chat/stream"}
+    before = {
+        "requests": sample("chatbot_http_requests_total", **route, status="200"),
+        "tool": sample("chatbot_tool_calls_total", tool="lookup", outcome="ok"),
+        "ttft": sample("chatbot_time_to_first_token_seconds_count"),
+        "recalls": sample("chatbot_memory_recalls_total", result="miss"),
+    }
+    with client_for(llm, tools=[make_lookup_tool()]) as client:
+        client.post("/chat/stream", json={"message": "refunds?"})
+        exposed = client.get("/metrics").text
+
+    assert sample("chatbot_http_requests_total", **route, status="200") == before["requests"] + 1
+    assert sample("chatbot_tool_calls_total", tool="lookup", outcome="ok") == before["tool"] + 1
+    assert sample("chatbot_time_to_first_token_seconds_count") == before["ttft"] + 1
+    assert sample("chatbot_memory_recalls_total", result="miss") == before["recalls"]  # no store
+    assert "chatbot_model_tokens_total" in exposed
+    assert 'route="/chat/stream"' in exposed  # the template, not the path

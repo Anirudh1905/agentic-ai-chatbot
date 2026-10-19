@@ -2,6 +2,7 @@
 
 import json
 import logging
+import time
 from collections.abc import AsyncIterator
 from typing import Any
 from uuid import UUID
@@ -15,6 +16,7 @@ from chatbot.agent.builder import MODEL_NODE, Agent, AgentState
 from chatbot.agent.middleware import UserModelError
 from chatbot.api.schemas import StreamEvent
 from chatbot.config import RunContext, get_settings
+from chatbot.metrics import APPROVAL_PAUSES, FIRST_TOKEN_SECONDS, RUN_ERRORS
 from chatbot.pii import StreamRedactor
 
 logger = logging.getLogger(__name__)
@@ -36,6 +38,15 @@ async def stream_run(
     # PIIMiddleware rewrites the stored reply only after the model has finished, so the
     # tokens the user watches arrive need redacting on the way out too.
     redactor = StreamRedactor() if get_settings().pii_enabled else None
+    start, first_token = time.monotonic(), True
+
+    def token(text: str) -> dict[str, str]:
+        nonlocal first_token
+        if first_token:
+            FIRST_TOKEN_SECONDS.observe(time.monotonic() - start)
+            first_token = False
+        return sse(StreamEvent.TOKEN, {"token": text})
+
     try:
         async for event in graph.astream_events(
             graph_input, config=config, context=context, version="v2"
@@ -48,10 +59,10 @@ async def stream_run(
                 # .text skips reasoning blocks and returns only visible text.
                 text = redactor.feed(chunk.text) if redactor else chunk.text
                 if text:
-                    yield sse(StreamEvent.TOKEN, {"token": text})
+                    yield token(text)
             elif kind == "on_chat_model_end" and from_model and redactor:
                 if text := redactor.flush():
-                    yield sse(StreamEvent.TOKEN, {"token": text})
+                    yield token(text)
             elif kind == "on_tool_start":
                 yield sse(
                     StreamEvent.TOOL_START,
@@ -70,10 +81,13 @@ async def stream_run(
                 )
         pending = pending_request(await graph.aget_state(config))
         if pending:
+            APPROVAL_PAUSES.inc()
             yield sse(StreamEvent.INTERRUPT, {"thread_id": thread_id, **pending})
         yield sse(StreamEvent.DONE, {"thread_id": thread_id, "pending": pending is not None})
     except UserModelError as e:
+        RUN_ERRORS.labels("user_model").inc()
         yield sse(StreamEvent.ERROR, {"message": str(e)})
     except Exception:
+        RUN_ERRORS.labels("internal").inc()
         logger.exception("stream failed")
         yield sse(StreamEvent.ERROR, {"message": "Something went wrong. Please try again."})

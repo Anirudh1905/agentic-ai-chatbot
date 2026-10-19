@@ -35,6 +35,10 @@ async def test_create_authenticate_and_get(pool: Pool) -> None:
     with pytest.raises(EmailTaken):
         await users.create("maya@EXAMPLE.com", "another-pass")
 
+    await users.delete(maya.id)
+    assert await users.get(maya.id) is None
+    assert await users.authenticate("maya@example.com", "s3cret-pass") is None
+
 
 async def test_the_password_is_stored_as_an_argon2_hash(pool: Pool) -> None:
     await PostgresUserStore(pool).create("dana@example.com", "s3cret-pass")

@@ -218,6 +218,9 @@ class InMemoryThreadStore:
     async def delete(self, thread_id: UUID) -> None:
         self.rows.pop(thread_id, None)
 
+    async def ids_for_user(self, user_id: str) -> list[UUID]:
+        return [t.id for t in self.rows.values() if t.user_id == user_id]
+
     async def idle_since(self, cutoff: datetime) -> list[UUID]:
         return [t.id for t in self.rows.values() if t.updated_at < cutoff]
 
@@ -246,6 +249,9 @@ class InMemoryUserStore:
 
     async def get(self, user_id: str) -> User | None:
         return next((u for u, _ in self.rows.values() if u.id == user_id), None)
+
+    async def delete(self, user_id: str) -> None:
+        self.rows = {e: (u, h) for e, (u, h) in self.rows.items() if u.id != user_id}
 
     def add(self, user_id: str, password: str = "test-password") -> User:
         """An account with a known id, for tests that sign their own tokens."""

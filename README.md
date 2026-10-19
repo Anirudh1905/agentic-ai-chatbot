@@ -17,17 +17,17 @@ The phase plans and as-built docs are in [docs/](docs/); the [Status](#status) t
 | [5. PII redaction](docs/phase-5-pii-detection-masking.md) | Emails, cards, phones and IPs redacted from messages, tool results, replies and the stream | Built |
 | [6. Long-term memory](docs/phase-6-long-term-memory.md) | Per-fact memories per user across threads: pushed at the token breach, after 30 idle minutes, or on request; recalled each turn, closest to the message | Built ([PR #7](https://github.com/Anirudh1905/agentic-ai-chatbot/pull/7)) |
 | [7. Eval gate](docs/phase-7-eval-gate.md) | Golden sets, a judge model (DeepEval) and a regression gate on every PR | Built |
-| [8. Security and observability](docs/phase-8-security-observability.md) | Accounts and login (JWT), Redis rate limits and token budgets (built); traces, metrics, alerts, deleting a user's data (planned) | In progress |
+| [8. Security and observability](docs/phase-8-security-observability.md) | Accounts and login (JWT), Redis rate limits and token budgets, deleting a user's data, trace metadata, Prometheus metrics, a Grafana dashboard and alerts | Built |
 | [9. Reliability and deployment](docs/phase-9-reliability-deployment.md) | Retries and fallbacks, cost controls, container deployment, load test | Planned |
 
-`make check` runs ruff, mypy and the tests (193 at the moment, unit and Postgres integration). `make eval` runs the eval suites against the real model and writes `tests/evals/report.json`, which CI checks on every PR (see [Evals](#evals)).
+`make check` runs ruff, mypy and the tests (220 at the moment, unit and Postgres integration). `make eval` runs the eval suites against the real model and writes `tests/evals/report.json`, which CI checks on every PR (see [Evals](#evals)).
 
 ## Repository layout
 
 ```text
 src/chatbot/
 ├── agent/          # builder.py (create_agent + middleware), middleware.py (prompt, call limit), approvals.py (HITL rules)
-├── api/            # main.py, routes/ (chat, threads, memory, health), auth.py (accounts, login, JWT), runs.py, streaming.py (SSE), dependencies.py
+├── api/            # main.py, routes/ (chat, threads, memory, me, health), auth.py (accounts, login, JWT), runs.py, streaming.py (SSE), dependencies.py
 ├── memory/         # short_term.py (summarization), long_term/ (user memories: facts, store, writer, middleware), threads.py, retention.py
 ├── tools/          # rag.py (knowledge base), web_search.py, rerank.py, memory.py (remember), registry.py
 ├── ingestion/      # loaders, chunking, indexing CLI
@@ -36,9 +36,11 @@ src/chatbot/
 ├── usage.py        # rate limits and the daily token budget (Redis)
 ├── users.py        # accounts: email and argon2id password hash
 ├── config.py       # every setting, from .env, and RunContext (the run's user)
-├── db.py, embeddings.py, observability.py
+├── metrics.py      # Prometheus metrics (GET /metrics)
+├── db.py, embeddings.py, observability.py (logging, Langfuse)
 ui/app.py           # Streamlit chat UI: threads, approval card, memory panel
-migrations/         # Alembic: chunks, threads (checkpoints and the memory store create their own tables)
+migrations/         # Alembic: chunks, threads, users (checkpoints and the memory store create their own tables)
+ops/                # Prometheus (scrape config, alerts.yml) and Grafana (datasource, dashboard)
 tests/              # unit/, integration/ (need `make up`), evals/ (golden sets, judge, report)
 data/sample/        # the fictional Acme Outfitters docs
 docs/               # phase plans and as-built docs, images/
@@ -51,7 +53,7 @@ Requires [uv](https://docs.astral.sh/uv/), Docker and [Tilt](https://docs.tilt.d
 ```bash
 cp .env.example .env        # add OPENAI_API_KEY (and OPENAI_BASE_URL for a gateway)
 uv sync --all-groups
-tilt up                     # Postgres, Langfuse, migrations, sample docs, API and chat UI
+tilt up                     # Postgres, Redis, Langfuse, Prometheus, Grafana, migrations, sample docs, API and chat UI
 ```
 
 Tilt's dashboard is at http://localhost:10350. From there:
@@ -63,6 +65,8 @@ Tilt's dashboard is at http://localhost:10350. From there:
 | Langfuse (tracing) | http://localhost:3000, login `dev@local.test` / `password` |
 | Postgres + pgvector | `localhost:5433` |
 | pgweb (database browser) | http://localhost:8081 |
+| Grafana (the Chatbot dashboard) | http://localhost:3001/d/chatbot, read only without a login (admin/admin to edit) |
+| Prometheus (metrics, alerts) | http://localhost:9091/alerts |
 
 Postgres is mapped to host port 5433 so it doesn't clash with a local Postgres on 5432. Set `POSTGRES_PORT` to change it. pgweb browses the same database (chunks, threads, checkpoints, the memory store); `PGWEB_PORT` changes its port.
 
@@ -216,6 +220,12 @@ Langfuse runs locally from `docker-compose.langfuse.yml`, which `docker-compose.
 
 The credentials in that file are local-only placeholders. To trace somewhere else, such as Langfuse Cloud, change the `LANGFUSE_*` values in `.env`.
 
+Each run's trace is named `chat` or `resume`, grouped by thread (Langfuse's session), with the user as a hash (`hashed_user`) and tags (`own-key` when the user brought their own model). `make eval` traces its runs too, tagged `eval`, with a score per metric on each, so a failed case links to its run.
+
+### Metrics and alerts
+
+`GET /metrics` serves Prometheus metrics: requests and latency by route, time to first token, model latency, tokens and errors by model, tool calls by outcome, approval pauses and decisions, PII redactions by type, memory recall hits, and 429s by limit. Prometheus (port 9091) scrapes it, Grafana (port 3001) charts it on the provisioned "Chatbot" dashboard, and `ops/prometheus/alerts.yml` defines seven alerts (API down, error rate, slow first token, slow or failing model, token spike, PII in replies). They show as firing in Prometheus and on the dashboard; nothing pages. Details in [the Phase 8 doc](docs/phase-8-security-observability.md#observability-as-built).
+
 ```bash
 curl -N localhost:8000/chat/stream \
   -H 'content-type: application/json' -H "Authorization: Bearer $TOKEN" \
@@ -239,16 +249,18 @@ curl -N localhost:8000/chat/stream \
 | `GET /me/memory` | What the bot remembers about you across threads (your long-term memories), newest first |
 | `DELETE /me/memory/{id}` | Forget one memory |
 | `DELETE /me/memory` | Forget everything |
+| `DELETE /me` | Delete your account and all your data: threads, checkpoints, memories (the "Delete my account" button); 204 |
 | `POST /auth/register` | Create an account (`{email, password}`); 409 if the email is taken |
 | `POST /auth/login` | Log in (form `username` = email, `password`, optionally `openai_api_key` / `openai_base_url`, checked); returns a bearer token |
 | `GET /auth/me` | The signed-in account |
 | `GET /healthz` | Liveness |
+| `GET /metrics` | Prometheus metrics |
 
-All endpoints except `/healthz`, `/auth/register` and `/auth/login` need a bearer token (401 without a valid one), and answer 429 with `Retry-After` over a rate limit. The ones that start a model run (`/chat`, `/chat/stream`, `.../resume`, `.../resume/stream`) also answer 429 once the user's daily token budget is spent.
+All endpoints except `/healthz`, `/metrics`, `/auth/register` and `/auth/login` need a bearer token (401 without a valid one), and answer 429 with `Retry-After` over a rate limit. The ones that start a model run (`/chat`, `/chat/stream`, `.../resume`, `.../resume/stream`) also answer 429 once the user's daily token budget is spent.
 
 ## Configuration
 
-Set in `.env` (see `.env.example`):
+Set in `.env` (see `.env.example`), the environment, or, for secrets, files in `/run/secrets` named like the setting (`jwt_secret`, `openai_api_key`), as Docker and Kubernetes mount them:
 
 | Variable | Default | Notes |
 |----------|---------|-------|
@@ -276,7 +288,7 @@ Set in `.env` (see `.env.example`):
 | `PII_ALLOWED_EMAIL_DOMAINS` | `["acme-outfitters.example"]` | JSON list. Emails at these domains are never redacted |
 | `HITL_ENABLED` | `true` | Pause risky tool calls for approval |
 | `HITL_SENSITIVE_TERMS` | see `config.py` | JSON list. Web searches mentioning these wait for approval |
-| `JWT_SECRET` | unset | What `/auth/login` signs tokens with (HS256) and the API verifies them with. Without it, every request is refused |
+| `JWT_SECRET` | unset | What `/auth/login` signs tokens with (HS256) and the API verifies them with. At least 32 characters (`openssl rand -hex 32`). Without it, every request is refused |
 | `JWT_TTL_MINUTES` | `60` | How long a login lasts |
 | `RATE_LIMITS_ENABLED` | `true` | Rate limits and the token budget |
 | `REDIS_URL` | `redis://localhost:6380/0` | Where the limits are counted |

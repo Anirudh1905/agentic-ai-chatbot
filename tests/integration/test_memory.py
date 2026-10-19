@@ -200,6 +200,7 @@ async def test_thread_store_ownership(pool: Pool) -> None:
     other = await store.create(uuid.uuid4(), "alice", None)
     assert [t.id for t in await store.list_for_user("alice", 10)] == [thread_id, other.id][::-1]
     assert await store.list_for_user("bob", 10) == []
+    assert set(await store.ids_for_user("alice")) == {thread_id, other.id}
 
     future = datetime.now(UTC) + timedelta(seconds=1)
     assert set(await store.idle_since(future)) == {thread_id, other.id}

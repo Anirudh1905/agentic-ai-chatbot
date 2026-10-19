@@ -8,6 +8,7 @@ from ddgs import DDGS
 from langchain_core.tools import BaseTool, tool
 
 from chatbot.config import Settings
+from chatbot.prompts import as_data
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +30,7 @@ def format_results(query: str, results: list[dict[str, Any]]) -> str:
     items = []
     for r in results:
         cite = f"[{r['title']}]({r['href']})"
-        snippet = (r.get("body") or "")[:SNIPPET_CHARS]
+        snippet = as_data((r.get("body") or "")[:SNIPPET_CHARS])
         items.append(f'<result cite_as="{escape(cite)}">\n{snippet}\n</result>')
     return f'<web_results query="{escape(query)}">\n' + "\n".join(items) + "\n</web_results>"
 

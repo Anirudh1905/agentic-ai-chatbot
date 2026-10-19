@@ -22,6 +22,7 @@ dependencies = [
     "limits[async-redis]>=5",
     "markdownify>=1.2.3",
     "pgvector>=0.5.1",
+    "prometheus-client>=0.21",
     "psycopg[binary,pool]>=3.3.6",
     "pwdlib[argon2]>=0.2",
     "pydantic-settings>=2.15.0",

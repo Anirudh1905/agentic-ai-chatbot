@@ -42,6 +42,10 @@ class ThreadStore(Protocol):
 
     async def delete(self, thread_id: UUID) -> None: ...
 
+    async def ids_for_user(self, user_id: str) -> list[UUID]:
+        """Every thread of the user's (deleting their data)."""
+        ...
+
     async def idle_since(self, cutoff: datetime) -> list[UUID]: ...
 
     async def idle_between(self, since: datetime, until: datetime) -> list[Thread]:
@@ -106,6 +110,12 @@ class PostgresThreadStore:
     async def delete(self, thread_id: UUID) -> None:
         async with self.pool.connection() as conn:
             await conn.execute("DELETE FROM threads WHERE id = %s", (thread_id,))
+
+    async def ids_for_user(self, user_id: str) -> list[UUID]:
+        async with self.pool.connection() as conn:
+            cur = await conn.execute("SELECT id FROM threads WHERE user_id = %s", (user_id,))
+            rows = await cur.fetchall()
+        return [r["id"] for r in rows]
 
     async def idle_since(self, cutoff: datetime) -> list[UUID]:
         async with self.pool.connection() as conn:

@@ -1,0 +1,15 @@
+# Scrapes the API's /metrics (src/chatbot/metrics.py). The API runs on the host (`make dev` or
+# Tilt), so the target is the host as Docker sees it: Docker Desktop and Rancher Desktop
+# provide host.docker.internal. On Linux, give the prometheus service
+# `extra_hosts: ["host.docker.internal:host-gateway"]` and run the API with --host 0.0.0.0.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 30s
+
+rule_files:
+  - alerts.yml
+
+scrape_configs:
+  - job_name: chatbot
+    static_configs:
+      - targets: ["host.docker.internal:8000"]

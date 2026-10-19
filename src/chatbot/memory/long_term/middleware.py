@@ -9,6 +9,7 @@ from langgraph.runtime import Runtime
 
 from chatbot.config import RunContext
 from chatbot.memory.long_term.store import recall, version
+from chatbot.metrics import MEMORY_RECALLS
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,7 @@ class LongTermMemory(AgentMiddleware[MemoryState, RunContext]):
         user_id = runtime.context.user_id
         current = await version(runtime.store, user_id)
         memories = await recall(runtime.store, user_id, said[-1].text, self.limit)
+        MEMORY_RECALLS.labels("hit" if memories else "miss").inc()
         if "recalled_memories" in state and state.get("recalled_at_version") == current:
             known = state["recalled_memories"].splitlines()
             new = [line for line in memories.splitlines() if line not in known]

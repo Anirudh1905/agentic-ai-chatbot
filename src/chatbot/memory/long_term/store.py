@@ -61,6 +61,19 @@ async def delete(store: BaseStore, user_id: str, key: str) -> None:
     await touch(store, user_id)
 
 
+async def forget_user(store: BaseStore, user_id: str) -> int:
+    """Delete everything kept about the user: their memories, thread cursors and version.
+    Returns how many memories there were."""
+    forgotten = 0
+    for ns in (namespace(user_id), cursor_namespace(user_id), version_namespace(user_id)):
+        while items := await store.asearch(ns, limit=LIST_LIMIT):
+            for item in items:
+                await store.adelete(ns, item.key)
+            if ns == namespace(user_id):
+                forgotten += len(items)
+    return forgotten
+
+
 async def put(
     store: BaseStore,
     user_id: str,
