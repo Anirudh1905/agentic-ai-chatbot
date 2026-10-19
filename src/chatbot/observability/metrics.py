@@ -9,7 +9,7 @@ The counts are per process. With several API processes each needs scraping (Phas
 dashboards sum them.
 """
 
-from prometheus_client import Counter, Histogram
+from prometheus_client import Counter, Gauge, Histogram
 
 # Seconds. Agent runs take several model calls, so the buckets go well past a web request's.
 SLOW_BUCKETS = (0.1, 0.25, 0.5, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89)
@@ -72,4 +72,26 @@ LIMITED = Counter(
     "chatbot_limited_total",
     "Requests refused with 429: a rate limit (user, ip, login) or the token budget",
     ["limit"],
+)
+
+# Memory pushes and their queue (Phase 9). The worker runs the pushes and exports the queue's
+# depth; the API counts the pushes it couldn't enqueue and ran itself.
+MEMORY_PUSHES = Counter(
+    "chatbot_memory_pushes_total",
+    "Long-term memory pushes run; outcome is ok, or failed (left on the queue to retry)",
+    ["kind", "outcome"],  # kind: summary, idle, remember
+)
+QUEUE_FALLBACKS = Counter(
+    "chatbot_queue_fallbacks_total",
+    "Pushes the API couldn't enqueue and ran in-process instead",
+)
+QUEUE_DEPTH = Gauge(
+    "chatbot_queue_messages",
+    "Messages on the memory-push queue: visible (waiting), in_flight, dead (dead-letter queue)",
+    ["state"],
+)
+QUEUE_JOB_AGE = Histogram(
+    "chatbot_queue_job_age_seconds",
+    "How long a push waited on the queue before the worker received it",
+    buckets=(0.5, 1, 5, 15, 60, 300, 900, 3600),
 )

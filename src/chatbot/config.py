@@ -124,6 +124,8 @@ class Settings(BaseSettings):
     # Only for ElasticMQ, which accepts any; on AWS leave them unset and use the pod's IAM role.
     sqs_access_key_id: str | None = None
     sqs_secret_access_key: SecretStr | None = None
+    # Where the worker (python -m chatbot.worker) serves its Prometheus metrics.
+    worker_metrics_port: int = 9100
 
     # Human approval before risky tool calls (see agent/approvals.py).
     hitl_enabled: bool = True

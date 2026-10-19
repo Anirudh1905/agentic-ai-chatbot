@@ -1,5 +1,9 @@
 """MemoryWriter: pushes a thread's turns into long-term memory, in the background, on four
-triggers (see the package docstring), one push per user at a time."""
+triggers (see the package docstring), one push per user at a time.
+
+With a queue (SQS_QUEUE_URL, Phase 9) the triggers only enqueue a job (chatbot/jobs) and the
+worker runs it (`run`); a job the API can't enqueue runs in-process instead, so a push is never
+dropped. Without one, every push runs in the process that triggered it."""
 
 import asyncio
 import logging
@@ -18,13 +22,18 @@ from langgraph.store.postgres.aio import AsyncPostgresStore
 from psycopg_pool import AsyncConnectionPool
 
 from chatbot.config import RunContext
+from chatbot.jobs import JobQueue, MemoryPush
 from chatbot.memory.long_term.facts import Changes, Fact, Facts, apply_changes, rejected
 from chatbot.memory.long_term.store import cursor_namespace, namespace
 from chatbot.memory.short_term import summary_text
 from chatbot.memory.threads import Thread, ThreadStore
+from chatbot.observability.metrics import MEMORY_PUSHES, QUEUE_FALLBACKS
 from chatbot.prompts import load_prompt
 
 logger = logging.getLogger(__name__)
+
+# Pauses before retrying an enqueue that failed; after the last, the push runs in-process.
+ENQUEUE_RETRY_PAUSES = (0.2, 0.5, 0.0)
 
 # Existing memories the model sees when deciding what a new fact changes.
 CANDIDATES = 5
@@ -66,7 +75,9 @@ def after_cursor(messages: Sequence[AnyMessage], cursor: Item | None) -> list[An
 class MemoryWriter:
     """Pushes threads' turns into long-term memories, in the background."""
 
-    def __init__(self, model: BaseChatModel, concurrency: int = 2) -> None:
+    def __init__(
+        self, model: BaseChatModel, concurrency: int = 2, queue: JobQueue | None = None
+    ) -> None:
         self.extract = model.with_structured_output(Facts)
         self.decide = model.with_structured_output(Changes)
         self._locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
@@ -75,6 +86,7 @@ class MemoryWriter:
         # users at once on a 10-connection pool: 10 failed with PoolTimeout).
         self._slots = asyncio.Semaphore(concurrency)
         self._loop: asyncio.Task[None] | None = None
+        self.queue = queue
 
     def schedule(self, runtime: Runtime[RunContext], messages: Sequence[AnyMessage]) -> None:
         """Push the turns a summary is folding away (the thread passed CONTEXT_MAX_TOKENS), in
@@ -82,7 +94,14 @@ class MemoryWriter:
         thread_id = get_config().get("configurable", {}).get("thread_id")
         if runtime.store is None or runtime.context is None or not thread_id:
             return
-        self._background(self.push(runtime.store, runtime.context.user_id, thread_id, messages))
+        self.enqueue_summary(runtime.store, runtime.context.user_id, thread_id, messages)
+
+    def enqueue_summary(
+        self, store: BaseStore, user_id: str, thread_id: str, messages: Sequence[AnyMessage]
+    ) -> None:
+        """The turns a summary folds away. The job carries them: they leave the thread."""
+        push = MemoryPush.summary(user_id, thread_id, messages)
+        self._background(self._enqueue_or_run(store, push))
 
     def remember(
         self, store: BaseStore, user_id: str, question: str | None, reply: str | None = None
@@ -90,10 +109,8 @@ class MemoryWriter:
         """Push what the user asked to remember, in the background: their question and the
         assistant's reply together (the "Remember this" button), or just their words (the
         `remember` tool)."""
-        lines = [f"User: {question}"] if question else []
-        lines += [f"Assistant: {reply}"] if reply else []
-        conversation = f"{REMEMBER_THIS}\n\n" + "\n\n".join(lines)
-        self._background(self._locked_write(store, user_id, conversation, "a remembered exchange"))
+        push = MemoryPush.remember(user_id, question, reply)
+        self._background(self._enqueue_or_run(store, push))
 
     def start(
         self,
@@ -141,6 +158,15 @@ class MemoryWriter:
                 continue  # nothing new since the last push
             due[thread.user_id].append(thread)
 
+        if self.queue is not None:
+            # The worker reads each thread and pushes it; SQS keeps each user's jobs in order.
+            for thread in (t for user_threads in due.values() for t in user_threads):
+                idle = MemoryPush.idle(
+                    thread.user_id, str(thread.id), thread.updated_at.isoformat()
+                )
+                await self._enqueue_or_run(store, idle, messages_of)
+            return sum(len(t) for t in due.values())
+
         async def push_user(user_threads: list[Thread]) -> None:
             for thread in user_threads:
                 await self.push(
@@ -154,6 +180,60 @@ class MemoryWriter:
         await asyncio.gather(*(push_user(t) for t in due.values()))
         return sum(len(t) for t in due.values())
 
+    async def run(
+        self,
+        store: BaseStore,
+        push: MemoryPush,
+        messages_of: Callable[[str], Awaitable[Sequence[AnyMessage]]] | None = None,
+    ) -> bool:
+        """Run one push: the worker's job, or the fallback when it couldn't be enqueued. False
+        if it should be tried again (the worker leaves it on the queue)."""
+        try:
+            if push.kind == "summary":
+                assert push.thread_id is not None
+                ok = await self.push(store, push.user_id, push.thread_id, push.message_list())
+            elif push.kind == "idle":
+                assert push.thread_id is not None and messages_of is not None
+                ok = await self.push(
+                    store,
+                    push.user_id,
+                    push.thread_id,
+                    await messages_of(push.thread_id),
+                    thread_updated_at=push.thread_updated_at,
+                )
+            else:
+                lines = [f"User: {push.question}"] if push.question else []
+                lines += [f"Assistant: {push.reply}"] if push.reply else []
+                conversation = f"{REMEMBER_THIS}\n\n" + "\n\n".join(lines)
+                ok = await self._locked_write(
+                    store, push.user_id, conversation, "a remembered exchange"
+                )
+        except Exception:
+            logger.exception("a %s push to long-term memory failed", push.kind)
+            ok = False
+        MEMORY_PUSHES.labels(push.kind, "ok" if ok else "failed").inc()
+        return ok
+
+    async def _enqueue_or_run(
+        self,
+        store: BaseStore,
+        push: MemoryPush,
+        messages_of: Callable[[str], Awaitable[Sequence[AnyMessage]]] | None = None,
+    ) -> None:
+        """Hand the push to the worker; without a queue, or if it can't be reached, run it here."""
+        if self.queue is not None:
+            for attempt, pause in enumerate(ENQUEUE_RETRY_PAUSES):
+                try:
+                    await self.queue.enqueue(push)
+                    return
+                except Exception:
+                    if attempt == len(ENQUEUE_RETRY_PAUSES) - 1:
+                        logger.warning("couldn't enqueue a %s push; running it here", push.kind)
+                        QUEUE_FALLBACKS.inc()
+                        break
+                    await asyncio.sleep(pause)
+        await self.run(store, push, messages_of)
+
     async def push(
         self,
         store: BaseStore,
@@ -161,8 +241,9 @@ class MemoryWriter:
         thread_id: str,
         messages: Sequence[AnyMessage],
         thread_updated_at: str | None = None,
-    ) -> None:
-        """Push a thread's turns that haven't been pushed yet, and move its cursor past them."""
+    ) -> bool:
+        """Push a thread's turns that haven't been pushed yet, and move its cursor past them.
+        False if it failed (the cursor stays, so the next trigger retries)."""
         async with self._slots, self._user_lock(store, user_id):
             # Read the cursor inside the lock: another process may have just pushed.
             cursor = await store.aget(cursor_namespace(user_id), thread_id)
@@ -170,7 +251,7 @@ class MemoryWriter:
             conversation = transcript(new)
             if conversation:
                 if (done := await self._write(store, user_id, conversation)) is None:
-                    return  # failed; the cursor stays, so the next trigger retries
+                    return False  # the cursor stays, so the next trigger retries
                 logger.info("pushed %d messages to long-term memory: %s", len(new), done)
             last = new[-1].id if new else (cursor.value.get("message_id") if cursor else None)
             await store.aput(
@@ -179,13 +260,16 @@ class MemoryWriter:
                 {"message_id": last, "thread_updated_at": thread_updated_at},
                 index=False,
             )
+            return True
 
     async def _locked_write(
         self, store: BaseStore, user_id: str, conversation: str, what: str
-    ) -> None:
+    ) -> bool:
         async with self._slots, self._user_lock(store, user_id):
-            if (done := await self._write(store, user_id, conversation)) is not None:
-                logger.info("pushed %s to long-term memory: %s", what, done)
+            if (done := await self._write(store, user_id, conversation)) is None:
+                return False
+            logger.info("pushed %s to long-term memory: %s", what, done)
+            return True
 
     def _background(self, work: Awaitable[None]) -> None:
         task = asyncio.ensure_future(work)

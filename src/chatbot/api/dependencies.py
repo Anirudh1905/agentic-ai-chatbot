@@ -17,6 +17,7 @@ from chatbot.accounts.users import PostgresUserStore, UserStore
 from chatbot.agent.approvals import interrupt_on
 from chatbot.agent.builder import Agent, build_graph, build_llm
 from chatbot.config import get_settings
+from chatbot.jobs import SqsJobQueue
 from chatbot.memory.long_term import MemoryWriter
 from chatbot.memory.threads import PostgresThreadStore, ThreadStore
 from chatbot.observability.tracing import build_callbacks
@@ -40,6 +41,7 @@ class Resources:
         self.threads: PostgresThreadStore | None = None
         self.store: AsyncPostgresStore | None = None
         self.writer: MemoryWriter | None = None
+        self.queue: SqsJobQueue | None = None
         self._lock = asyncio.Lock()
 
     async def ensure(self) -> None:
@@ -64,11 +66,16 @@ class Resources:
             self.threads = PostgresThreadStore(self.pool)
             self.store = store
             if settings.memory_enabled:
+                if settings.sqs_queue_url and self.queue is None:
+                    # Pushes go to the worker (Phase 9); without a queue they run here.
+                    self.queue = SqsJobQueue(settings)
+                    await self.queue.open()
                 self.writer = MemoryWriter(
                     # REQUEST_TIMEOUT, though nothing waits on a push: a call takes 3-6 s, and a
                     # stalled gateway call is better retried soon (at 120 s, one push took 6 min).
                     build_llm(settings, settings.memory_model, streaming=False),
                     concurrency=settings.memory_write_concurrency,
+                    queue=self.queue,
                 )
             self.graph = build_graph(
                 settings,
@@ -118,6 +125,8 @@ class Resources:
                 await asyncio.wait_for(self.writer.stop(), timeout=30)
             except TimeoutError:
                 logger.warning("shutting down with long-term memory pushes still running")
+        if self.queue is not None:
+            await self.queue.close()
         if self.pool is not None:
             await self.pool.close()
 

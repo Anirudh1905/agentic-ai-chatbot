@@ -1,7 +1,11 @@
-.PHONY: dev ui tilt test test-unit lint fmt typecheck up down check migrate ingest eval eval-calibrate eval-check retention
+.PHONY: dev worker ui tilt test test-unit lint fmt typecheck up down check migrate ingest eval eval-calibrate eval-check retention
 
 dev:
 	uv run uvicorn chatbot.api.main:app --reload
+
+# Runs the memory pushes from the queue (needs SQS_QUEUE_URL; see .env.example).
+worker:
+	uv run python -m chatbot.worker
 
 ui:
 	uv run --group ui streamlit run ui/app.py
