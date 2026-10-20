@@ -5064,7 +5064,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         </g>
         <g data-graph-role="automatic-crossover" style="--step:13">
           <path data-graph-role="automatic-crossover-underlay" d="M 1255 360 L 1255 124" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
-          <path data-edge-from="agent" data-edge-to="model" data-edge-label="model calls" data-edge-key="13" data-composition-points="1255,360;1255,124" data-composition-crossover="halo" data-composition-independent="true" d="M 1255 360 L 1255 124" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+          <path data-edge-from="agent" data-edge-to="model" data-edge-label="retry · fallback" data-edge-key="13" data-composition-points="1255,360;1255,124" data-composition-crossover="halo" data-composition-independent="true" d="M 1255 360 L 1255 124" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         </g>
         <g data-graph-role="automatic-crossover" style="--step:14">
           <path data-graph-role="automatic-crossover-underlay" d="M 1535 200 L 1535 124" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
@@ -5110,6 +5110,10 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
           <path data-graph-role="automatic-crossover-underlay" d="M 510 82 L 614 82" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
           <path data-edge-from="evals" data-edge-to="langfuse" data-edge-label="scores" data-edge-key="24" data-composition-points="510,82;614,82" data-composition-crossover="halo" data-composition-independent="true" d="M 510 82 L 614 82" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
         </g>
+        <g data-graph-role="automatic-crossover" style="--step:25">
+          <path data-graph-role="automatic-crossover-underlay" d="M 975 764 L 975 840" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="pg" data-edge-to="minio" data-edge-label="WAL · 02:00 backup" data-edge-key="25" data-composition-points="975,764;975,840" data-composition-crossover="halo" data-composition-independent="true" d="M 975 764 L 975 840" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+        </g>
 
         <!-- Components -->
         <g id="node-langfuse" data-node-id="langfuse" data-node-label="Langfuse" tabindex="0" role="button" aria-label="Focus Langfuse, traces · sessions · scores, Architecture component" aria-pressed="false" data-node-kind="external" data-node-sublabel="traces · sessions · scores" data-node-tag="Docker Compose" data-node-context="Architecture component">
@@ -5125,8 +5129,8 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         <text data-detail="fine" x="709" y="116" class="t-external" font-size="7" text-anchor="middle">Docker Compose</text>
         </g>
 
-        <g id="node-model" data-node-id="model" data-node-label="Model gateway" tabindex="0" role="button" aria-label="Focus Model gateway, chat · embeddings · summaries, Architecture component" aria-pressed="false" data-node-kind="external" data-node-sublabel="chat · embeddings · summaries" data-node-tag="OpenAI-compatible" data-node-context="Architecture component">
-          <title>Model gateway · chat · embeddings · summaries · Architecture component · OpenAI-compatible</title>
+        <g id="node-model" data-node-id="model" data-node-label="Model gateway" tabindex="0" role="button" aria-label="Focus Model gateway, gpt-5.4 · fallback gpt-4.1 · embeddings, Architecture component" aria-pressed="false" data-node-kind="external" data-node-sublabel="gpt-5.4 · fallback gpt-4.1 · embeddings" data-node-tag="OpenAI-compatible" data-node-context="Architecture component">
+          <title>Model gateway · gpt-5.4 · fallback gpt-4.1 · embeddings · Architecture component · OpenAI-compatible</title>
           <rect x="1160" y="40" width="190" height="84" rx="6" class="c-mask"/>
           <rect x="1160" y="40" width="190" height="84" rx="6" class="c-external" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(1166 46) scale(0.6875)">
@@ -5134,7 +5138,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
             <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
           </g>
           <text data-node-label="" data-detail-anchor="" x="1255" y="80" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Model gateway</text>
-        <text data-detail="context" x="1255" y="96" class="t-muted" font-size="9" text-anchor="middle">chat · embeddings · summaries</text>
+        <text data-detail="context" x="1255" y="96" class="t-muted" font-size="7.7" text-anchor="middle">gpt-5.4 · fallback gpt-4.1 · embeddings</text>
         <text data-detail="fine" x="1255" y="116" class="t-external" font-size="7" text-anchor="middle">OpenAI-compatible</text>
         </g>
 
@@ -5178,8 +5182,8 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         <text data-detail="fine" x="415" y="276" class="t-frontend" font-size="7" text-anchor="middle">Deployment ×1</text>
         </g>
 
-        <g id="node-redis" data-node-id="redis" data-node-label="Redis" tabindex="0" role="button" aria-label="Focus Redis, rate windows · tokens per day, kind cluster · namespaces chatbot and monitoring" aria-pressed="false" data-node-kind="database" data-node-sublabel="rate windows · tokens per day" data-node-tag="no volume · fails open" data-node-context="kind cluster · namespaces chatbot and monitoring">
-          <title>Redis · rate windows · tokens per day · kind cluster · namespaces chatbot and monitoring · no volume · fails open</title>
+        <g id="node-redis" data-node-id="redis" data-node-label="Redis" tabindex="0" role="button" aria-label="Focus Redis, limits · breakers · search cache, kind cluster · namespaces chatbot and monitoring" aria-pressed="false" data-node-kind="database" data-node-sublabel="limits · breakers · search cache" data-node-tag="no volume · fails open" data-node-context="kind cluster · namespaces chatbot and monitoring">
+          <title>Redis · limits · breakers · search cache · kind cluster · namespaces chatbot and monitoring · no volume · fails open</title>
           <rect x="880" y="200" width="190" height="84" rx="6" class="c-mask"/>
           <rect x="880" y="200" width="190" height="84" rx="6" class="c-database" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(886 206) scale(0.6875)">
@@ -5187,7 +5191,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
             <path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2"/>
           </g>
           <text data-node-label="" data-detail-anchor="" x="975" y="240" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Redis</text>
-        <text data-detail="context" x="975" y="256" class="t-muted" font-size="9" text-anchor="middle">rate windows · tokens per day</text>
+        <text data-detail="context" x="975" y="256" class="t-muted" font-size="9" text-anchor="middle">limits · breakers · search cache</text>
         <text data-detail="fine" x="975" y="276" class="t-database" font-size="7" text-anchor="middle">no volume · fails open</text>
         </g>
 
@@ -5305,8 +5309,8 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         <text data-detail="fine" x="1535" y="596" class="t-backend" font-size="7" text-anchor="middle">api pod · tool</text>
         </g>
 
-        <g id="node-prom" data-node-id="prom" data-node-label="kube-prometheus-stack" tabindex="0" role="button" aria-label="Focus kube-prometheus-stack, Prometheus · Grafana · Alerts, kind cluster · namespaces chatbot and monitoring" aria-pressed="false" data-node-kind="cloud" data-node-sublabel="Prometheus · Grafana · Alerts" data-node-tag="10 alert rules" data-node-context="kind cluster · namespaces chatbot and monitoring">
-          <title>kube-prometheus-stack · Prometheus · Grafana · Alerts · kind cluster · namespaces chatbot and monitoring · 10 alert rules</title>
+        <g id="node-prom" data-node-id="prom" data-node-label="kube-prometheus-stack" tabindex="0" role="button" aria-label="Focus kube-prometheus-stack, Prometheus · Grafana · Alerts, kind cluster · namespaces chatbot and monitoring" aria-pressed="false" data-node-kind="cloud" data-node-sublabel="Prometheus · Grafana · Alerts" data-node-tag="13 alert rules" data-node-context="kind cluster · namespaces chatbot and monitoring">
+          <title>kube-prometheus-stack · Prometheus · Grafana · Alerts · kind cluster · namespaces chatbot and monitoring · 13 alert rules</title>
           <rect x="320" y="680" width="190" height="84" rx="6" class="c-mask"/>
           <rect x="320" y="680" width="190" height="84" rx="6" class="c-cloud" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="cloud" class="semantic-sigil s-cloud" transform="translate(326 686) scale(0.6875)">
@@ -5314,7 +5318,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
           </g>
           <text data-node-label="" data-detail-anchor="" x="415" y="720" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">kube-prometheus-stack</text>
         <text data-detail="context" x="415" y="736" class="t-muted" font-size="9" text-anchor="middle">Prometheus · Grafana · Alerts</text>
-        <text data-detail="fine" x="415" y="756" class="t-cloud" font-size="7" text-anchor="middle">10 alert rules</text>
+        <text data-detail="fine" x="415" y="756" class="t-cloud" font-size="7" text-anchor="middle">13 alert rules</text>
         </g>
 
         <g id="node-jobs" data-node-id="jobs" data-node-label="migrate · retention" tabindex="0" role="button" aria-label="Focus migrate · retention, Job · nightly CronJob, kind cluster · namespaces chatbot and monitoring" aria-pressed="false" data-node-kind="backend" data-node-sublabel="Job · nightly CronJob" data-node-tag="+ reranker-model Job" data-node-context="kind cluster · namespaces chatbot and monitoring">
@@ -5354,8 +5358,8 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         <text data-detail="fine" x="1535" y="756" class="t-database" font-size="7" text-anchor="middle">same database</text>
         </g>
 
-        <g id="node-pg" data-node-id="pg" data-node-label="Postgres (CloudNativePG)" tabindex="0" role="button" aria-label="Focus Postgres (CloudNativePG), users · threads · checkpoints, kind cluster · namespaces chatbot and monitoring" aria-pressed="false" data-node-kind="database" data-node-sublabel="users · threads · checkpoints" data-node-tag="memory store · pgvector" data-node-context="kind cluster · namespaces chatbot and monitoring">
-          <title>Postgres (CloudNativePG) · users · threads · checkpoints · kind cluster · namespaces chatbot and monitoring · memory store · pgvector</title>
+        <g id="node-pg" data-node-id="pg" data-node-label="Postgres (CloudNativePG)" tabindex="0" role="button" aria-label="Focus Postgres (CloudNativePG), users · threads + leases · checkpoints, kind cluster · namespaces chatbot and monitoring" aria-pressed="false" data-node-kind="database" data-node-sublabel="users · threads + leases · checkpoints" data-node-tag="memory store · pgvector" data-node-context="kind cluster · namespaces chatbot and monitoring">
+          <title>Postgres (CloudNativePG) · users · threads + leases · checkpoints · kind cluster · namespaces chatbot and monitoring · memory store · pgvector</title>
           <rect x="880" y="680" width="190" height="84" rx="6" class="c-mask"/>
           <rect x="880" y="680" width="190" height="84" rx="6" class="c-database" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(886 686) scale(0.6875)">
@@ -5363,7 +5367,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
             <path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2"/>
           </g>
           <text data-node-label="" data-detail-anchor="" x="975" y="720" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Postgres (CloudNativePG)</text>
-        <text data-detail="context" x="975" y="736" class="t-muted" font-size="9" text-anchor="middle">users · threads · checkpoints</text>
+        <text data-detail="context" x="975" y="736" class="t-muted" font-size="7.9" text-anchor="middle">users · threads + leases · checkpoints</text>
         <text data-detail="fine" x="975" y="756" class="t-database" font-size="7" text-anchor="middle">memory store · pgvector</text>
         </g>
 
@@ -5377,6 +5381,19 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
           <text data-node-label="" data-detail-anchor="" x="1535" y="880" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">ingest Job</text>
         <text data-detail="context" x="1535" y="896" class="t-muted" font-size="9" text-anchor="middle">load · chunk · embed changed</text>
         <text data-detail="fine" x="1535" y="916" class="t-backend" font-size="7" text-anchor="middle">data/sample in the image</text>
+        </g>
+
+        <g id="node-minio" data-node-id="minio" data-node-label="MinIO backups" tabindex="0" role="button" aria-label="Focus MinIO backups, WAL archive · nightly base, kind cluster · namespaces chatbot and monitoring" aria-pressed="false" data-node-kind="database" data-node-sublabel="WAL archive · nightly base" data-node-tag="Barman Cloud plugin" data-node-context="kind cluster · namespaces chatbot and monitoring">
+          <title>MinIO backups · WAL archive · nightly base · kind cluster · namespaces chatbot and monitoring · Barman Cloud plugin</title>
+          <rect x="880" y="840" width="190" height="84" rx="6" class="c-mask"/>
+          <rect x="880" y="840" width="190" height="84" rx="6" class="c-database" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(886 846) scale(0.6875)">
+            <ellipse cx="8" cy="4" rx="5" ry="2"/>
+            <path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="975" y="880" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">MinIO backups</text>
+        <text data-detail="context" x="975" y="896" class="t-muted" font-size="9" text-anchor="middle">WAL archive · nightly base</text>
+        <text data-detail="fine" x="975" y="916" class="t-database" font-size="7" text-anchor="middle">Barman Cloud plugin</text>
         </g>
 
         <!-- Connection labels -->
@@ -5429,9 +5446,9 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
           <rect x="955.6" y="340" width="38.8" height="14" rx="3" class="c-mask"/>
           <text x="975" y="350" class="t-edge-security" font-size="8" text-anchor="middle">limits</text>
         </g>
-        <g data-detail="context" data-edge-from="agent" data-edge-to="model" data-edge-label="model calls" data-edge-key="13">
-          <rect x="1223.6" y="340" width="62.8" height="14" rx="3" class="c-mask"/>
-          <text x="1255" y="350" class="t-edge-default" font-size="8" text-anchor="middle">model calls</text>
+        <g data-detail="context" data-edge-from="agent" data-edge-to="model" data-edge-label="retry · fallback" data-edge-key="13">
+          <rect x="1211.6" y="340" width="86.8" height="14" rx="3" class="c-mask"/>
+          <text x="1255" y="350" class="t-edge-default" font-size="8" text-anchor="middle">retry · fallback</text>
         </g>
         <g data-detail="context" data-edge-from="web" data-edge-to="ddg" data-edge-label="query" data-edge-key="14">
           <rect x="1518" y="180" width="34" height="14" rx="3" class="c-mask"/>
@@ -5476,6 +5493,10 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         <g data-detail="context" data-edge-from="evals" data-edge-to="langfuse" data-edge-label="scores" data-edge-key="24">
           <rect x="542.6" y="62" width="38.8" height="14" rx="3" class="c-mask"/>
           <text x="562" y="72" class="t-edge-dashed" font-size="8" text-anchor="middle">scores</text>
+        </g>
+        <g data-detail="context" data-edge-from="pg" data-edge-to="minio" data-edge-label="WAL · 02:00 backup" data-edge-key="25">
+          <rect x="872.5999999999999" y="795" width="96.39999999999999" height="14" rx="3" class="c-mask"/>
+          <text x="920.8" y="805" class="t-edge-dashed" font-size="8" text-anchor="middle">WAL · 02:00 backup</text>
         </g>
 
         <!-- Boundary labels (foreground masks keep routes out of titles) -->
@@ -5736,7 +5757,20 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         <ul>
           <li>migrate runs Alembic and the LangGraph setup before the API and worker roll out</li>
           <li>preStop waits for open streams before uvicorn gets SIGTERM; PDB keeps one API pod up</li>
-          <li>reranker-model fills the shared model volume once; retention prunes checkpoints nightly</li>
+          <li>reranker-model fills the shared model volume once; retention prunes checkpoints nightly; Postgres archives WAL to MinIO and takes a base backup at 02:00</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-dot amber"></div>
+          <h3>Reliability</h3>
+        </div>
+        <ul>
+          <li>Model calls retry once, then fall back to gpt-4.1 (FALLBACK_MODEL)</li>
+          <li>Circuit breakers per model, embeddings and web search, shared in Redis: 5 outages in 60 s open one for 30 s</li>
+          <li>Embeddings, web search and memory recall degrade instead of failing the turn; web results are cached in Redis for 10 min</li>
+          <li>One run per thread across pods: a lease on the thread&#39;s row, a second run gets 409</li>
         </ul>
       </div>
 
@@ -5746,7 +5780,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
           <h3>Observability and evals</h3>
         </div>
         <ul>
-          <li>ServiceMonitors scrape every API pod and the worker; 10 PrometheusRule alerts; the Chatbot dashboard in Grafana</li>
+          <li>ServiceMonitors scrape every API pod and the worker; 13 PrometheusRule alerts; the Chatbot dashboard in Grafana</li>
           <li>Runs are traced to Langfuse (Docker Compose), reached through a Service with a manual EndpointSlice</li>
           <li>make eval judges the same agent and scores each trace; CI rejects a stale or worse report</li>
         </ul>

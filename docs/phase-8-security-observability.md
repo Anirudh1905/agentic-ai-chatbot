@@ -12,7 +12,7 @@
 | Limits | Per-user and per-IP rate limits, and a daily token budget per user, in Redis | [Limits](#limits) |
 | Data | `DELETE /me` removes the account and everything kept about it; a retention policy; what goes to third parties | [Deleting a user's data](#deleting-a-users-data), [Retention and third parties](#retention-and-third-parties) |
 | Hardening | Secrets from the environment or mounted files; a prompt-injection review (one gap found and fixed) | [Secrets](#secrets), [Prompt-injection review](#prompt-injection-review) |
-| Observability | Traces with run metadata (Langfuse), Prometheus metrics, a Grafana dashboard, seven alerts, eval scores on each run's trace | [Observability](#observability) |
+| Observability | Traces with run metadata (Langfuse), Prometheus metrics, a Grafana dashboard, seven alerts (thirteen since Phase 9), eval scores on each run's trace | [Observability](#observability) |
 
 Every request now goes through these checks before a route runs:
 
@@ -175,7 +175,7 @@ sequenceDiagram
 - **The IP limit runs before authentication**, so a flood of bad tokens is limited too. `/healthz` and `/metrics` aren't limited. Behind a proxy, run uvicorn with `--proxy-headers` so the address is the client's.
 - **The token budget** counts the input and output tokens of every model call in the user's agent runs (the `SpendTokens` middleware, after each call). It's checked when a run would start (`/chat`, `/chat/stream` and the two resumes), not during one, so a run that starts under the budget finishes. Summaries and memory pushes aren't counted, and reads and deletes need no budget.
 - **If Redis is down, requests go through**, with a warning in the log: the limits protect cost, and an outage of the counter store shouldn't take the chatbot down.
-- Redis is its own Compose service (`redis`, port 6380), separate from Langfuse's, with no volume: counters don't need to survive a restart.
+- Redis is its own Compose service (`redis`, port 6380), separate from Langfuse's, with no volume: counters don't need to survive a restart. (Since Phase 9 it's a Deployment in the kind cluster, still without a volume, which Tilt forwards to port 6380.)
 - **Sizing:** the per-user limit started at 30 a minute, which the UI hit by itself: it makes three reads per page run (thread list, messages, memories), and the memory panel crashed on the 429. The defaults are now 120 per user and 300 per IP, and the UI shows a notice for a 429 instead.
 
 ## Deleting a user's data
@@ -212,8 +212,8 @@ sequenceDiagram
 Every secret is a `SecretStr` setting (never printed, logged or shown in a repr), read in this order:
 
 1. the environment;
-2. files in `/run/secrets`, one per setting and named like it (`jwt_secret`, `openai_api_key`, `langfuse_secret_key`), which is how Docker and Kubernetes mount secrets;
-3. `.env`, for local development. It's in `.gitignore`, and `.env.example` has no values.
+2. `.env`, for local development. It's in `.gitignore`, and `.env.example` has no values;
+3. files in `/run/secrets`, one per setting and named like it (`jwt_secret`, `openai_api_key`, `langfuse_secret_key`), which is how Docker and Kubernetes mount secrets. (pydantic-settings reads `.env` before them; the image has no `.env`, so in a deployment the files are what count.)
 
 There was no image yet; Phase 9's `Dockerfile` builds it with `.env` excluded, and Kubernetes mounts the secrets at `/run/secrets`. `JWT_SECRET` must be at least 32 characters (RFC 7518 asks for a key as long as the hash for HS256), or the app refuses to start.
 
@@ -236,7 +236,7 @@ What's left is the usual residual risk: a page can still try to steer the answer
 flowchart LR
     API[API and agent] -->|"traces: name, thread as session,<br/>hashed user, tags, model, tokens,<br/>tool calls, approval pauses"| LF[Langfuse]
     API -->|"GET /metrics"| Prom[Prometheus<br/>15 days]
-    Prom --> Rules[alerts.yml<br/>7 alerts]
+    Prom --> Rules["alert rules<br/>7, 13 since Phase 9"]
     Prom --> Graf[Grafana<br/>Chatbot dashboard]
     Rules -.->|firing| Graf
     Evals["make eval"] -->|"traces tagged eval,<br/>a score per metric"| LF
@@ -270,7 +270,7 @@ Langfuse records the rest from the run itself: each model call with its tokens, 
 | `chatbot_approval_pauses_total`, `chatbot_approval_decisions_total{decision}` | Runs paused for approval, and the answers (approve, edit, reject) | `api/runs.py`, `api/streaming.py`, `routes/threads.py` |
 | `chatbot_pii_redactions_total{type, source}` | PII redacted, by type, in the user's `message`, a `tool_result` or a `reply` | `api/runs.py`, `guardrails/pii.py` |
 | `chatbot_memory_recalls_total{result}` | Turns whose memory search found something (`hit`) or not | `LongTermMemory` |
-| `chatbot_limited_total{limit}` | 429s: `user`, `ip`, `login` or `budget` | `accounts/limits.py` |
+| `chatbot_limited_total{limit}` | 429s: `user`, `ip`, `login` or `budget` (since Phase 9 also `thread_busy`, a 409) | `accounts/limits.py` (`api/leases.py` for `thread_busy`) |
 
 Counts are per process: with several API processes each is scraped and the dashboard sums them (since Phase 9, a `ServiceMonitor` scrapes every API pod and the worker). Counters with fixed label sets start at 0, so a series' first count shows in `increase()` (Phase 9).
 
@@ -315,15 +315,15 @@ flowchart LR
 
 - **The API keeps only running totals.** A counter goes up until the process restarts; a histogram counts observations per latency bucket. `/metrics` returns those numbers as plain text (`chatbot_tool_calls_total{tool="web_search",outcome="ok"} 12`) and is cheap to call.
 - **Prometheus turns totals into history.** Each scrape stores every number with its time, so `rate(...[5m])` is the per-second increase over the last 5 minutes, and `histogram_quantile(0.95, ...)` estimates p95 latency from the buckets. When the API restarts and its counters reset, `rate` and `increase` see the reset and carry on.
-- **Grafana stores no metrics.** It runs each panel's query against Prometheus whenever the dashboard refreshes. Its datasource and dashboard are files in `ops/grafana`, so they live in the repo: edit the JSON (or export it from Grafana) and restart Grafana to change them.
-- **Running it:** `make up` (or Tilt) starts Prometheus at http://localhost:9091 (9090 is Langfuse's MinIO) and Grafana at http://localhost:3001/d/chatbot (3000 is Langfuse), which opens read only without a login (admin/admin to edit). Prometheus reaches the API on the host as `host.docker.internal:8000`, which Docker Desktop and Rancher Desktop provide; on Linux, see `ops/prometheus/prometheus.yml`.
+- **Grafana stores no metrics.** It runs each panel's query against Prometheus whenever the dashboard refreshes. Its datasource and dashboard were files in `ops/grafana`, so they live in the repo: edit the JSON (or export it from Grafana) and restart Grafana to change them. Since Phase 9 the dashboard is `deploy/base/config/chatbot-dashboard.json`, a ConfigMap that Grafana's sidecar loads when it changes.
+- **Running it** (Phase 8): `make up` (or Tilt) started Prometheus at http://localhost:9091 (9090 is Langfuse's MinIO) and Grafana at http://localhost:3001/d/chatbot (3000 is Langfuse), which opens read only without a login (admin/admin to edit). Prometheus reached the API on the host as `host.docker.internal:8000`, which Docker Desktop and Rancher Desktop provide. Since Phase 9 Grafana is at http://localhost:8088/grafana/d/chatbot, also read only without a login.
 - **An empty panel:** check that the target is `up` (http://localhost:9091/targets; since Phase 9, http://localhost:8088/prometheus/targets) and that something has happened yet: a counter whose labels aren't a fixed set (models, routes) only appears after its first increment.
 
-The "Chatbot" dashboard has, from the top: requests, error rate, p95 time to first token and today's tokens; firing alerts; requests and latency by route; time to first token; model latency, tokens and errors by model; tool calls and error rate by tool; approvals and the share of runs that pause; PII redacted by type and source; memory recall hit rate; 429s by limit.
+The "Chatbot" dashboard has, from the top: requests, error rate, p95 time to first token and today's tokens; firing alerts; requests and latency by route; time to first token; model latency, tokens and errors by model; tool calls and error rate by tool; approvals and the share of runs that pause; PII redacted by type and source; memory recall hit rate; 429s by limit. Phase 9 added 409s for a busy thread to that panel, and panels for circuit breakers, Postgres backups, and the prompt cache and web search cache hit rates.
 
 ### Alerts
 
-`ops/prometheus/alerts.yml` (since Phase 9, the `PrometheusRule` in `deploy/base/monitoring.yaml`, with three queue and worker alerts added), evaluated by Prometheus every 30 s. A rule whose query stays true for its `for:` time fires, and shows on Prometheus's alerts page and in the dashboard's "Firing alerts" table (the `ALERTS` series). Nothing pages, since there's no on-call; an Alertmanager with a receiver would send them on.
+`ops/prometheus/alerts.yml` (since Phase 9, the `PrometheusRule` in `deploy/base/monitoring.yaml`, with three queue and worker alerts, a circuit-breaker alert and two backup alerts added), evaluated by Prometheus every 30 s. A rule whose query stays true for its `for:` time fires, and shows on Prometheus's alerts page and in the dashboard's "Firing alerts" table (the `ALERTS` series). Nothing pages, since there's no on-call; an Alertmanager with a receiver would send them on.
 
 | Alert | Fires when | Severity |
 | --- | --- | --- |
@@ -384,11 +384,10 @@ For `curl`, log in for a token: `curl -s localhost:8000/auth/login -d 'username=
 | `JWT_SECRET` | unset | What `/auth/login` signs tokens with and the API verifies them with. At least 32 characters (`openssl rand -hex 32`); a shorter one stops the app from starting, and without one every request gets 401 |
 | `JWT_TTL_MINUTES` | `60` | How long a login lasts |
 | `RATE_LIMITS_ENABLED` | `true` | The rate limits and the budget |
-| `REDIS_URL` | unset, required with rate limits on | `.env.example` has the Compose `redis` service's: `redis://localhost:6380/0` |
+| `REDIS_URL` | unset, required with rate limits on | `.env.example` has `redis://localhost:6380/0`: the Compose `redis` service, since Phase 9 the cluster's Redis forwarded by Tilt |
 | `RATE_LIMIT_PER_USER` / `RATE_LIMIT_PER_IP` | `120/minute` / `300/minute` | In the `limits` library's notation |
 | `RATE_LIMIT_LOGIN` | `10/minute` | Register and log-in attempts per IP |
 | `DAILY_TOKEN_BUDGET` | `500000` | Per user per UTC day; 0 turns it off |
-| `PROMETHEUS_PORT` / `GRAFANA_PORT` | `9091` / `3001` | Host ports, for Compose |
 
 Any secret setting can also come from a file in `/run/secrets` ([Secrets](#secrets)).
 
@@ -412,10 +411,10 @@ Any secret setting can also come from a file in `/run/secrets` ([Secrets](#secre
 | Observability | `src/chatbot/observability/tracing.py` | `langfuse_client`, `build_callbacks(trace_id=...)`, `hashed_user`, `trace_metadata` |
 | | `src/chatbot/api/runs.py` | `run_config(name, thread, context, ...)` adds the trace metadata |
 | | `src/chatbot/observability/metrics.py` (new) | The metrics, recorded in `api/middleware.py`, `api/streaming.py`, `api/runs.py`, `agent/middleware.py` (`ToolCallMetrics`), `guardrails/pii.py`, `accounts/limits.py`, `memory/long_term/middleware.py`; served by `routes/health.py` |
-| | `ops/prometheus/`, `ops/grafana/` (new) | Scrape config and `alerts.yml`; datasource, dashboard provider and the "Chatbot" dashboard |
+| | `ops/prometheus/`, `ops/grafana/` (new) | Scrape config and `alerts.yml`; datasource, dashboard provider and the "Chatbot" dashboard (moved to `deploy/base/monitoring.yaml` and `deploy/base/config/` in Phase 9) |
 | | `tests/evals/agent_runs.py`, `run.py` | Traced eval runs and their scores |
 | UI and infra | `ui/app.py` | Login and create-account screen with optional model credentials; "Signed in as" and log out; back to login on 401 or expiry; a notice on 429; "Delete my account" |
-| | `docker-compose.yml`, `Tiltfile` | `redis`, `prometheus` and `grafana` services; the API waits for Redis under Tilt |
+| | `docker-compose.yml`, `Tiltfile` | `redis`, `prometheus` and `grafana` services; the API waits for Redis under Tilt (Compose replaced by kind in Phase 9) |
 | | `pyproject.toml` | `pyjwt`, `limits[async-redis]`, `pwdlib[argon2]`, `email-validator`, `python-multipart`, `prometheus-client`. `limits` caps `packaging` below 26, so it went from 26.3 to 25.0 |
 | Tests | `tests/apiclient.py`, `tests/fakes.py` | Tests run as authenticated users (`auth("alice")`), with in-memory users, and limits off unless a test passes them |
 | | `tests/evals/settings.py` | Evals call the agent directly, so the auth and limit settings may come from `.env` |
@@ -437,7 +436,7 @@ The loose modules of `src/chatbot/` also moved into packages in this phase (`acc
 
 ### Effect on the evals
 
-The evals call the agent directly, not through the API, so authentication and limits don't apply (`SpendTokens` is only added when the API builds the graph). An early re-run on this branch scored faithfulness 69% against `main`'s 72%, a 3-point drop where the tolerance is 2.6 (one case of 39), and the gate blocked; that's the run-to-run noise Phase 7 measured (65% and 72% on the same code). Citations moved the other way (72% to 82%). What the model reads has changed since (`as_data` in search results and memories), so `make eval` has to run again before this merges.
+The evals call the agent directly, not through the API, so authentication and limits don't apply (`SpendTokens` is only added when the API builds the graph). An early re-run on this branch scored faithfulness 69% against `main`'s 72%, a 3-point drop where the tolerance is 2.6 (one case of 39), and the gate blocked; that's the run-to-run noise Phase 7 measured (65% and 72% on the same code). Citations moved the other way (72% to 82%). What the model reads changed after that (`as_data` in search results and memories); the report this phase merged with, run after it, scored faithfulness and citations 77.5% each.
 
 ## Exit criteria
 

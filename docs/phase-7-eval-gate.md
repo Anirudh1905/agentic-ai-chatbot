@@ -161,7 +161,7 @@ Every other setting that affects answers must be at its default during `make eva
 
 ### Measurements
 
-- **Latest scores** (`main`'s report): retrieval 100%, routing 100%, faithfulness 72%, citations 72%, correctness 100%, PII 95% recall and 92% of look-alikes left alone, approval policy 100%.
+- **Latest scores** (the committed `report.json`, Phase 9): retrieval 100%, routing 100%, faithfulness 77.5%, citations 90%, correctness 100%, PII 95% recall and 92% of look-alikes left alone, approval policy 100%.
 - **Run-to-run variance:** two runs of the same code an hour apart scored faithfulness 65% and 72%, citations 85% and 72% (correctness 100% both times).
 - **Errors:** without retries, 9 of 44 questions errored on the first run.
 - **Time and cost:** one `make eval` is 44 agent runs and about 130 judge measurements, at most 3 model calls at once: about 15 minutes with retries, a few dollars. Calibration adds 58 answers.

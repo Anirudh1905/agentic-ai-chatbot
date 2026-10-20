@@ -82,7 +82,7 @@ Emails, card numbers and phone numbers used to be checks here too. Since Phase 5
 ```mermaid
 flowchart TB
     START((START)) --> Before["before_agent, before_model<br/>memory recall, PII, summarization, call limit"]
-    Before --> Model["model<br/>system prompt, dangling-call fix,<br/>user's own model, logging"]
+    Before --> Model["model<br/>system prompt, fallback, retry, breaker,<br/>dangling-call fix, user's own model, logging"]
     Model --> HITL{"HumanInTheLoopMiddleware<br/>after_model:<br/>any call matches interrupt_on?"}
     HITL -->|no tool calls| END((END))
     HITL -->|"calls, none flagged"| Tools["tools<br/>(retried once on failure)"]
@@ -99,11 +99,15 @@ flowchart TB
 ```python
 # src/chatbot/agent/builder.py, build_graph (abridged)
 middleware = [
-    ToolCallMetrics(),                                   # Phase 8
+    ToolCallMetrics([t.name for t in tools]),            # Phase 8
     *([LongTermMemory(settings.memory_recall_limit)] if memory else []),  # Phase 6
     *(output_middleware() if settings.pii_enabled else []),  # Phase 5: tool results, replies
     summarization(settings, summary_model, on_summarize=...),  # Phase 3
+    *([context_editing(settings)] if ... else []),       # Phase 9: clear old tool results
     system_prompt,                                       # today's date, recalled memories
+    *([ModelFallbackMiddleware(fallback)] if fallback else []),  # Phase 9
+    ModelRetryMiddleware(...),                           # Phase 9: retry outages
+    ModelBreaker(breakers),                              # Phase 9: circuit breaker per model
     ModelCallMiddleware(),                               # dangling tool calls, logging
     UserModel(settings),                                 # Phase 8: the user's own endpoint
     ModelCallLimit(run_limit=settings.max_model_calls, exit_behavior="end"),
@@ -193,7 +197,7 @@ flowchart TB
 | Code | When |
 | --- | --- |
 | 404 | Someone else's thread, or a `checkpoint_id` that doesn't exist |
-| 409 | New `/chat` message on a paused thread; `/resume` without decisions on a paused thread; decisions for a thread that isn't paused; nothing to resume |
+| 409 | New `/chat` message on a paused thread; `/resume` without decisions on a paused thread; decisions for a thread that isn't paused; nothing to resume; another run on the thread is still going (Phase 9's per-thread lease) |
 | 422 | Wrong number of decisions, an unknown decision type, or `edit` without `edited_action` |
 
 ## Chat UI
@@ -231,7 +235,7 @@ Tool approval is one of four triggers considered. The others can reuse the same 
 
 Phase 5 handled PII by redacting it before the agent runs instead of pausing for it.
 
-The plan also had an `hitl_events` table (`thread_id, user_id, tool, original_args, final_args, action, reason, decided_by, decided_at`) and a job that auto-rejects approvals nobody answers. Neither is built. Every pause and decision is in the application log (`paused for approval: web_search({...})`, `decisions: web_search=edit`) with the request and thread IDs, and an unanswered thread simply stays paused (nothing runs; a new message gets a 409). Both can be added later without changing the API.
+The plan also had an `hitl_events` table (`thread_id, user_id, tool, original_args, final_args, action, reason, decided_by, decided_at`) and a job that auto-rejects approvals nobody answers. Neither is built. Every pause and decision is in the application log (`paused for approval: web_search({...})`, `decisions: web_search=edit`) with the request and thread IDs, and counted in Prometheus since Phase 8 (`chatbot_approval_pauses_total`, `chatbot_approval_decisions_total{decision}`), and an unanswered thread simply stays paused (nothing runs; a new message gets a 409). Both can be added later without changing the API.
 
 ## Reference
 

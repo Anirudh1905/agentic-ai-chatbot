@@ -42,7 +42,7 @@ flowchart TB
 
 ```python
 pool = await open_pool(settings)            # shared with the RAG tool
-checkpointer = AsyncPostgresSaver(pool)
+checkpointer = AsyncPostgresSaver(pool)    # build_checkpointer(pool), storage/langgraph.py
 await checkpointer.setup()                  # creates and migrates the checkpoint tables (since Phase 9: python -m chatbot.migrate)
 agent = build_graph(settings, tools=tools, checkpointer=checkpointer)
 ```
@@ -75,7 +75,7 @@ sequenceDiagram
 ```
 
 - **One saver per process**, on the connection pool the RAG tool also uses, not one per request. Like the other resources it's built on the first request, so the API still starts when Postgres is down.
-- **Two kinds of tables.** `setup()` manages the checkpoint tables. The `threads` table is an Alembic migration (`0002_threads`).
+- **Two kinds of tables.** `setup()` manages the checkpoint tables. The `threads` table is an Alembic migration (`0002_threads`). Since Phase 9 both come from `python -m chatbot.migrate` (`make migrate`, or the migrate Job), not from the API at startup.
 - **More steps than the diagram shows.** Every middleware hook is its own graph step with its own checkpoint, so later phases add several per round trip.
 - **State must be serializable.** Don't put clients, DB connections or open files in state.
 
@@ -153,7 +153,7 @@ Five adjustments to the built-in, each covered by a test in `tests/unit/test_sum
 
 `src/chatbot/memory/retention.py` (`make retention`, or `python -m chatbot.memory.retention [--idle-days N] [--dry-run]`).
 
-- **Pruning:** for threads idle more than `CHECKPOINT_RETENTION_DAYS` (30), keeps only the latest checkpoint plus its pending writes (an interrupted run needs them to resume), and deletes the blobs nothing points to any more. The thread still continues normally; only its time-travel history is gone. Run it nightly.
+- **Pruning:** for threads idle more than `CHECKPOINT_RETENTION_DAYS` (30), keeps only the latest checkpoint plus its pending writes (an interrupted run needs them to resume), and deletes the blobs nothing points to any more. The thread still continues normally; only its time-travel history is gone. Run it nightly (since Phase 9, the `retention` CronJob in `deploy/base/jobs.yaml`, at 03:30).
 - **Plain SQL:** the Postgres saver doesn't implement `aprune` (checked up to 3.1.3). It's safe because the graph has no `DeltaChannel` state, which would need the parent chain to reconstruct.
 - **Hard delete** of a whole thread is `DELETE /threads/{id}`, not this job.
 
@@ -190,16 +190,16 @@ Five adjustments to the built-in, each covered by a test in `tests/unit/test_sum
 
 | File | What it does |
 | --- | --- |
-| `src/chatbot/api/dependencies.py` | Creates the saver once per process, on the first request |
+| `src/chatbot/api/dependencies.py`, `storage/langgraph.py` | Creates the saver once per process, on the first request (`build_checkpointer`) |
 | `src/chatbot/storage/db.py` | `open_pool`, the shared connection pool |
-| `src/chatbot/memory/short_term.py` | `Summarization`, `summarization(settings, model)`, `close_dangling_tool_calls` |
+| `src/chatbot/memory/short_term.py` | `Summarization`, `summarization(settings, model, on_summarize=None)` (`on_summarize` is Phase 6's memory push), `close_dangling_tool_calls` |
 | `src/chatbot/prompts/summarize.md` | The summary prompt |
 | `src/chatbot/memory/threads.py`, `migrations/versions/0002_threads.py` | The `threads` metadata table and its store |
 | `src/chatbot/api/routes/threads.py`, `routes/chat.py` | Thread endpoints, ownership checks, resume and history; optional `thread_id` on `/chat` |
 | `src/chatbot/api/streaming.py` | `stream_run`: only the `model` node's tokens |
 | `src/chatbot/memory/retention.py` | The retention job |
 | `src/chatbot/observability/logs.py`, `api/middleware.py` | `ContextFilter`, `RequestMiddleware`: request and thread IDs on every line |
-| `docker-compose.yml` | `pgweb` |
+| `docker-compose.yml` | `pgweb` (since Phase 9, `deploy/local/pgweb.yaml`; the root `docker-compose.yml` is gone) |
 
 ### Tests
 

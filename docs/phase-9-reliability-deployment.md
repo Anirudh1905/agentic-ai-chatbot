@@ -12,7 +12,8 @@
 | [Reliability](#reliability) | Built 2026-10-20 | Retries, circuit breakers and a fallback model on the model calls; breakers on the embeddings and web search; a per-thread lock; Postgres backups with a tested point-in-time restore |
 | [Cost and latency](#cost-and-latency) | Built 2026-10-20 | Prompt caching measured (automatic at the gateway), caps on retrieved context and on old tool results, a web search cache in Redis |
 | [Load test](#load-test) | Run 2026-10-20 | 5 users with no errors; p95 time to first token 13.7 to 18.5 s, over the 10 s target |
-| Outage test, runbook | Planned | See [Exit criteria](#exit-criteria) |
+| [Outage test](#outage-test) | Passed 2026-10-21 | `gpt-5.4` fails at a proxy: chats finish on `gpt-4.1`, the breaker opens and the alert fires, then it all recovers |
+| [Runbook](runbook.md) | Written 2026-10-21 | Provider outage, embeddings and web search, stuck approvals, a PII leak, memory pushes, backups, a slow or out-of-memory node, a Docker restart |
 
 Two rules ran through all of it. **API pods are stateless:** conversation state is in Postgres through the checkpointer, so any pod serves any thread, and an approval can be resumed on another pod. **LangChain built-ins first:** retries, fallback and context editing are its middleware; only the circuit breaker, the thread lock and the web search cache are ours, since it has none.
 
@@ -51,9 +52,9 @@ Two rules ran through all of it. **API pods are stateless:** conversation state 
 
 ### What runs where
 
-<img alt="Architecture on Kubernetes. A browser reaches Envoy Gateway on localhost:8088 in a kind cluster: / goes to the Streamlit ui pod and /api to two FastAPI API pods. In each API pod a request passes the FastAPI app, then Auth + limits (JWT, rate limits and token budget in Redis, accounts in Postgres), then the agent loop, which calls the model gateway, checkpoints and recalls memories in Postgres (CloudNativePG), and uses three tools: web_search (DuckDuckGo; sensitive queries wait for approval), search_knowledge_base (Postgres chunks, filled by the ingest Job) and remember. Memory pushes go to an ElasticMQ (SQS) FIFO queue with a dead-letter queue; the worker long-polls it and writes memories to Postgres. migrate and retention Jobs maintain the schema and checkpoints. kube-prometheus-stack, behind /grafana, scrapes the API pods and the worker. The app sends run traces to Langfuse in Docker Compose, and the eval suites send their scores there." src="images/architecture-dark.png">
+<img alt="Architecture on Kubernetes. A browser reaches Envoy Gateway on localhost:8088 in a kind cluster: / goes to the Streamlit ui pod and /api to two FastAPI API pods. In each API pod a request passes the FastAPI app, then Auth + limits (JWT, rate limits and token budget in Redis, which also holds the circuit breakers and the web search cache; accounts in Postgres), then the agent loop, which calls the model gateway (retried once, then the fallback model), checkpoints and recalls memories in Postgres (CloudNativePG), and uses three tools: web_search (DuckDuckGo; sensitive queries wait for approval), search_knowledge_base (Postgres chunks, filled by the ingest Job) and remember. Memory pushes go to an ElasticMQ (SQS) FIFO queue with a dead-letter queue; the worker long-polls it and writes memories to Postgres. migrate and retention Jobs maintain the schema and checkpoints, and Postgres archives its WAL and a nightly base backup to MinIO. kube-prometheus-stack, behind /grafana, scrapes the API pods and the worker. The app sends run traces to Langfuse in Docker Compose, and the eval suites send their scores there." src="images/architecture-dark.png">
 
-The picture's source is `.archify/architecture-chatbot-k8s-20261019-231500/candidate.json`. The Mermaid version adds what came later (the backups) and the per-route detail:
+The picture's source is `.archify/architecture-chatbot-k8s-20261019-231500/candidate.json`. The Mermaid version adds the per-route detail:
 
 ```mermaid
 flowchart TB
@@ -84,14 +85,14 @@ flowchart TB
 - **One image** (`Dockerfile`: multi-stage uv build, non-root, `.env` excluded) runs as the API, the worker, the UI and every Job, each with its own command. It includes `data/sample`, so the ingest Job needs nothing mounted.
 - **API:** 2 pods behind an `HTTPRoute` at `/api` that strips the prefix; uvicorn runs with `--root-path /api` so the OpenAPI docs work. The route's timeout is 300 s, for long streamed replies.
   - **Metrics on their own port** (`METRICS_PORT=9100`), which no route reaches; `/metrics` on the app port answers 404.
-  - **Probes:** `/healthz` for liveness; `/readyz` (the pool answers `SELECT 1`) for readiness, so a pod that loses Postgres leaves the Service instead of restarting in a loop.
+  - **Probes:** `/healthz` for liveness; `/readyz` (the app's resources are up, the reranker loaded, and the pool answers `SELECT 1`) for readiness, so a pod that loses Postgres leaves the Service instead of restarting in a loop.
   - **Resources:** a 2 Gi memory request and a 3 Gi limit, measured under load (about 1.7 GB with the reranker loaded); the CI overlay, without the reranker, asks for 512 Mi.
   - `BACKGROUND_JOBS=false`: the API pods run neither the idle scan nor the sweeper.
 - **Worker:** `python -m chatbot.worker` runs the pushes, the idle-thread scan (which only enqueues) and the store's TTL sweeper, with metrics on 9100.
 - **UI:** one Streamlit pod at the gateway root.
 - **Jobs:** `migrate` (Alembic, then the checkpointer's and store's setup; `make migrate` runs the same module), `reranker-model` (fills the volume; the API reads it at `RERANKER_CACHE_DIR=/models`), `ingest` (`data/sample` with `--prune`), and `retention`, a CronJob at 03:30.
 - **Langfuse** runs from `ops/langfuse/docker-compose.yml` (`make langfuse`). `deploy/local/langfuse-link.sh` attaches it to kind's network, and a `langfuse-web` Service with a manual EndpointSlice points at it.
-- **Layout:** `deploy/kind.yaml` (the cluster), `cluster.sh` (`make cluster`), `helm/` (chart values), `base/` (our manifests; `config/` holds the ElasticMQ config and the dashboard), `local/` (the kind overlay), `ci/`, `smoke.sh`, `restore.sh`, `restore-test.sh`.
+- **Layout:** `deploy/kind.yaml` (the cluster), `cluster.sh` (`make cluster`), `helm/` (chart values), `base/` (our manifests; `config/` holds the ElasticMQ config and the dashboard), `local/` (the kind overlay), `ci/`, `smoke.sh`, `restore.sh`, `restore-test.sh`, `outage-test.sh` and `outage/` (the [outage test](#outage-test)).
 
 ### Memory pushes on a queue
 
@@ -158,19 +159,19 @@ make tilt      # tilt up: Langfuse, the image, everything in deploy/local
 
 ### CI
 
-A `deploy` job beside `check` in `.github/workflows/ci.yml`: placeholder secrets → `kubectl kustomize deploy/ci` validated by kubeconform (strict, with the CRD catalog) → build the image, `deploy/cluster.sh`, load the image into kind → apply `deploy/ci` (no ingest or reranker-model Job) and wait for Postgres, migrate and the rollouts → `deploy/smoke.sh` through the gateway. The smoke test checks `/readyz`, that `/api/metrics` is 404, register, log in and an authenticated call, Grafana and Alertmanager behind the gateway, Prometheus scraping both API pods and the worker, the alert rules (13) loaded, and the worker reading the queue. There's no chat call: CI has no model access. The `check` job runs Postgres, ElasticMQ and Redis services, with `REQUIRE_DB`, `REQUIRE_SQS` and `REQUIRE_REDIS` so their tests can't silently skip.
+A `deploy` job beside `check` in `.github/workflows/ci.yml`: placeholder secrets → `kubectl kustomize deploy/ci` validated by kubeconform (strict, with the CRD catalog) → build the image, `deploy/cluster.sh`, load the image into kind → apply `deploy/ci` (no ingest or reranker-model Job; `RERANKER_MODEL` empty, so reranking is off and the API pods ask for 512 Mi) and wait for Postgres, migrate and the rollouts → `deploy/smoke.sh` through the gateway. The smoke test checks `/readyz`, that `/api/metrics` is 404, register, log in and an authenticated call, Grafana and Alertmanager behind the gateway, Prometheus scraping both API pods and the worker, the alert rules (13) loaded, and the worker reading the queue. There's no chat call: CI has no model access. The `check` job runs Postgres, ElasticMQ and Redis services, with `REQUIRE_DB`, `REQUIRE_SQS` and `REQUIRE_REDIS` so their tests can't silently skip.
 
 ### Failures
 
 | What fails | What happens |
 | --- | --- |
-| The migrate Job | The API doesn't roll out, so nothing serves against the wrong schema |
+| The migrate Job | Tilt doesn't roll out the API or the worker, so nothing serves against the wrong schema; CI's deploy fails waiting for the Job |
 | Postgres | `/readyz` fails and the pod leaves the Service; `/healthz` keeps it from a restart loop |
 | Redis | Limits let requests through (Phase 8); breakers keep state in memory; searches run uncached |
 | The queue | Enqueueing retries twice, then runs the push in-process and counts it, so nothing is dropped |
 | The worker | Pushes wait in the queue; ChatbotWorkerDown fires after 5 minutes |
 | A push keeps failing | Retried after each visibility timeout; after 5 receives it's dead-lettered, which alerts, and the message holds everything needed to replay it |
-| The model volume is empty | Search uses the fused results without reranking, and logs it |
+| The model volume is empty | The API pods don't become ready: `/readyz` loads the reranker first. With `RERANKER_MODEL` empty (as in `deploy/ci`), search uses the fused results without reranking |
 | A pod replaced mid-stream | The drain lets the stream finish; if it's cut anyway, resume finishes the run |
 | The model, the embeddings, web search | See [Reliability](#reliability) |
 
@@ -368,12 +369,37 @@ The line is the 10 s target. The dashboard during the last 5-user run:
 - **Fixed along the way:** one rerank at a time per pod (`tools/rerank.py`: concurrent ONNX runs each used every core and allocated their own working memory; with the lock the 10-user run had no out-of-memory kill), API memory requests and limits that match use (above), and the load test retrying a dropped login.
 - **Capacity on this laptop: 5 users with no errors, p95 time to first token 13.7 to 18.5 s.** The 10 s target holds at p50, not p95. Meeting it needs a reranker that doesn't compete for the CPU (skipped when busy, fewer candidates, a GPU, or a hosted API); it's kept as is for now, since it raised top-1 retrieval from 96% to 100%.
 
+## Outage test
+
+`make outage-test` (`deploy/outage-test.sh`) rehearses a provider outage on the deployed stack. A proxy (`deploy/outage/proxy.py`, run from the app image) stands in for the model gateway: it answers 503 for every `gpt-5.4` chat call and passes everything else (`gpt-4.1`, embeddings) to the real one. The test points the API at it by setting `OPENAI_BASE_URL` on the Deployment (the environment wins over the secret file), and puts it back when it ends, however it ends.
+
+```mermaid
+sequenceDiagram
+    participant T as outage-test.sh
+    participant API as API pods
+    participant P as outage proxy
+    participant G as model gateway
+    T->>API: OPENAI_BASE_URL = outage proxy
+    T->>API: 6 chats (tests/outage/chats.py)
+    API->>P: gpt-5.4
+    P-->>API: 503, retried once, counted by the breaker
+    API->>P: gpt-4.1 (fallback)
+    P->>G: passed through
+    G-->>API: the answer
+    Note over API: 5 outages in 60 s: gpt-5.4's breaker opens,<br/>calls go straight to gpt-4.1
+    T->>T: breaker open? gpt-4.1 calls? ChatbotBreakerOpen firing?
+    T->>API: OPENAI_BASE_URL back to the gateway
+    T->>API: chats until gpt-5.4 answers and its breaker closes
+```
+
+**Result, 2026-10-21:** passed. All 6 chats finished with no error event (first token in 6 to 12 s). The proxy failed 6 `gpt-5.4` calls (three model calls, each retried once) before the breaker opened, then passed only `gpt-4.1` calls and embeddings. `ChatbotBreakerOpen` fired for `gpt-5.4`. After the proxy went, `gpt-5.4` answered again and its breaker closed. The [runbook](runbook.md#the-model-provider-is-down) has what to do in a real one.
+
 ## Tests and checks
 
 | Part | Unit | Integration | Live, on kind |
 | --- | --- | --- | --- |
 | Deployment | `/readyz` both ways; `/metrics` off the app port; `BACKGROUND_JOBS`; each push kind's group and dedupe ids; the worker acking success only; the enqueue fallback; the drain (`test_drain.py`) | SQS against ElasticMQ, including the dead-letter redrive; migrate run twice; only a background process runs the loops | `tilt up` from nothing; chats spread over both pods; a rolling restart mid-stream finished with every token, twice; a force-deleted worker's push came back after 5 minutes and was written once; every dashboard panel has data |
-| Model calls, breakers (`test_reliability.py`) | An outage is retried, then falls back; a refused request isn't retried or counted; an open breaker skips the model; one `reset` for a reply that failed partway, none when nothing was shown; an own-key user never reaches our fallback; the breaker's open, window, probe and expiry rules; memory pushes fall back; web search and embeddings degrade | One pod's failures open the breaker for another; only one pod probes; every key expires (`test_breaker_redis.py`) | Breaker gauges at 0 for every dependency |
+| Model calls, breakers (`test_reliability.py`; `make outage-test` live) | An outage is retried, then falls back; a refused request isn't retried or counted; an open breaker skips the model; one `reset` for a reply that failed partway, none when nothing was shown; an own-key user never reaches our fallback; the breaker's open, window, probe and expiry rules; memory pushes fall back; web search and embeddings degrade | One pod's failures open the breaker for another; only one pod probes; every key expires (`test_breaker_redis.py`) | `make outage-test`: chats finish on the fallback, the breaker opens and closes, the alert fires |
 | Thread lock (`test_thread_lease.py`) | 409 with `Retry-After` on every run route and delete; someone else's thread still 404; released after success, an error and a disconnect (fails without the shield); expiry, renewal, a failed renewal; two concurrent `/chat` give one 200 and one 409 | Ten concurrent takers get exactly one lease; renew, release and expiry; keyword-only search with the note | Two concurrent requests: a 200 and a 409 |
 | Backups | | | WAL archived and the nightly backup ran on its own; `make restore-test` restored to T in about 3 minutes with only the first marker |
 | Cost and latency (`test_cost.py`) | One system prompt per thread; memories after the static part; cached tokens counted; the per-search cap; old tool results cleared while the thread keeps them; the search cache's hits, what isn't cached, and Redis down | One pod's cached results are another's hit; a different count misses; every entry has its TTL (`test_search_cache_redis.py`) | Cache hits and cached tokens under the load test |
@@ -417,5 +443,5 @@ To document, not build: the real SQS queues and their IAM permissions (Terraform
 - [x] The worker alone runs the background loops; Prometheus scrapes every API pod
 - [ ] CI builds the image, validates the manifests and passes the kind smoke test (runs on the first PR)
 - [ ] Load test: target concurrent users at the p95 latency target with no errors. Run: 5 users with no errors, but p95 time to first token is 13.7 to 18.5 s against 10 s ([Load test](#load-test))
-- [ ] A provider outage degrades to the fallback model, not errors
-- [ ] Runbook for common incidents: provider outage, stuck interrupts, a PII leak report
+- [x] A provider outage degrades to the fallback model, not errors ([Outage test](#outage-test))
+- [x] Runbook for common incidents: provider outage, stuck interrupts, a PII leak report ([runbook](runbook.md); the stuck-approval query and the reject-on-behalf steps were tried on the cluster)

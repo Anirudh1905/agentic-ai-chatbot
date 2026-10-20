@@ -66,7 +66,7 @@ class StreamRedactor                              # feed(token) / flush()
 - **`detect_email`** is LangChain's detector, minus addresses at `PII_ALLOWED_EMAIL_DOMAINS` (`acme-outfitters.example`), so the bot can still tell customers how to reach support.
 - **`detect_phone`** is the only fully custom detector: LangChain has none for phone numbers. It matches 8+ digits with optional spaces, dots, dashes and brackets, and skips dates (in Phase 6, "arrived on 2026-10-16" had come back as `[REDACTED_PHONE]`).
 - **Order numbers are kept:** the bot needs them to help with an order. A web query with one still pauses for approval (Phase 4).
-- **Logs name types, never values:** `redacted PII from the message: credit_card, email`, `... from a tool result: email`, `... from the reply: phone`. Since Phase 8 each redaction is also counted in the `chatbot_pii_redactions_total` metric.
+- **Logs name types, never values:** `redacted PII from the message: credit_card, email`, `... from a tool result: email`, `... from the reply: phone`. Since Phase 8 each redaction is also counted in the `chatbot_pii_redactions_total` metric, by type and source (`message`, `tool_result`, `reply`).
 
 **What the user sees.** What they typed stays on screen until they reload; after that the thread shows the redacted text. Asked "what email did I give you?", the bot only has the placeholder. Acme's support and returns addresses come through in answers; a third party's email or phone in a document or web page comes through as `[REDACTED_EMAIL]` / `[REDACTED_PHONE]`.
 
@@ -93,6 +93,7 @@ class StreamRedactor                              # feed(token) / flush()
 `StreamRedactor` in `guardrails/pii.py`, used by `api/streaming.py`. The middleware rewrites the reply only after the model has finished, so the tokens the user watches need redacting on the way out too.
 
 - It holds back the last 128 characters, so a value split across tokens ("jane@ex", "ample.com") is seen whole before anything is released, and it never releases part of a match. Replies shorter than that arrive in one piece at the end of the model call.
+- Since Phase 9, a model call that fails partway (and is retried, or goes to the fallback model) gets a fresh `StreamRedactor`, so nothing held back from the failed reply is released.
 
 **Why not `PIIMiddleware`'s own stream transformer.** LangGraph only runs it through `astream_events(version="v3")`, which is marked experimental. We tried it:
 
@@ -107,7 +108,7 @@ So streaming stays on v2. Worth revisiting when v3 is stable.
 | ------------------------------------- | --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
 | LLM provider                          | Data leaves your boundary                     | Covered: the model sees the redacted message and redacted tool results                                                                  |
 | Web search API                        | Query sent to a third party, possibly logged  | Covered: queries are written from redacted text, and reviewer edits are redacted. Order numbers in a web query still pause for approval |
-| Checkpoints                           | Raw text stored indefinitely                  | The user's text: covered in every checkpoint. Tool results: one checkpoint per call is a[known gap](#known-gaps)                         |
+| Checkpoints                           | Raw text stored indefinitely                  | The user's text: covered in every checkpoint. Tool results: one checkpoint per call is a [known gap](#known-gaps)                         |
 | Thread list                           | Title made from the first message             | Covered                                                                                                                                 |
 | Logs                                  | Wide internal access                          | Covered: messages are logged by length, queries come from redacted text, redactions are logged by type only                             |
 | Traces                                | Langfuse                                      | Covered for the user's input                                                                                                            |
@@ -132,11 +133,11 @@ So streaming stays on v2. Worth revisiting when v3 is stable.
 
 | File                                                      | What it does                                                                                                                        |
 | --------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `src/chatbot/guardrails/pii.py`                         | The rules,`detect_email`, `detect_phone`, `redact_pii`, `LoggedPIIMiddleware` and `output_middleware`, `StreamRedactor` |
+| `src/chatbot/guardrails/pii.py`                         | The rules, `detect_email`, `detect_phone`, `redact_pii`, `LoggedPIIMiddleware` and `output_middleware`, `StreamRedactor` |
 | `src/chatbot/api/runs.py`                               | `redact()`: the user's text, before anything stores or sends it; `run_config` sets the recursion limit                          |
 | `src/chatbot/api/routes/chat.py`, `routes/threads.py` | Redact the message, and a reviewer's edits and reject reason                                                                        |
-| `src/chatbot/api/streaming.py`                          | Runs every streamed token through`StreamRedactor`                                                                                 |
-| `src/chatbot/agent/builder.py`                          | Adds`output_middleware()` when `PII_ENABLED`; `RECURSION_LIMIT`                                                               |
+| `src/chatbot/api/streaming.py`                          | Runs every streamed token through `StreamRedactor`                                                                                 |
+| `src/chatbot/agent/builder.py`                          | Adds `output_middleware()` when `PII_ENABLED`; `RECURSION_LIMIT`                                                               |
 | `src/chatbot/agent/approvals.py`                        | `sensitive_reason` without the email, card and phone checks                                                                       |
 
 ### Tests

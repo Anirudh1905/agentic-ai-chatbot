@@ -12,7 +12,7 @@
       "id": "langfuse",
       "type": "external",
       "label": "Langfuse",
-      "sublabel": "traces \u00b7 sessions \u00b7 scores",
+      "sublabel": "traces · sessions · scores",
       "pos": [
         614,
         40
@@ -27,7 +27,7 @@
       "id": "model",
       "type": "external",
       "label": "Model gateway",
-      "sublabel": "chat \u00b7 embeddings \u00b7 summaries",
+      "sublabel": "gpt-5.4 · fallback gpt-4.1 · embeddings",
       "pos": [
         1160,
         40
@@ -57,7 +57,7 @@
       "id": "evals",
       "type": "backend",
       "label": "Eval suites",
-      "sublabel": "golden sets \u00b7 judge gpt-4.1",
+      "sublabel": "golden sets · judge gpt-4.1",
       "pos": [
         320,
         40
@@ -72,7 +72,7 @@
       "id": "ui",
       "type": "frontend",
       "label": "ui",
-      "sublabel": "Streamlit \u00b7 login \u00b7 approvals",
+      "sublabel": "Streamlit · login · approvals",
       "pos": [
         320,
         200
@@ -81,13 +81,13 @@
         190,
         84
       ],
-      "tag": "Deployment \u00d71"
+      "tag": "Deployment ×1"
     },
     {
       "id": "redis",
       "type": "database",
       "label": "Redis",
-      "sublabel": "rate windows \u00b7 tokens per day",
+      "sublabel": "limits · breakers · search cache",
       "pos": [
         880,
         200
@@ -96,13 +96,13 @@
         190,
         84
       ],
-      "tag": "no volume \u00b7 fails open"
+      "tag": "no volume · fails open"
     },
     {
       "id": "web",
       "type": "backend",
       "label": "web_search",
-      "sublabel": "sensitive query \u2192 approval",
+      "sublabel": "sensitive query → approval",
       "pos": [
         1440,
         200
@@ -111,13 +111,13 @@
         190,
         84
       ],
-      "tag": "api pod \u00b7 tool"
+      "tag": "api pod · tool"
     },
     {
       "id": "browser",
       "type": "external",
       "label": "Browser",
-      "sublabel": "chat \u00b7 API \u00b7 Grafana",
+      "sublabel": "chat · API · Grafana",
       "pos": [
         40,
         360
@@ -132,7 +132,7 @@
       "id": "gateway",
       "type": "security",
       "label": "Envoy Gateway",
-      "sublabel": "Gateway API \u00b7 5 HTTPRoutes",
+      "sublabel": "Gateway API · 5 HTTPRoutes",
       "pos": [
         320,
         360
@@ -146,8 +146,8 @@
     {
       "id": "app",
       "type": "backend",
-      "label": "FastAPI app \u00d72",
-      "sublabel": "routes \u00b7 SSE \u00b7 PII \u00b7 drain",
+      "label": "FastAPI app ×2",
+      "sublabel": "routes · SSE · PII · drain",
       "pos": [
         600,
         360
@@ -156,13 +156,13 @@
         190,
         84
       ],
-      "tag": "api pods \u00b7 metrics :9100"
+      "tag": "api pods · metrics :9100"
     },
     {
       "id": "auth",
       "type": "security",
       "label": "Auth + limits",
-      "sublabel": "JWT \u00b7 rate limits \u00b7 budget",
+      "sublabel": "JWT · rate limits · budget",
       "pos": [
         880,
         360
@@ -171,13 +171,13 @@
         190,
         84
       ],
-      "tag": "api pod \u00b7 HS256"
+      "tag": "api pod · HS256"
     },
     {
       "id": "agent",
       "type": "backend",
       "label": "Agent loop",
-      "sublabel": "create_agent \u00b7 middleware",
+      "sublabel": "create_agent · middleware",
       "pos": [
         1160,
         360
@@ -186,7 +186,7 @@
         190,
         84
       ],
-      "tag": "api pod \u00b7 checkpointed"
+      "tag": "api pod · checkpointed"
     },
     {
       "id": "remember",
@@ -201,7 +201,7 @@
         190,
         84
       ],
-      "tag": "api pod \u00b7 tool"
+      "tag": "api pod · tool"
     },
     {
       "id": "queue",
@@ -216,13 +216,13 @@
         190,
         84
       ],
-      "tag": "grouped by user \u00b7 5 tries"
+      "tag": "grouped by user · 5 tries"
     },
     {
       "id": "kb",
       "type": "backend",
       "label": "search_knowledge_base",
-      "sublabel": "vector + FTS \u00b7 RRF \u00b7 rerank",
+      "sublabel": "vector + FTS · RRF · rerank",
       "pos": [
         1440,
         520
@@ -231,13 +231,13 @@
         190,
         84
       ],
-      "tag": "api pod \u00b7 tool"
+      "tag": "api pod · tool"
     },
     {
       "id": "prom",
       "type": "cloud",
       "label": "kube-prometheus-stack",
-      "sublabel": "Prometheus \u00b7 Grafana \u00b7 Alerts",
+      "sublabel": "Prometheus · Grafana · Alerts",
       "pos": [
         320,
         680
@@ -246,13 +246,13 @@
         190,
         84
       ],
-      "tag": "10 alert rules"
+      "tag": "13 alert rules"
     },
     {
       "id": "jobs",
       "type": "backend",
-      "label": "migrate \u00b7 retention",
-      "sublabel": "Job \u00b7 nightly CronJob",
+      "label": "migrate · retention",
+      "sublabel": "Job · nightly CronJob",
       "pos": [
         600,
         680
@@ -267,7 +267,7 @@
       "id": "worker",
       "type": "backend",
       "label": "worker",
-      "sublabel": "MemoryWriter \u00b7 idle scan \u00b7 TTL",
+      "sublabel": "MemoryWriter · idle scan · TTL",
       "pos": [
         1160,
         680
@@ -297,7 +297,7 @@
       "id": "pg",
       "type": "database",
       "label": "Postgres (CloudNativePG)",
-      "sublabel": "users \u00b7 threads \u00b7 checkpoints",
+      "sublabel": "users · threads + leases · checkpoints",
       "pos": [
         880,
         680
@@ -306,13 +306,13 @@
         190,
         84
       ],
-      "tag": "memory store \u00b7 pgvector"
+      "tag": "memory store · pgvector"
     },
     {
       "id": "ingest",
       "type": "backend",
       "label": "ingest Job",
-      "sublabel": "load \u00b7 chunk \u00b7 embed changed",
+      "sublabel": "load · chunk · embed changed",
       "pos": [
         1440,
         840
@@ -322,12 +322,27 @@
         84
       ],
       "tag": "data/sample in the image"
+    },
+    {
+      "id": "minio",
+      "type": "database",
+      "label": "MinIO backups",
+      "sublabel": "WAL archive · nightly base",
+      "pos": [
+        880,
+        840
+      ],
+      "size": [
+        190,
+        84
+      ],
+      "tag": "Barman Cloud plugin"
     }
   ],
   "boundaries": [
     {
       "kind": "region",
-      "label": "kind cluster \u00b7 namespaces chatbot and monitoring",
+      "label": "kind cluster · namespaces chatbot and monitoring",
       "wraps": [
         "ui",
         "gateway",
@@ -344,7 +359,8 @@
         "queue",
         "worker",
         "jobs",
-        "pg"
+        "pg",
+        "minio"
       ],
       "pad": 24
     }
@@ -440,7 +456,7 @@
     {
       "from": "agent",
       "to": "model",
-      "label": "model calls"
+      "label": "retry · fallback"
     },
     {
       "from": "web",
@@ -467,7 +483,7 @@
     {
       "from": "agent",
       "to": "pg",
-      "label": "checkpoints \u00b7 recall",
+      "label": "checkpoints · recall",
       "fromSide": "bottom",
       "toSide": "top"
     },
@@ -491,7 +507,7 @@
     {
       "from": "jobs",
       "to": "pg",
-      "label": "schema \u00b7 prune",
+      "label": "schema · prune",
       "variant": "dashed"
     },
     {
@@ -506,6 +522,12 @@
       "from": "evals",
       "to": "langfuse",
       "label": "scores",
+      "variant": "dashed"
+    },
+    {
+      "from": "pg",
+      "to": "minio",
+      "label": "WAL · 02:00 backup",
       "variant": "dashed"
     }
   ],
@@ -543,14 +565,24 @@
       "items": [
         "migrate runs Alembic and the LangGraph setup before the API and worker roll out",
         "preStop waits for open streams before uvicorn gets SIGTERM; PDB keeps one API pod up",
-        "reranker-model fills the shared model volume once; retention prunes checkpoints nightly"
+        "reranker-model fills the shared model volume once; retention prunes checkpoints nightly; Postgres archives WAL to MinIO and takes a base backup at 02:00"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Reliability",
+      "items": [
+        "Model calls retry once, then fall back to gpt-4.1 (FALLBACK_MODEL)",
+        "Circuit breakers per model, embeddings and web search, shared in Redis: 5 outages in 60 s open one for 30 s",
+        "Embeddings, web search and memory recall degrade instead of failing the turn; web results are cached in Redis for 10 min",
+        "One run per thread across pods: a lease on the thread's row, a second run gets 409"
       ]
     },
     {
       "dot": "orange",
       "title": "Observability and evals",
       "items": [
-        "ServiceMonitors scrape every API pod and the worker; 10 PrometheusRule alerts; the Chatbot dashboard in Grafana",
+        "ServiceMonitors scrape every API pod and the worker; 13 PrometheusRule alerts; the Chatbot dashboard in Grafana",
         "Runs are traced to Langfuse (Docker Compose), reached through a Service with a manual EndpointSlice",
         "make eval judges the same agent and scores each trace; CI rejects a stale or worse report"
       ]

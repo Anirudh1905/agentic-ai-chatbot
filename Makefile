@@ -1,4 +1,4 @@
-.PHONY: dev worker ui tilt langfuse cluster cluster-delete secrets restore restore-test test test-unit lint fmt typecheck up down check migrate ingest eval eval-calibrate eval-check retention load
+.PHONY: dev worker ui tilt langfuse cluster cluster-delete secrets restore restore-test test test-unit lint fmt typecheck up down check migrate ingest eval eval-calibrate eval-check retention load outage-test
 
 dev:
 	uv run uvicorn chatbot.api.main:app --reload
@@ -73,6 +73,10 @@ USERS ?= 10
 DURATION ?= 300
 load:
 	USERS=$(USERS) DURATION=$(DURATION) uv run python -u tests/load/run.py
+
+# A provider outage on the deployed app: gpt-5.4 fails, gpt-4.1 answers (deploy/outage-test.sh).
+outage-test:
+	./deploy/outage-test.sh
 
 retention:
 	uv run python -m chatbot.memory.retention

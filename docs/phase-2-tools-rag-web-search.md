@@ -71,6 +71,7 @@ CREATE TABLE chunks (
 );
 CREATE INDEX ON chunks USING hnsw (embedding vector_cosine_ops);
 CREATE INDEX ON chunks USING gin (content_tsv);
+CREATE INDEX ON chunks (doc_id);
 ```
 
 - **Why not LangChain's indexing API.** `index()` with a record manager does the same incremental sync, but only for a LangChain vector store. Using one (`langchain-postgres`) would mean its own table schema and losing the full-text tuning below, so the ingestion stays custom.
@@ -88,8 +89,8 @@ async def search_knowledge_base(query: str) -> tuple[str, list[dict]]:
 ```
 
 - **Hybrid retrieval:** the top `RETRIEVAL_CANDIDATES` (30) by vector similarity and by full-text, merged with Reciprocal Rank Fusion (k = 60). `plainto_tsquery` ANDs every word, which misses most natural questions, so its `&` is swapped for `|` ("any of these words"), ranked by `ts_rank_cd`.
-- **Reranker:** a local cross-encoder (`BAAI/bge-reranker-v2-m3-int8` via fastembed/ONNX) rescores the top 8 fused results and the best 6 go to the model. If it fails, the fused order is used. It was chosen by measurement ([Measurements](#measurements)): cross-encoder latency grows quickly with the candidate count, so keep `RERANK_CANDIDATES` small.
-- **What it returns:** the content for the model is the hits wrapped in `<kb_results>`, each a `<result cite_as="...">`; the artifact (each hit's `chunk_id`, `doc_id`, `title`, `heading`, `page`, `content`, `score` and `cite_as`) goes to the API as `sources`.
+- **Reranker:** a local cross-encoder (`BAAI/bge-reranker-v2-m3-int8` via fastembed/ONNX) rescores the top 8 fused results and the best 6 go to the model (since Phase 9, only as many as fit in `RETRIEVAL_MAX_TOKENS`, 2,500, and at least one). If it fails, the fused order is used. It was chosen by measurement ([Measurements](#measurements)): cross-encoder latency grows quickly with the candidate count, so keep `RERANK_CANDIDATES` small.
+- **What it returns:** the content for the model is the hits wrapped in `<kb_results>`, each a `<result cite_as="...">`; the artifact (each hit's `type` (`kb`), `chunk_id`, `doc_id`, `title`, `heading`, `page`, `content`, `score` and `cite_as`) goes to the API as `sources`. Since Phase 9, if the embeddings are down the search runs on full text only and says so in the results.
 
 ## Web search
 
@@ -103,8 +104,8 @@ async def web_search(query: str) -> tuple[str, list[dict]]:
 ```
 
 - DuckDuckGo through `ddgs` (no key) is fast (about 2 s) but sometimes returns nothing, so the tool falls back to `ddgs`'s `auto` backend, which queries several engines. Ad links (`/aclick?`) are dropped.
-- Results go to the model in `<web_results>`, each with a markdown-link `cite_as`; the sources carry `title`, `url` and `cite_as`. `WEB_SEARCH_MAX_RESULTS` (5) results, each backend call with a `WEB_SEARCH_TIMEOUT` (15 s); `WEB_SEARCH_ENABLED=false` removes the tool.
-- If every backend fails (keyless search is rate-limited), the tool raises, and the retry below takes over.
+- Results go to the model in `<web_results>`, each with a markdown-link `cite_as`; the sources carry `type` (`web`), `title`, `url` and `cite_as`. `WEB_SEARCH_MAX_RESULTS` (5) results, each backend call with a `WEB_SEARCH_TIMEOUT` (15 s); `WEB_SEARCH_ENABLED=false` removes the tool.
+- If every backend fails (keyless search is rate-limited), the tool raises, and the retry below takes over. (Phase 9 adds a circuit breaker and a Redis cache of results, `WEB_SEARCH_CACHE_SECONDS`.)
 - DuckDuckGo's snippets are short (about 150 characters); Tavily or Brave give richer content if answer quality needs it. `langchain-community`'s DuckDuckGo tool has no fallback, ad filtering or citation artifacts, so this wrapper stays.
 
 ## The agent loop
