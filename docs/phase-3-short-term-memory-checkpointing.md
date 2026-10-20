@@ -213,7 +213,7 @@ Five adjustments to the built-in, each covered by a test in `tests/unit/test_sum
 
 - **Summarized messages disappear from the thread view.** Replacing them keeps checkpoints small (each step stores the whole message list), but `GET /threads/{id}/messages` then returns only the recent turns plus the summary. Keeping a full transcript for display would need a separate append-only table.
 - **Summaries lose detail.** Exact numbers, names and decisions are often what users ask about later, which is why the summarizer is told to keep them verbatim. Phase 6 long-term memory is the real fix for "remember this forever".
-- **Concurrent requests on one thread** both read the same checkpoint and the later write wins. The UI sends one message at a time; a per-thread lock is a Phase 9 concern ([Reliability](phase-9-reliability-deployment.md#reliability), still open).
+- **Concurrent requests on one thread** both read the same checkpoint and the later write wins. The UI sends one message at a time; a per-thread lock is a Phase 9 concern. **Since Phase 9** a run holds a lease on its thread's row, and a second request meanwhile gets 409 ([Per-thread lock](phase-9-reliability-deployment.md#per-thread-lock)).
 - **Checkpoints and logs hold user text.** Checkpoints keep every message, and logs keep search queries as the model wrote them. Since Phase 5 the API redacts PII from the user's message before the agent runs, so both hold the redacted text. Still treat the checkpoint tables as sensitive (encryption at rest, restricted access).
 
 ## Exit criteria

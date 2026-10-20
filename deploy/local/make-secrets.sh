@@ -15,6 +15,14 @@ for key in $KEYS; do
 done
 echo "wrote $out ($(wc -l < "$out" | tr -d ' ') keys)"
 
+# The backup store's keys (deploy/base/backup.yaml), made up once: the backups in MinIO are
+# only readable with the keys they were written with.
+store=deploy/local/backup-store.env
+if [ ! -s "$store" ]; then
+  (umask 077; printf 'ACCESS_KEY_ID=backups\nACCESS_SECRET_KEY=%s\n' "$(openssl rand -hex 24)" > "$store")
+  echo "wrote $store"
+fi
+
 # The cluster's trust store: this machine's roots, including any a corporate TLS-inspecting proxy
 # installs (the app trusts the OS store, through truststore; a container's doesn't have them).
 # Without a macOS keychain (Linux, CI), the system's bundle, else certifi's.

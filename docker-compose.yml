@@ -1,6 +1,0 @@
-# Langfuse (tracing), the one service that stays outside the kind cluster (Phase 9): it's heavy,
-# and a real deployment often uses Langfuse Cloud. `make langfuse` starts it; Tilt does too,
-# and links it into the cluster (deploy/local/langfuse-link.sh). Postgres, Redis, the queue,
-# Prometheus and Grafana run in the cluster (deploy/).
-include:
-  - ops/langfuse/docker-compose.yml

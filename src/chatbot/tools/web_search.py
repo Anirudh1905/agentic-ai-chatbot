@@ -9,6 +9,7 @@ from langchain_core.tools import BaseTool, tool
 
 from chatbot.config import Settings
 from chatbot.prompts import as_data
+from chatbot.reliability.breaker import BreakerOpen, Breakers
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +19,12 @@ BACKENDS = ("duckduckgo", "auto")
 # Keyless search is rate-limited (ddgs raises "No results found."). When every backend fails,
 # ToolRetryMiddleware waits this long and runs the tool once more (see tools/registry.py).
 RETRY_DELAY_SECONDS = 1.5
+# While web search's circuit breaker is open (reliability/breaker.py), the tool answers this at
+# once instead of trying.
+UNAVAILABLE = (
+    "Web search is unavailable right now. Tell the user, and answer from the knowledge base or "
+    "what you know if you can."
+)
 
 
 def is_ad(result: dict[str, Any]) -> bool:
@@ -63,9 +70,10 @@ async def search(query: str, settings: Settings) -> list[dict[str, Any]]:
     return []
 
 
-def build_web_search_tool(settings: Settings) -> BaseTool | None:
+def build_web_search_tool(settings: Settings, breakers: Breakers | None = None) -> BaseTool | None:
     if not settings.web_search_enabled:
         return None
+    breaker = (breakers or Breakers(settings)).get("web_search")
 
     @tool(response_format="content_and_artifact")
     async def web_search(query: str) -> tuple[str, list[dict[str, Any]]]:
@@ -80,7 +88,12 @@ def build_web_search_tool(settings: Settings) -> BaseTool | None:
         """
         start = time.monotonic()
         # Errors propagate to ToolRetryMiddleware, which retries once, then tells the model.
-        results = await search(query, settings)
+        # Every failure counts toward the breaker: by then each backend has failed.
+        try:
+            results = await breaker.call(lambda: search(query, settings), counts=lambda e: True)
+        except BreakerOpen:
+            logger.info("web search skipped: its circuit breaker is open")
+            return UNAVAILABLE, []
         logger.info(
             "web search %r: %d results in %.1fs", query, len(results), time.monotonic() - start
         )

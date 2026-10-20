@@ -6,6 +6,7 @@ namespace: chatbot
 resources:
   - namespace.yaml
   - data.yaml
+  - backup.yaml
   - app.yaml
   - jobs.yaml
   - gateway.yaml

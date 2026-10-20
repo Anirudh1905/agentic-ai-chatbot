@@ -8,6 +8,7 @@ from sse_starlette.sse import EventSourceResponse
 from chatbot.agent.approvals import pending_request
 from chatbot.agent.builder import Agent
 from chatbot.api.dependencies import Callbacks, Graph, Threads
+from chatbot.api.leases import ThreadLease, take_lease
 from chatbot.api.runs import chat_response, redact, run_config, thread_config
 from chatbot.api.schemas import ChatRequest, ChatResponse
 from chatbot.api.security import BudgetedUserId, UserCredentials
@@ -23,8 +24,8 @@ router = APIRouter(prefix="/chat", tags=["chat"])
 
 async def open_thread(
     body: ChatRequest, user_id: str, threads: ThreadStore, graph: Agent
-) -> tuple[UUID, str]:
-    """The thread to run in, and the message to send it (redacted)."""
+) -> tuple[UUID, str, ThreadLease]:
+    """The thread to run in, the message to send it (redacted), and the run's lease on it."""
     thread_id = body.thread_id or uuid4()
     thread_id_var.set(str(thread_id))
     message = redact(body.message)
@@ -33,7 +34,9 @@ async def open_thread(
         logger.warning("user %s tried to post to a thread they don't own", user_id)
         # 404, not 403: don't confirm that someone else's thread exists.
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Thread not found")
+    lease = await take_lease(threads, thread_id, user_id)
     if body.thread_id and pending_request(await graph.aget_state(thread_config(thread_id))):
+        await lease.release()
         # A new message would leave the pending tool calls without results.
         raise HTTPException(
             status.HTTP_409_CONFLICT,
@@ -45,7 +48,7 @@ async def open_thread(
         "new" if thread.created_at == thread.updated_at else "continuing",
         len(body.message),
     )
-    return thread_id, message
+    return thread_id, message, lease
 
 
 @router.post("")
@@ -57,14 +60,15 @@ async def chat(
     callbacks: Callbacks,
     credentials: UserCredentials,
 ) -> ChatResponse:
-    thread_id, message = await open_thread(body, user_id, threads, graph)
+    thread_id, message, lease = await open_thread(body, user_id, threads, graph)
     context = RunContext(user_id, credentials)
-    result = await graph.ainvoke(
-        {"messages": [HumanMessage(message)]},
-        config=run_config("chat", thread_id, context, callbacks),
-        context=context,
-    )
-    return await chat_response(graph, result, thread_id)
+    async with lease:
+        result = await graph.ainvoke(
+            {"messages": [HumanMessage(message)]},
+            config=run_config("chat", thread_id, context, callbacks),
+            context=context,
+        )
+        return await chat_response(graph, result, thread_id)
 
 
 @router.post("/stream")
@@ -76,7 +80,7 @@ async def chat_stream(
     callbacks: Callbacks,
     credentials: UserCredentials,
 ) -> EventSourceResponse:
-    thread_id, message = await open_thread(body, user_id, threads, graph)
+    thread_id, message, lease = await open_thread(body, user_id, threads, graph)
     context = RunContext(user_id, credentials)
     return EventSourceResponse(
         stream_run(
@@ -85,5 +89,6 @@ async def chat_stream(
             run_config("chat", thread_id, context, callbacks),
             context,
             thread_id,
+            lease,
         )
     )

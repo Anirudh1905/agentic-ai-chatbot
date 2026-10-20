@@ -64,3 +64,11 @@ secretGenerator:
     namespace: chatbot
     envs:
       - secrets.env
+  # The backup store's keys (MinIO's root login, and the ObjectStore's S3 credentials). Made up
+  # by `make secrets` on first run, then kept; gitignored.
+  - name: backup-store
+    namespace: chatbot
+    envs:
+      - backup-store.env
+    options:
+      disableNameSuffixHash: true  # the ObjectStore refers to it by name

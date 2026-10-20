@@ -209,3 +209,28 @@ async def test_thread_store_ownership(pool: Pool) -> None:
 
     await store.delete(thread_id)
     assert await store.get(thread_id, "alice") is None
+
+
+async def test_one_run_at_a_time_takes_the_thread_lease(pool: Pool) -> None:
+    store = PostgresThreadStore(pool)
+    thread_id = uuid.uuid4()
+    await store.create(thread_id, "alice", None)
+    runs = [uuid.uuid4() for _ in range(10)]
+
+    # Ten pods racing for one thread: the conditional UPDATE lets exactly one through.
+    taken = await asyncio.gather(*(store.lease(thread_id, "alice", r, 60) for r in runs))
+    assert taken.count(True) == 1
+    holder = runs[taken.index(True)]
+    other = next(r for r in runs if r != holder)
+
+    assert not await store.lease(thread_id, "bob", uuid.uuid4(), 60)  # not his thread
+    assert await store.renew(thread_id, holder, 60)
+    assert not await store.renew(thread_id, other, 60)
+    await store.release(thread_id, other)  # not its lease: a no-op
+    assert not await store.lease(thread_id, "alice", other, 60)
+
+    await store.release(thread_id, holder)
+    assert await store.lease(thread_id, "alice", other, 0.1)
+    await asyncio.sleep(0.3)  # its pod died: nobody renewed it
+    assert not await store.renew(thread_id, holder, 60)
+    assert await store.lease(thread_id, "alice", holder, 60)

@@ -11,15 +11,17 @@ from collections import Counter, defaultdict
 from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from datetime import UTC, datetime, timedelta
-from typing import cast
+from typing import Any, cast
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, SystemMessage
+from langchain_core.runnables import Runnable
 from langgraph.config import get_config
 from langgraph.runtime import Runtime
 from langgraph.store.base import BaseStore, Item
 from langgraph.store.postgres.aio import AsyncPostgresStore
 from psycopg_pool import AsyncConnectionPool
+from pydantic import BaseModel
 
 from chatbot.config import RunContext
 from chatbot.jobs import JobQueue, MemoryPush
@@ -72,14 +74,28 @@ def after_cursor(messages: Sequence[AnyMessage], cursor: Item | None) -> list[An
     return list(messages[ids.index(last) + 1 :]) if last in ids else list(messages)
 
 
+def structured(
+    model: BaseChatModel, schema: type[BaseModel], fallback: BaseChatModel | None
+) -> Runnable[Any, Any]:
+    runnable = model.with_structured_output(schema)
+    return (
+        runnable.with_fallbacks([fallback.with_structured_output(schema)]) if fallback else runnable
+    )
+
+
 class MemoryWriter:
     """Pushes threads' turns into long-term memories, in the background."""
 
     def __init__(
-        self, model: BaseChatModel, concurrency: int = 2, queue: JobQueue | None = None
+        self,
+        model: BaseChatModel,
+        concurrency: int = 2,
+        queue: JobQueue | None = None,
+        fallback: BaseChatModel | None = None,
     ) -> None:
-        self.extract = model.with_structured_output(Facts)
-        self.decide = model.with_structured_output(Changes)
+        """`fallback` (FALLBACK_MODEL) answers when `model` fails (Phase 9)."""
+        self.extract = structured(model, Facts, fallback)
+        self.decide = structured(model, Changes, fallback)
         self._locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
         # Each push holds a pooled connection for its lock while it waits on the model, so an
         # unbounded number of them would take every connection, from chat requests too (12

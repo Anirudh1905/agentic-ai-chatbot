@@ -228,3 +228,4 @@ data/*
 # The kind overlay's secrets, written from .env by make secrets (Phase 9).
 deploy/local/secrets.env
 deploy/local/ca-bundle.pem
+deploy/local/backup-store.env

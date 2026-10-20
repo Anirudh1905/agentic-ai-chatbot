@@ -24,6 +24,16 @@ spec:
       # create a throwaway one each).
       postInitTemplateSQL:
         - CREATE EXTENSION IF NOT EXISTS vector
+  # Backups (Phase 9, backup.yaml): every WAL segment goes to the ObjectStore as it fills, or
+  # after at most 5 minutes, so a restore loses at most the last 5 minutes.
+  plugins:
+    - name: barman-cloud.cloudnative-pg.io
+      isWALArchiver: true
+      parameters:
+        barmanObjectName: backups
+  postgresql:
+    parameters:
+      archive_timeout: 5min
   resources:
     requests: {cpu: 100m, memory: 256Mi}
 ---

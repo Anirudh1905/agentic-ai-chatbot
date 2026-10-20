@@ -34,6 +34,7 @@ from chatbot.memory.long_term import MemoryWriter
 from chatbot.memory.threads import PostgresThreadStore
 from chatbot.observability.logs import configure_logging
 from chatbot.observability.metrics import QUEUE_DEPTH, QUEUE_JOB_AGE
+from chatbot.reliability.breaker import Breakers
 from chatbot.storage.db import open_pool
 from chatbot.storage.embeddings import build_embeddings
 from chatbot.storage.langgraph import build_checkpointer, build_store
@@ -106,7 +107,9 @@ async def serve() -> None:
     start_http_server(settings.worker_metrics_port)
     pool = await open_pool(settings)
     checkpointer = build_checkpointer(pool)
-    store = build_store(pool, settings, build_embeddings(settings))
+    # Shared in Redis with the API pods (reliability/breaker.py).
+    breakers = Breakers.shared(settings)
+    store = build_store(pool, settings, build_embeddings(settings, breakers))
     queue = SqsJobQueue(settings)
     await queue.open()
 
@@ -116,6 +119,9 @@ async def serve() -> None:
 
     writer = MemoryWriter(
         build_llm(settings, settings.memory_model, streaming=False),
+        fallback=build_llm(settings, settings.fallback_model, streaming=False)
+        if settings.fallback_model
+        else None,
         concurrency=settings.memory_write_concurrency,
         queue=queue,  # the idle scan enqueues; the worker runs what it receives
     )

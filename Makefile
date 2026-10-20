@@ -1,4 +1,4 @@
-.PHONY: dev worker ui tilt langfuse cluster cluster-delete secrets test test-unit lint fmt typecheck up down check migrate ingest eval eval-calibrate eval-check retention
+.PHONY: dev worker ui tilt langfuse cluster cluster-delete secrets restore restore-test test test-unit lint fmt typecheck up down check migrate ingest eval eval-calibrate eval-check retention
 
 dev:
 	uv run uvicorn chatbot.api.main:app --reload
@@ -15,7 +15,7 @@ tilt:
 
 # Langfuse only (Docker Compose); everything else runs in the cluster.
 langfuse:
-	docker compose up -d
+	docker compose -f ops/langfuse/docker-compose.yml up -d
 
 # The local Kubernetes cluster (kind) and the services it runs on: Envoy Gateway,
 # CloudNativePG, kube-prometheus-stack. Run once; safe to run again.
@@ -26,6 +26,14 @@ cluster-delete:
 	kind delete cluster --name chatbot
 
 # deploy/local/secrets.env (gitignored) from .env: the keys the cluster's Secret holds.
+# Postgres backups (Phase 9): restore into a second cluster, postgres-restore (TARGET: a time,
+# e.g. TARGET="2026-10-20 09:30:00+00"; the latest without), and the point-in-time restore test.
+restore:
+	./deploy/restore.sh "$(TARGET)"
+
+restore-test:
+	./deploy/restore-test.sh
+
 secrets:
 	./deploy/local/make-secrets.sh
 
@@ -79,4 +87,4 @@ check: lint typecheck test
 up: langfuse
 
 down:
-	docker compose down
+	docker compose -f ops/langfuse/docker-compose.yml down

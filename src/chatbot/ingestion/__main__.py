@@ -8,6 +8,7 @@ from pathlib import Path
 from chatbot.config import get_settings
 from chatbot.ingestion.pipeline import ingest_path
 from chatbot.observability.logs import configure_logging
+from chatbot.reliability.breaker import Breakers
 from chatbot.storage.db import open_pool
 from chatbot.storage.embeddings import build_embeddings
 
@@ -17,7 +18,9 @@ async def main(path: Path, prune: bool) -> int:
     configure_logging(settings)
     pool = await open_pool(settings)
     try:
-        results = await ingest_path(pool, build_embeddings(settings), settings, path, prune)
+        # The shared breaker: while the API has found the embeddings down, ingest fails fast.
+        embeddings = build_embeddings(settings, Breakers.shared(settings))
+        results = await ingest_path(pool, embeddings, settings, path, prune)
     finally:
         await pool.close()
     added = sum(r.added for r in results)

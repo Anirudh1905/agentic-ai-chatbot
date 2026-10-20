@@ -751,7 +751,7 @@
     {
       "id": 18,
       "type": "timeseries",
-      "title": "Refused with 429",
+      "title": "Refused: rate limits and the budget (429), a busy thread (409)",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -759,7 +759,7 @@
       "gridPos": {
         "x": 0,
         "y": 57,
-        "w": 24,
+        "w": 12,
         "h": 7
       },
       "targets": [
@@ -788,6 +788,101 @@
           "mode": "multi"
         }
       }
+    },
+    {
+      "id": 19,
+      "type": "timeseries",
+      "title": "Circuit breakers open",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 57,
+        "w": 12,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max by (dependency) (chatbot_breaker_open)",
+          "legendFormat": "{{dependency}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "max": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "description": "1 while a dependency's breaker is open: its calls fail fast (models go to the fallback model, the knowledge base searches full text only, web search answers unavailable)"
+    },
+    {
+      "id": 20,
+      "type": "timeseries",
+      "title": "Postgres backups",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 64,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "time() - max(barman_cloud_cloudnative_pg_io_last_available_backup_timestamp{namespace=\"chatbot\"})",
+          "legendFormat": "since the last base backup"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max(cnpg_pg_stat_archiver_seconds_since_last_archival{namespace=\"chatbot\"})",
+          "legendFormat": "since the last WAL archived"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "description": "Time since the last base backup (nightly at 02:00) and since the last WAL segment was archived (every 5 minutes at most). A restore loses what came after the last archived segment."
     }
   ],
   "editable": true

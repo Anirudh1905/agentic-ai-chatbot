@@ -1,6 +1,6 @@
 # Scraping and alerts (Phase 9), for kube-prometheus-stack: a ServiceMonitor per workload with
 # metrics (every pod behind the Service is scraped, so the replica count doesn't matter), the
-# alert rules (Phase 8's seven and the queue's three), and the Grafana dashboard (a ConfigMap the
+# alert rules (Phase 8's seven, the queue's three, the circuit breakers' and the backups'), and the Grafana dashboard (a ConfigMap the
 # sidecar loads, generated in kustomization.yaml). Nothing pages yet: Alertmanager has no
 # receiver configured.
 ---
@@ -23,6 +23,17 @@ spec:
     matchLabels: {app: worker}
   endpoints:
     - {port: metrics, interval: 15s}
+---
+# Postgres (CloudNativePG's metrics port on each instance), for its backups and WAL archiving.
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: postgres
+spec:
+  selector:
+    matchLabels: {cnpg.io/cluster: postgres}
+  podMetricsEndpoints:
+    - {port: metrics, interval: 30s}
 ---
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
@@ -85,6 +96,31 @@ spec:
       annotations:
         summary: Calls to {{ $labels.model }} are failing
         description: '{{ $value | humanizePercentage }} of model calls raised over 10 minutes.'
+    - alert: ChatbotBreakerOpen
+      expr: max by (dependency) (chatbot_breaker_open) == 1
+      for: 1m
+      labels:
+        severity: warning
+      annotations:
+        summary: '{{ $labels.dependency }} is down: its circuit breaker is open'
+        description: 'Calls to {{ $labels.dependency }} fail fast. Models go to the fallback model, the knowledge base searches full text only, and web search answers unavailable.'
+    - alert: PostgresBackupMissing
+      expr: time() - max(barman_cloud_cloudnative_pg_io_last_available_backup_timestamp{namespace="chatbot"}) > 26 * 3600
+      for: 10m
+      labels:
+        severity: warning
+      annotations:
+        summary: No Postgres base backup in over a day
+        description: 'The last one finished {{ $value | humanizeDuration }} ago; the nightly ScheduledBackup (02:00) should have taken one.'
+    - alert: PostgresWALArchiveFailing
+      # The latest archiving attempt failed: its failure is more recent than its last success.
+      expr: max(cnpg_pg_stat_archiver_seconds_since_last_failure{namespace="chatbot"} < cnpg_pg_stat_archiver_seconds_since_last_archival{namespace="chatbot"})
+      for: 10m
+      labels:
+        severity: critical
+      annotations:
+        summary: Postgres can't archive its WAL
+        description: 'Nothing archived for {{ $value | humanizeDuration }}: a restore would lose everything since, and pg_wal keeps growing. Check MinIO and the plugin-barman-cloud sidecar.'
     - alert: ChatbotTokenSpike
       expr: 'sum(increase(chatbot_model_tokens_total[1h])) > 3 * sum(increase(chatbot_model_tokens_total[1d]
         offset 1h)) / 24

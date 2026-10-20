@@ -16,7 +16,8 @@ fi
 
 helm repo add cnpg https://cloudnative-pg.github.io/charts >/dev/null
 helm repo add prometheus-community https://prometheus-community.github.io/helm-charts >/dev/null
-helm repo update cnpg prometheus-community >/dev/null
+helm repo add jetstack https://charts.jetstack.io >/dev/null
+helm repo update cnpg prometheus-community jetstack >/dev/null
 
 helm upgrade --install eg oci://docker.io/envoyproxy/gateway-helm --version 1.9.2 \
   --kube-context "$CONTEXT" --namespace envoy-gateway-system --create-namespace \
@@ -24,6 +25,13 @@ helm upgrade --install eg oci://docker.io/envoyproxy/gateway-helm --version 1.9.
 helm upgrade --install cnpg cnpg/cloudnative-pg --version 0.29.1 \
   --kube-context "$CONTEXT" --namespace cnpg-system --create-namespace \
   --values deploy/helm/cloudnative-pg.yaml --wait
+# Postgres backups (Phase 9): CNPG's Barman Cloud plugin, beside the operator; its TLS
+# certificates come from cert-manager.
+helm upgrade --install cert-manager jetstack/cert-manager --version v1.21.2 \
+  --kube-context "$CONTEXT" --namespace cert-manager --create-namespace \
+  --set crds.enabled=true --wait
+helm upgrade --install barman-cloud cnpg/plugin-barman-cloud --version 0.8.1 \
+  --kube-context "$CONTEXT" --namespace cnpg-system --wait
 helm upgrade --install monitoring prometheus-community/kube-prometheus-stack --version 92.10.1 \
   --kube-context "$CONTEXT" --namespace monitoring --create-namespace \
   --values deploy/helm/kube-prometheus-stack.yaml --wait --timeout 10m

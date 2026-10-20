@@ -18,9 +18,9 @@ The phase plans and as-built docs are in [docs/](docs/); the [Status](#status) t
 | [6. Long-term memory](docs/phase-6-long-term-memory.md) | Per-fact memories per user across threads: pushed at the token breach, after 30 idle minutes, or on request; recalled each turn, closest to the message | Built ([PR #7](https://github.com/Anirudh1905/agentic-ai-chatbot/pull/7)) |
 | [7. Eval gate](docs/phase-7-eval-gate.md) | Golden sets, a judge model (DeepEval) and a regression gate on every PR | Built ([PR #8](https://github.com/Anirudh1905/agentic-ai-chatbot/pull/8)) |
 | [8. Security and observability](docs/phase-8-security-observability.md) | Accounts and login (JWT), your own model key, Redis rate limits and token budgets, deleting a user's data, trace metadata, Prometheus metrics, a Grafana dashboard and alerts | Built ([PR #9](https://github.com/Anirudh1905/agentic-ai-chatbot/pull/9)) |
-| [9. Reliability and deployment](docs/phase-9-reliability-deployment.md) | Kubernetes (kind): 2 API replicas behind Envoy Gateway, memory pushes on an SQS queue run by a worker, CloudNativePG, kube-prometheus-stack, a kind smoke test in CI; then retries and fallbacks, cost controls, a load test | Deployment built (on `phase-9-reliability-deployment`); the rest planned |
+| [9. Reliability and deployment](docs/phase-9-reliability-deployment.md) | Kubernetes (kind): 2 API replicas behind Envoy Gateway, memory pushes on an SQS queue run by a worker, CloudNativePG, kube-prometheus-stack, a kind smoke test in CI; retries, circuit breakers and a fallback model, a per-thread lock, Postgres backups with a tested point-in-time restore; then cost controls and a load test | Deployment and reliability built (on `phase-9-reliability-deployment`); the rest planned |
 
-`make check` runs ruff, mypy and the tests (244 at the moment: unit, and integration against the cluster's Postgres and ElasticMQ). `make eval` runs the eval suites against the real model and writes `tests/evals/report.json`, which CI checks on every PR (see [Evals](#evals)).
+`make check` runs ruff, mypy and the tests (276 at the moment: unit, and integration against the cluster's Postgres, ElasticMQ and Redis). `make eval` runs the eval suites against the real model and writes `tests/evals/report.json`, which CI checks on every PR (see [Evals](#evals)).
 
 ## Repository layout
 
@@ -58,10 +58,11 @@ The stack runs on a local Kubernetes cluster ([kind](https://kind.sigs.k8s.io/))
 cp .env.example .env        # add OPENAI_API_KEY (and OPENAI_BASE_URL for a gateway)
 echo "JWT_SECRET=$(openssl rand -hex 32)" >> .env   # signs login tokens; without it every request gets 401
 uv sync --all-groups
-make cluster                # once: the kind cluster, Envoy Gateway, CloudNativePG, kube-prometheus-stack
+make cluster                # once: the kind cluster, Envoy Gateway, CloudNativePG (+ its backup plugin and
+                            # cert-manager), kube-prometheus-stack
 make secrets                # the cluster's Secret and trust store, from .env and this machine
-make tilt                   # Langfuse, the image, Postgres, Redis, ElasticMQ, migrations, the reranker model,
-                            # sample docs, 2 API pods, the worker and the chat UI
+make tilt                   # Langfuse, the image, Postgres (backed up to MinIO), Redis, ElasticMQ, migrations,
+                            # the reranker model, sample docs, 2 API pods, the worker and the chat UI
 ```
 
 Tilt's dashboard is at http://localhost:10350; it only ever deploys to the `kind-chatbot` context. Open the chat UI, create an account and log in. From there:
@@ -78,6 +79,7 @@ Tilt's dashboard is at http://localhost:10350; it only ever deploys to the `kind
 | pgweb (database browser) | http://localhost:8081 |
 | Redis (rate limits) | `localhost:6380`, port-forwarded |
 | ElasticMQ (the SQS queue) | `localhost:9324`, port-forwarded |
+| MinIO (Postgres backups) | http://localhost:9001, the keys in `deploy/local/backup-store.env` |
 
 Everything in the cluster comes in through one gateway on port 8088 (80 and 8080 are often taken). The host ports are for the tests, `make eval` and database tools, with the URLs in `.env.example`; pgweb browses the same database (chunks, threads, checkpoints, users, the memory store). A code change rebuilds the image and rolls the pods in about 20 s. Details, and what each piece is for, in [the Phase 9 doc](docs/phase-9-reliability-deployment.md#deployment).
 
@@ -235,7 +237,7 @@ HTTP client, OpenAI SDK, uvicorn access, `/healthz` and `/metrics` lines are hid
 
 ### Tracing
 
-Langfuse runs locally from `ops/langfuse/docker-compose.yml`, which `docker-compose.yml` includes. On first start it creates a project with fixed API keys, and `.env.example` already contains them, so every chat request is traced with no setup. The first `make tilt` pulls about 2 GB of images, and Langfuse takes a minute or two to become healthy. Pods reach it as `http://langfuse-web:3000`, through a Service Tilt points at the container (`deploy/local/langfuse-link.sh`).
+Langfuse runs locally from `ops/langfuse/docker-compose.yml` (`make langfuse`, or Tilt). On first start it creates a project with fixed API keys, and `.env.example` already contains them, so every chat request is traced with no setup. The first `make tilt` pulls about 2 GB of images, and Langfuse takes a minute or two to become healthy. Pods reach it as `http://langfuse-web:3000`, through a Service Tilt points at the container (`deploy/local/langfuse-link.sh`).
 
 The credentials in that file are local-only placeholders. To trace somewhere else, such as Langfuse Cloud, change the `LANGFUSE_*` values in `.env`.
 
@@ -243,7 +245,9 @@ Each run's trace is named `chat` or `resume`, grouped by thread (Langfuse's sess
 
 ### Metrics and alerts
 
-The API serves Prometheus metrics: requests and latency by route, time to first token, open streams, model latency, tokens and errors by model, tool calls by outcome, approval pauses and decisions, PII redactions by type, memory recall hits, 429s by limit, and the memory queue's depth and pushes. In the cluster they're on a separate port (`METRICS_PORT`) that the gateway doesn't route, and Prometheus scrapes every API pod and the worker; outside it, `GET /metrics`. Grafana charts them on the "Chatbot" dashboard, and ten alerts (API or worker down, error rate, slow first token, slow or failing model, token spike, PII in replies, pushes dead-lettered or stuck) are a `PrometheusRule` in `deploy/base/monitoring.yaml`. They show as firing in Prometheus, on the dashboard and in Alertmanager; nothing pages. Details in [the Phase 8 doc](docs/phase-8-security-observability.md#observability) and [Phase 9](docs/phase-9-reliability-deployment.md#deployment).
+The API serves Prometheus metrics: requests and latency by route, time to first token, open streams, model latency, tokens and errors by model, tool calls by outcome, approval pauses and decisions, PII redactions by type, memory recall hits, refusals by limit (429s, and 409s for a busy thread), the memory queue's depth and pushes, and open circuit breakers. In the cluster they're on a separate port (`METRICS_PORT`) that the gateway doesn't route, and Prometheus scrapes every API pod, the worker and Postgres; outside it, `GET /metrics`. Grafana charts them on the "Chatbot" dashboard, and thirteen alerts (API or worker down, error rate, slow first token, slow or failing model, token spike, PII in replies, pushes dead-lettered or stuck, a circuit breaker open, no Postgres backup in a day, WAL archiving failing) are a `PrometheusRule` in `deploy/base/monitoring.yaml`. They show as firing in Prometheus, on the dashboard and in Alertmanager; nothing pages. Details in [the Phase 8 doc](docs/phase-8-security-observability.md#observability) and [Phase 9](docs/phase-9-reliability-deployment.md#deployment).
+
+Model calls that time out or fail are retried once, then go to the fallback model (`gpt-4.1`); circuit breakers, shared in Redis, skip a model, the embeddings or web search while they're down. Postgres archives its WAL to MinIO continuously and takes a base backup nightly; `make restore TARGET="…"` restores to a point in time into a second cluster, and `make restore-test` proves it. Details in [Reliability](docs/phase-9-reliability-deployment.md#reliability).
 
 ## Endpoints
 
@@ -300,7 +304,11 @@ Set in `.env` (see `.env.example`), the environment, or, for secrets, files in `
 | `MEMORY_TTL_CHECK_EVERY_MINUTES` | `1` | How often to look for threads whose TTL ran out |
 | `MEMORY_MODEL` | `gpt-5-mini` | Lists the facts in a thread's turns and decides what each one changes |
 | `MEMORY_RECALL_LIMIT` | `10` | Long-term memories recalled into a thread |
-| `REQUEST_TIMEOUT` | `30` | Seconds per model call (a reply, a summary, a memory push); a call that times out is retried twice |
+| `REQUEST_TIMEOUT` | `30` | Seconds per model call (a reply, a summary, a memory push) |
+| `MODEL_MAX_RETRIES` | `1` | Retries of a model call that timed out, couldn't connect, or got a 429 or 5xx (`ModelRetryMiddleware`) |
+| `FALLBACK_MODEL` | `gpt-4.1` | Answers on the same endpoint when `MODEL` fails (`ModelFallbackMiddleware`); memory pushes fall back to it too. Empty: no fallback |
+| `BREAKER_FAILURES` / `BREAKER_WINDOW_SECONDS` / `BREAKER_COOLDOWN_SECONDS` | `5` / `60` / `30` | Circuit breakers per model, the embeddings and web search, shared in Redis: this many outages within the window open one for the cooldown |
+| `THREAD_LEASE_SECONDS` | `60` | A run's lock on its thread, renewed every third of it; a second message meanwhile gets 409. A pod that dies frees its threads this long after |
 | `MEMORY_WRITE_CONCURRENCY` | `2` | Pushes running at once per process (each holds a pooled connection) |
 | `SQS_QUEUE_URL` / `SQS_DEAD_LETTER_QUEUE_URL` | unset | The memory-push queue and its dead-letter queue. Unset: pushes run in the API process |
 | `SQS_ENDPOINT_URL` | unset (AWS) | ElasticMQ's address locally (`http://localhost:9324`, or `http://elasticmq:9324` in the cluster) |

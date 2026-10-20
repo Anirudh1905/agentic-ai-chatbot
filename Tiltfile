@@ -47,9 +47,25 @@ k8s_resource('elasticmq', objects=[generated('ConfigMap', 'elasticmq-config')], 
 k8s_resource('pgweb', labels=['data'], resource_deps=['migrate'], port_forwards=['8081:8081'],
              links=[link('http://localhost:8081', 'pgweb')])
 
+# Postgres backups: MinIO holds them (its console: localhost:9001, the keys in
+# deploy/local/backup-store.env); the ObjectStore and the nightly ScheduledBackup tell
+# CloudNativePG where and when. Restore: deploy/restore.sh.
+k8s_resource(
+    'minio',
+    objects=['minio:persistentvolumeclaim', 'backup-store:secret', 'backups:objectstore',
+             'postgres-nightly:scheduledbackup'],
+    labels=['data'],
+    port_forwards=['9001:9001'],
+    links=[link('http://localhost:9001', 'MinIO console')],
+)
+
 # One-off work, in order: the schema, the reranker model, the sample knowledge base.
 k8s_resource('migrate', labels=['jobs'], resource_deps=['postgres'])
-k8s_resource('reranker-model', objects=['reranker-model:persistentvolumeclaim'], labels=['jobs'])
+k8s_resource('backup-bucket', labels=['jobs'], resource_deps=['minio'])
+# The model's volume is a resource of its own: rerunning a Job deletes and recreates its
+# resource's objects, and the volume would go with it (stuck Terminating while the API mounts it).
+k8s_resource(new_name='reranker-volume', objects=['reranker-model:persistentvolumeclaim'], labels=['jobs'])
+k8s_resource('reranker-model', labels=['jobs'], resource_deps=['reranker-volume'])
 k8s_resource('ingest', labels=['jobs'], resource_deps=['migrate'])
 k8s_resource('retention', labels=['jobs'], trigger_mode=TRIGGER_MODE_MANUAL, auto_init=False)
 
@@ -73,7 +89,7 @@ k8s_resource(
 # Grafana and Alertmanager themselves are kube-prometheus-stack, installed by `make cluster`.
 k8s_resource(
     new_name='monitoring',
-    objects=['api:servicemonitor', 'worker:servicemonitor', 'chatbot:prometheusrule', generated('ConfigMap', 'chatbot-dashboard'),
+    objects=['api:servicemonitor', 'worker:servicemonitor', 'postgres:podmonitor', 'chatbot:prometheusrule', generated('ConfigMap', 'chatbot-dashboard'),
              'grafana:httproute', 'prometheus:httproute', 'alertmanager:httproute'],
     labels=['monitoring'],
     links=[link('http://localhost:8088/grafana/d/chatbot', 'Grafana'), link('http://localhost:8088/prometheus/alerts', 'Alerts'),
@@ -81,7 +97,8 @@ k8s_resource(
 )
 
 # Langfuse stays in Docker Compose; this links it into the cluster.
-docker_compose('./docker-compose.yml')
+# The file's own project name: Tilt would name the project after its folder (langfuse).
+docker_compose('./ops/langfuse/docker-compose.yml', project_name='agentic-ai-chatbot')
 dc_resource('langfuse-web', labels=['langfuse'], links=[link('http://localhost:3000', 'Langfuse')])
 for name in ['langfuse-worker', 'langfuse-postgres', 'langfuse-clickhouse', 'langfuse-minio', 'langfuse-redis']:
     dc_resource(name, labels=['langfuse'])

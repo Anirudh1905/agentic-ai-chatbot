@@ -40,6 +40,26 @@ class Settings(BaseSettings):
     # hung for 126 s at 120).
     request_timeout: float = 30.0
 
+    # When a call to MODEL fails, it goes to this one instead, on the same endpoint
+    # (ModelFallbackMiddleware, Phase 9). Memory pushes fall back to it too. Empty turns
+    # fallbacks off.
+    fallback_model: str = "gpt-4.1"
+    # Retries of a model call that failed with an outage (timeouts, connection errors, 429s,
+    # 5xx), before the fallback (ModelRetryMiddleware). One: a stalled call takes
+    # REQUEST_TIMEOUT each time, and the fallback answers sooner than a third try.
+    model_max_retries: int = 1
+    # Circuit breakers (reliability/breaker.py), per model, the embeddings and web search,
+    # shared in Redis by every API pod and the worker: this many failures within the window
+    # open one for the cooldown; then one call probes, and its success closes it.
+    breaker_failures: int = 5
+    breaker_window_seconds: int = 60
+    breaker_cooldown_seconds: int = 30
+
+    # One run at a time per thread (Phase 9, api/leases.py): a run's lease on its thread lasts
+    # this long and is renewed every third of it, so a pod that dies frees its threads this
+    # long after.
+    thread_lease_seconds: float = 60.0
+
     # Cap on model calls per request (each is followed by a round of tool calls), so a
     # confused model can't loop forever.
     max_model_calls: int = 6

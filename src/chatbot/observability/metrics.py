@@ -74,8 +74,14 @@ MEMORY_RECALLS = Counter(
 )
 LIMITED = Counter(
     "chatbot_limited_total",
-    "Requests refused with 429: a rate limit (user, ip, login) or the token budget",
+    "Requests refused: 429 for a rate limit (user, ip, login) or the token budget, 409 for a "
+    "thread still answering (thread_busy)",
     ["limit"],
+)
+LEASE_RENEWAL_FAILURES = Counter(
+    "chatbot_thread_lease_renewal_failures_total",
+    "Runs that couldn't renew their thread's lease (the database unreachable, or the lease "
+    "lost); the run carries on",
 )
 
 # Memory pushes and their queue (Phase 9). The worker runs the pushes and exports the queue's
@@ -100,6 +106,15 @@ QUEUE_JOB_AGE = Histogram(
     buckets=(0.5, 1, 5, 15, 60, 300, 900, 3600),
 )
 
+# Circuit breakers (Phase 9, reliability/breaker.py). The state is shared in Redis; each
+# process reports what it last saw, so the dashboard takes the max. (Calls to the fallback
+# model show in the model call metrics, under its name.)
+BREAKER_OPEN = Gauge(
+    "chatbot_breaker_open",
+    "1 while a dependency's circuit breaker is open (a model, embeddings, web_search)",
+    ["dependency"],
+)
+
 # Every fixed label set starts at 0. A series that first appears already at 1 has no earlier
 # sample, so rate() and increase() miss that first count, and a ratio with no matching series
 # is blank instead of 0. (PII types and tool names start at 0 where they're defined.)
@@ -109,7 +124,7 @@ for _decision in ("approve", "edit", "reject"):
     APPROVAL_DECISIONS.labels(_decision)
 for _result in ("hit", "miss"):
     MEMORY_RECALLS.labels(_result)
-for _limit in ("user", "ip", "login", "budget"):
+for _limit in ("user", "ip", "login", "budget", "thread_busy"):
     LIMITED.labels(_limit)
 for _kind in ("summary", "idle", "remember"):
     for _outcome in ("ok", "failed"):

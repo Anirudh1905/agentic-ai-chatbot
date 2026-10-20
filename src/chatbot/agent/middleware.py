@@ -32,6 +32,7 @@ from chatbot.observability.metrics import (
     TOOL_CALLS,
 )
 from chatbot.prompts import as_data, load_prompt
+from chatbot.reliability.breaker import Breakers
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +97,27 @@ class ModelCallMiddleware(AgentMiddleware[AgentState[Any], Any]):
                 MODEL_TOKENS.labels(model, "input").inc(usage["input_tokens"])
                 MODEL_TOKENS.labels(model, "output").inc(usage["output_tokens"])
         return response
+
+
+class ModelBreaker(AgentMiddleware[AgentState[Any], Any]):
+    """Each model call through its model's circuit breaker (reliability/breaker.py). While a
+    breaker is open its calls fail at once with BreakerOpen, and ModelFallbackMiddleware moves
+    on to the fallback model. A user's own endpoint isn't ours to count."""
+
+    def __init__(self, breakers: Breakers) -> None:
+        super().__init__()
+        self.breakers = breakers
+
+    async def awrap_model_call(
+        self,
+        request: ModelRequest,
+        handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
+    ) -> ModelResponse:
+        context = request.runtime.context if request.runtime else None
+        if isinstance(context, RunContext) and context.credentials:
+            return await handler(request)
+        model = getattr(request.model, "model_name", None) or type(request.model).__name__
+        return await self.breakers.get(model).call(lambda: handler(request))
 
 
 class ToolCallMetrics(AgentMiddleware[AgentState[Any], Any]):

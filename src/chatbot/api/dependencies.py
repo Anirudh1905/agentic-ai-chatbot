@@ -21,6 +21,7 @@ from chatbot.jobs import SqsJobQueue
 from chatbot.memory.long_term import MemoryWriter
 from chatbot.memory.threads import PostgresThreadStore, ThreadStore
 from chatbot.observability.tracing import build_callbacks
+from chatbot.reliability.breaker import Breakers
 from chatbot.storage.db import Pool, open_pool
 from chatbot.storage.embeddings import build_embeddings
 from chatbot.storage.langgraph import build_checkpointer, build_store
@@ -53,7 +54,9 @@ class Resources:
                 self.pool = await open_pool(settings)
             # Their tables come from `python -m chatbot.migrate`, run before this process.
             checkpointer = build_checkpointer(self.pool)
-            embeddings = build_embeddings(settings)
+            # Shared in Redis with the other pods and the worker (reliability/breaker.py).
+            breakers = Breakers.shared(settings)
+            embeddings = build_embeddings(settings, breakers)
             store = build_store(self.pool, settings, embeddings)
             if settings.background_jobs:
                 await store.start_ttl_sweeper()
@@ -61,7 +64,7 @@ class Resources:
             if reranker:
                 # Load the model now rather than during the first search.
                 await asyncio.to_thread(reranker.load)
-            tools = build_tools(settings, self.pool, embeddings, reranker)
+            tools = build_tools(settings, self.pool, embeddings, reranker, breakers)
             self.checkpointer = checkpointer
             self.threads = PostgresThreadStore(self.pool)
             self.store = store
@@ -74,6 +77,9 @@ class Resources:
                     # REQUEST_TIMEOUT, though nothing waits on a push: a call takes 3-6 s, and a
                     # stalled gateway call is better retried soon (at 120 s, one push took 6 min).
                     build_llm(settings, settings.memory_model, streaming=False),
+                    fallback=build_llm(settings, settings.fallback_model, streaming=False)
+                    if settings.fallback_model
+                    else None,
                     concurrency=settings.memory_write_concurrency,
                     queue=self.queue,
                 )
@@ -84,6 +90,7 @@ class Resources:
                 store=store,
                 memory_writer=self.writer,
                 usage=get_limits(),
+                breakers=breakers,
                 interrupt_on=interrupt_on(tools, settings.hitl_sensitive_terms)
                 if settings.hitl_enabled
                 else None,

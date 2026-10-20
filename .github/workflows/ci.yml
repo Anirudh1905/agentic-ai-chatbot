@@ -26,12 +26,20 @@ jobs:
         image: softwaremill/elasticmq-native:1.6.11
         ports:
           - 9324:9324
+      # The circuit breakers' shared state (Phase 9).
+      redis:
+        image: redis:7.4-alpine
+        ports:
+          - 6379:6379
     env:
       TEST_DATABASE_URL: postgresql://chatbot:chatbot@localhost:5432/chatbot
       TEST_SQS_ENDPOINT: http://localhost:9324
-      # Fail instead of skipping the integration tests if Postgres or ElasticMQ isn't reachable.
+      TEST_REDIS_URL: redis://localhost:6379/0
+      # Fail instead of skipping the integration tests if Postgres, ElasticMQ or Redis isn't
+      # reachable.
       REQUIRE_DB: "1"
       REQUIRE_SQS: "1"
+      REQUIRE_REDIS: "1"
     steps:
       - uses: actions/checkout@v4
         with:

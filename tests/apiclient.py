@@ -30,6 +30,7 @@ from chatbot.api.main import app
 from chatbot.api.security import create_access_token
 from chatbot.config import Settings, get_settings
 from chatbot.memory.long_term import MemoryWriter
+from chatbot.reliability.breaker import Breakers
 
 # Tokens are signed with this secret; the API under test verifies them with it.
 AUTH = Settings(jwt_secret="test-secret-that-is-long-enough-for-hs256")
@@ -54,6 +55,8 @@ def client_for(
     summarizer: BaseChatModel | None = None,
     memory_writer: MemoryWriter | None = None,
     usage: UsageLimits | None = None,
+    fallback: BaseChatModel | None = None,
+    breakers: Breakers | None = None,
     **settings: Any,
 ) -> Iterator[TestClient]:
     """`usage`: rate limits and the token budget (in memory), off unless a test passes them."""
@@ -68,6 +71,8 @@ def client_for(
         store=store,
         memory_writer=memory_writer,
         usage=usage,
+        fallback=fallback,
+        breakers=breakers,
     )
     threads = InMemoryThreadStore()
     app.dependency_overrides[get_graph] = lambda: graph

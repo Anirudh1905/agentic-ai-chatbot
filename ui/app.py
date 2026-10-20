@@ -20,7 +20,11 @@ TOOL_LABELS = {
 
 
 class StreamError(Exception):
-    pass
+    def __init__(self, message: str, refused: bool = False) -> None:
+        super().__init__(message)
+        # Turned down before the run started (rate limited, the chat still answering): nothing
+        # was sent to the bot.
+        self.refused = refused
 
 
 def api() -> httpx.Client:
@@ -164,9 +168,11 @@ def new_thread() -> None:
 def stream_events(path: str, body: dict[str, Any]) -> Iterator[tuple[str, dict[str, Any]]]:
     with api() as client, connect_sse(client, "POST", path, json=body) as source:
         if source.response.status_code != 200:
-            # Refused before the run started: rate limited (429), or not signed in (401).
+            # Refused before the run started: rate limited (429), the chat still answering
+            # an earlier message (409), or not signed in (401).
             source.response.read()
-            raise StreamError(source.response.json().get("detail", source.response.text))
+            detail = source.response.json().get("detail", source.response.text)
+            raise StreamError(detail, refused=True)
         for sse in source.iter_sse():
             data = json.loads(sse.data)
             if sse.event == "error":
@@ -297,6 +303,21 @@ if st.session_state.summary:
         st.markdown(st.session_state.summary)
 
 
+# Yielded in place of a token when the API sends RESET: a model call failed partway through
+# the reply, and a retry or the fallback model starts it over.
+RESET = object()
+
+
+def write_reply(pieces: Iterator[Any]) -> str:
+    """Show the reply as it streams in (st.write_stream can't take text back on a RESET)."""
+    slot, reply = st.empty(), ""
+    for piece in pieces:
+        reply = "" if piece is RESET else reply + piece
+        slot.markdown(reply + "▌")
+    slot.markdown(reply)
+    return reply
+
+
 def run_assistant(path: str, body: dict[str, Any]) -> None:
     """Stream one assistant turn (a new message, or a resume after approval) into the page."""
     with st.chat_message("assistant"):
@@ -306,7 +327,7 @@ def run_assistant(path: str, body: dict[str, Any]) -> None:
         tools_used: list[str] = []
         pending: dict[str, Any] = {}
 
-        def tokens() -> Iterator[str]:
+        def tokens() -> Iterator[Any]:
             for event, data in stream_events(path, body):
                 if event == "tool_start":
                     tools_used.append(data["name"])
@@ -318,6 +339,8 @@ def run_assistant(path: str, body: dict[str, Any]) -> None:
                     sources.extend(data["sources"])
                 elif event == "interrupt":
                     pending.update(data)
+                elif event == "reset":
+                    yield RESET
                 elif event == "token":
                     yield data["token"]
 
@@ -333,10 +356,15 @@ def run_assistant(path: str, body: dict[str, Any]) -> None:
                 status.update(label="Searched", state="complete", expanded=False)
             else:
                 status_slot.empty()
-            reply = st.write_stream(itertools.chain([first], stream))
+            reply = write_reply(itertools.chain([first], stream))
         except StreamError as e:
             status_slot.empty()
-            st.error(str(e))
+            if e.refused and "message" in body:
+                # Not sent, so it isn't part of the chat; show it so it isn't lost either.
+                st.session_state.messages.pop()
+                st.error(f"{e}\n\nNot sent: “{body['message']}”")
+            else:
+                st.error(str(e))
         except httpx.HTTPError:
             status_slot.empty()
             st.error(f"Can't reach the API at {API_URL}. Is it running?")

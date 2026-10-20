@@ -5,10 +5,12 @@ import re
 import secrets
 from collections.abc import Iterator, Sequence
 from dataclasses import replace
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
+import httpx
+import openai
 from langchain_core.callbacks import CallbackManagerForLLMRun
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage
@@ -94,6 +96,44 @@ def make_lookup_tool() -> BaseTool:
         return f"result for {query}", [{"type": "kb", "cite_as": "Doc › Section", "doc_id": "d"}]
 
     return lookup
+
+
+def outage(kind: str = "timeout") -> openai.APIError:
+    """The model provider failing: a timeout, a 5xx, or a refused request (not an outage)."""
+    request = httpx.Request("POST", "https://models.example/v1/chat/completions")
+    if kind == "timeout":
+        return openai.APITimeoutError(request=request)
+    status = {"server_error": 503, "bad_request": 400, "rate_limit": 429}[kind]
+    response = httpx.Response(status, request=request)
+    cls = {503: openai.InternalServerError, 400: openai.BadRequestError, 429: openai.RateLimitError}
+    return cls[status](kind, response=response, body=None)
+
+
+class FailingChatModel(BaseChatModel):
+    """Fails every call with `error`, as the provider would; streaming, it sends `partial`
+    first, word by word, as if it failed partway through the reply."""
+
+    model_name: str = "primary-model"
+    error: Any = None
+    partial: str = ""
+    calls: int = 0
+
+    @property
+    def _llm_type(self) -> str:
+        return "failing"
+
+    def bind_tools(self, tools: Sequence[Any], **kwargs: Any) -> "FailingChatModel":
+        return self
+
+    def _generate(self, *args: Any, **kwargs: Any) -> ChatResult:
+        self.calls += 1
+        raise self.error or outage()
+
+    def _stream(self, *args: Any, **kwargs: Any) -> Iterator[ChatGenerationChunk]:
+        self.calls += 1
+        for word in self.partial.split():
+            yield ChatGenerationChunk(message=AIMessageChunk(content=word + " "))
+        raise self.error or outage()
 
 
 class Crash(BaseException):
@@ -194,6 +234,7 @@ class FactMemoryModel(BaseChatModel):
 class InMemoryThreadStore:
     def __init__(self) -> None:
         self.rows: dict[UUID, Thread] = {}
+        self.leases: dict[UUID, tuple[UUID, datetime]] = {}  # thread: run, until
 
     async def create(self, thread_id: UUID, user_id: str, title: str | None) -> Thread:
         now = datetime.now(UTC)
@@ -221,6 +262,27 @@ class InMemoryThreadStore:
 
     async def delete(self, thread_id: UUID) -> None:
         self.rows.pop(thread_id, None)
+        self.leases.pop(thread_id, None)
+
+    async def lease(self, thread_id: UUID, user_id: str, run_id: UUID, seconds: float) -> bool:
+        thread = self.rows.get(thread_id)
+        held = self.leases.get(thread_id)
+        if not thread or thread.user_id != user_id or (held and held[1] > datetime.now(UTC)):
+            return False
+        self.leases[thread_id] = (run_id, datetime.now(UTC) + timedelta(seconds=seconds))
+        return True
+
+    async def renew(self, thread_id: UUID, run_id: UUID, seconds: float) -> bool:
+        held = self.leases.get(thread_id)
+        if not held or held[0] != run_id:
+            return False
+        self.leases[thread_id] = (run_id, datetime.now(UTC) + timedelta(seconds=seconds))
+        return True
+
+    async def release(self, thread_id: UUID, run_id: UUID) -> None:
+        held = self.leases.get(thread_id)
+        if held and held[0] == run_id:
+            del self.leases[thread_id]
 
     async def ids_for_user(self, user_id: str) -> list[UUID]:
         return [t.id for t in self.rows.values() if t.user_id == user_id]

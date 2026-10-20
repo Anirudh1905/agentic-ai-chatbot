@@ -4,11 +4,11 @@
 
 [← Phase 8](phase-8-security-observability.md) · [Overview](../README.md)
 
-**Status: in progress.** Deployment is built (below); reliability, cost and latency, and proof follow, in that order, each designed when it starts. Like Phases 7 and 8, this is for a production-ready demo: a local Kubernetes cluster, no real users or on-call. Items already done in earlier phases are ticked.
+**Status: in progress.** Deployment and reliability are built (below); cost and latency, and proof follow, in that order, each designed when it starts. Like Phases 7 and 8, this is for a production-ready demo: a local Kubernetes cluster, no real users or on-call. Items already done in earlier phases are ticked.
 
 | Area | Planned | Section |
 | --- | --- | --- |
-| Reliability | Retries and circuit breakers on every external call, a fallback model, a per-thread lock, Postgres backups | [Reliability](#reliability) |
+| Reliability | Built: retries, circuit breakers and a fallback model on the model calls, breakers on the embeddings and web search, a per-thread lock, Postgres backups with a tested point-in-time restore | [Reliability](#reliability) |
 | Cost and latency | Prompt caching, a cap on retrieved context, a web search cache | [Cost and latency](#cost-and-latency) |
 | Deployment | Built: the app on Kubernetes (kind): an image, 2 API replicas behind Envoy Gateway, a worker on an SQS queue, a migrate Job, CloudNativePG, kube-prometheus-stack | [Deployment](#deployment) |
 | Proof | A load test, a provider-outage test, a runbook | [Exit criteria](#exit-criteria) |
@@ -133,7 +133,7 @@ make tilt      # tilt up: Langfuse, the image, everything in deploy/local
   - **pgweb on `http://localhost:8081`**, a database browser (a local-only Deployment).
   - Everything else is behind the gateway on `http://localhost:8088`.
 - Every object belongs to a named Tilt resource: `config` holds the namespace, the generated settings, trust store and Secret; the others sit with what uses them. Moving an object between Tilt resources while Tilt runs deletes it, so change those groupings with Tilt stopped.
-- `docker-compose.yml` keeps only Langfuse (through its include).
+- The root `docker-compose.yml` is gone; Langfuse runs from `ops/langfuse/docker-compose.yml`, which keeps the old project name so its containers and volumes carry over.
 - `make secrets` writes `deploy/local/secrets.env` from `.env` (`OPENAI_API_KEY`, `OPENAI_BASE_URL`, `JWT_SECRET`, the Langfuse keys) and `deploy/local/ca-bundle.pem`, the trust store the pods use: this Mac's keychains, so a corporate TLS-inspecting proxy's root is trusted inside the containers too (the system bundle on Linux). The overlay's ConfigMap holds the rest; `DATABASE_URL` comes from CloudNativePG's `postgres-app` Secret.
 - Running without Kubernetes stays possible with `make dev`, with Postgres and Redis started by hand.
 
@@ -197,16 +197,147 @@ There is no chat call: CI has no model access. On failure it prints the pods, ev
 
 ### Not in this piece
 
-- **Reliability, then cost and latency, then proof**, in that order, each with its own design ([below](#reliability)).
+- **Reliability** ([below](#reliability)), **then cost and latency, then proof**, in that order, each with its own design.
 - **Production gaps, to document, not build:** the real SQS queues and their IAM permissions (Terraform), in place of ElasticMQ; autoscaling on in-flight requests; Sealed Secrets or External Secrets instead of a generated Secret; storage several nodes can read, for the model volume on a multi-node cluster; Alertmanager routing; TLS on the gateway.
 
 ## Reliability
 
-- [ ] Retries with backoff and circuit breakers on the model, web search and embedding calls. Searches already retry (`ToolRetryMiddleware`, `tools/registry.py`); the model needs `ModelRetryMiddleware` or the client's `max_retries`; circuit breakers are still to add
-- [ ] Fallback model on provider outage (`ModelFallbackMiddleware`). The gateway stalls gpt-5 calls under load (Phase 6 and 7 measurements), so this matters here
-- [x] Graceful degradation: web search down → answer from the knowledge base and say so (`ToolRetryMiddleware` returns an error result the model relays)
-- [ ] A per-thread lock: two requests on one thread both read the same checkpoint and the later write wins (Phase 3). The UI sends one message at a time
-- [ ] Backups and a tested restore for Postgres
+**Status: built.** Designed on 2026-10-20 and built the same day, in three parts: model calls, a per-thread lock, Postgres backups. Where LangChain has a built-in it's used as is; only the circuit breaker and the lock are our code, since neither has one. [What changed from the design](#reliability-changes-from-the-design) lists what turned out different.
+
+- [x] Retries with backoff, circuit breakers and a fallback model on the model calls; breakers on the embeddings and web search too ([Model calls](#model-calls))
+- [x] Graceful degradation: web search down → answer from the knowledge base and say so (Phase 2); embeddings down → keyword search only, and say so
+- [x] A per-thread lock: two requests on one thread both read the same checkpoint and the later write won (Phase 3) ([Per-thread lock](#per-thread-lock))
+- [x] Backups and a tested restore for Postgres ([Backups](#backups))
+
+### Decisions
+
+| Decision | Chosen | Why, and what it rules out |
+| --- | --- | --- |
+| Fallback model | **`gpt-4.1` on the same gateway** (`FALLBACK_MODEL`; empty turns it off) | A stalled gateway call to gpt-5 is the failure we've measured (Phases 6 and 7); another model on the same endpoint answers it. A second provider would need a second key and client: Claude can't be called through the OpenAI client (Phase 7) |
+| Fallback, retries | LangChain's **`ModelFallbackMiddleware`** and **`ModelRetryMiddleware`** | Built-ins over our own. The cost: the fallback catches every error, not only outages, so a request the model refused (a 400) goes to the fallback too. It isn't retried or counted as an outage |
+| Circuit breakers | **Our own** (`reliability/breaker.py`), per model, the embeddings and web search, **shared in Redis** | LangChain and LangGraph have none. Shared, so one pod's timeouts spare the other pod and the worker theirs. Without Redis, each process keeps its own, in memory |
+| Busy thread | **409**, `Retry-After: 5` | Queueing the second message would hold a connection open for a whole reply, and the UI already sends one at a time. LangGraph's multitask strategies (reject, enqueue, …) are a LangGraph Server feature; the library has none |
+| Lock store | **A lease on the `threads` row** | Postgres already holds the thread and is what must stay consistent; a Redis lock would be a second source of truth that can be lost on restart |
+| Backups | **CloudNativePG's Barman Cloud plugin to MinIO**, with point-in-time recovery | Continuous WAL archiving plus nightly base backups restore to any moment. MinIO stands in for S3; in production only the ObjectStore's endpoint and keys change |
+
+### Model calls
+
+```mermaid
+flowchart LR
+    Req["model call"] --> FB["ModelFallbackMiddleware"]
+    FB --> Retry["ModelRetryMiddleware<br/>1 retry, outages only"]
+    Retry --> BR["ModelBreaker<br/>per model, in Redis"]
+    BR -->|closed| Primary["gpt-5.4"]
+    BR -->|"open: BreakerOpen at once"| FB
+    Primary -->|"timeout, connection error, 429, 5xx"| Retry
+    FB -->|"the primary failed"| Retry2["the same chain"] --> Fallback["gpt-4.1"]
+```
+
+- **The chain** (`agent/builder.py`), outermost first: `ModelFallbackMiddleware(gpt-4.1)`, `ModelRetryMiddleware`, `ModelBreaker`, then the existing `ModelCallMiddleware` (logs and metrics), so every attempt is measured under its own model's name.
+  - **Retries:** `ModelRetryMiddleware(max_retries=MODEL_MAX_RETRIES, retry_on=is_outage, on_failure="error")`, with its default backoff of about 1 s. `is_outage` (`reliability/breaker.py`) is a timeout, a connection error, a 429 or a 5xx. The client's own retries are off (`max_retries=0`), so it's one retry instead of the client's two: a stalled call costs `REQUEST_TIMEOUT` (30 s) each time, and the fallback answers sooner than a third try. `on_failure="error"` matters: the default turns the last failure into an AI message, which the fallback would never see.
+  - **Breaker:** `ModelBreaker` runs each call through its model's breaker. While a breaker is open the call raises `BreakerOpen` at once, and the fallback middleware moves on to gpt-4.1, which has its own breaker.
+  - **Fallback:** the built-in, unchanged. The fallback's call goes through the same retry and breaker.
+- **The breaker** (`Breaker`): `BREAKER_FAILURES` (5) outages within `BREAKER_WINDOW_SECONDS` (60) open it for `BREAKER_COOLDOWN_SECONDS` (30). After that it's half-open: one call probes (a `SET NX` key, so one across all pods) and the others go to the fallback; success closes it, failure opens it again. A request the dependency refused (a 400) counts as the dependency answering.
+  - **In Redis:** four keys per breaker (`breaker/<name>/failures`, `open`, `tripped`, `probe`), each with an expiry, so a pod that dies mid-probe can't leave one stuck (the probe expires after 120 s). The failure count is `INCR` and `EXPIRE` in one Lua script, for the same reason. A closed breaker costs one `EXISTS` per call.
+  - **Without Redis:** `SharedBreakerStore` falls back to memory for 30 s at a time, and logs once when it loses Redis and once when it's back.
+- **A user on their own key never falls back to ours.** `UserModel` sits inside the chain and replaces whatever model the call carries with the user's own client, so the fallback's call goes to their endpoint too. `ModelBreaker` skips their calls: their endpoint's outages aren't ours to count.
+- **A reply that fails partway** starts over. The stream (`api/streaming.py`) watches the agent's model calls: when one starts while the previous one never ended and had already sent tokens, it sends a new SSE event, **`reset`**, before the new call's tokens. The UI drops the text shown so far and draws the reply again (`write_reply` in `ui/app.py`; `st.write_stream` can't take text back). This works the same for a retry and for the fallback, with no marker from either. Tokens the PII redactor still held back (`StreamRedactor`, the last 128 characters) were never shown, so a short failed reply needs no reset.
+- **Memory pushes** fall back with LangChain's `with_fallbacks`: `MemoryWriter(..., fallback=gpt-4.1)` builds `model.with_structured_output(schema).with_fallbacks([fallback.with_structured_output(schema)])`. A push that fails anyway stays on the queue and is retried (the worker).
+- **Summaries have no fallback.** `SummarizationMiddleware` needs a chat model (it calls `with_retry`, `_get_ls_params` and `profile` on it), and `with_fallbacks` returns a runnable. A failed summary already lets the turn go ahead with the full history (Phase 3).
+- **Embeddings** (`GuardedEmbeddings`, `storage/embeddings.py`) have a breaker and no fallback: another model's vectors wouldn't match the stored ones.
+  - **Knowledge base search:** in an outage, or with the breaker open, it searches full text only and starts its result with a note the model relays: semantic search is down, and the results may miss documents that use other words (`KEYWORD_ONLY`, `tools/rag.py`).
+  - **Memory recall:** the turn goes ahead with the memories the thread already has.
+  - **Ingest** uses the shared breaker, so it fails at once while the API has found the embeddings down.
+- **Web search** keeps its `ToolRetryMiddleware` (one retry, Phase 2) and gets a breaker. Every failure counts, since by then each backend has failed. While it's open the tool answers "Web search is unavailable right now" at once.
+- **Metrics and alerts:**
+  - **Metric:** `chatbot_breaker_open{dependency}` is 1 while a breaker is open. Each process reports what it last saw, so the dashboard takes the max.
+  - **Alert:** `ChatbotBreakerOpen`, after 1 minute open.
+  - **Dashboard:** a "Circuit breakers open" panel.
+  - **Fallback calls:** calls to the fallback model show in the model call metrics, under `gpt-4.1`.
+
+### Per-thread lock
+
+- **The lease:** migration `0004` adds `threads.run_id` (uuid) and `threads.run_until` (timestamptz). A run takes the lease with one conditional `UPDATE … WHERE id = … AND user_id = … AND (run_until IS NULL OR run_until < now())`, so of two runs racing for a thread exactly one gets the row back. The helper is `api/leases.py`: `take_lease`, and `ThreadLease`, an async context manager.
+- **Who takes it:**
+  - **Run routes:** `/chat`, `/chat/stream`, `/threads/{id}/resume`, `…/resume/stream`.
+  - **Delete:** `DELETE /threads/{id}` takes it too, since a run would write checkpoints back after the delete.
+  - **Others:** reads don't take it, and neither does the worker's idle scan, which only reads threads idle for 30 minutes.
+  - **Order:** the lease is taken after auth, the rate limit and the ownership check (someone else's thread is still 404), and before the run spends any tokens.
+- **Busy:** **409** `{"detail": "This chat is still answering your last message. Try again when it has finished."}`, with `Retry-After: 5`, counted as `chatbot_limited_total{limit="thread_busy"}`. The dashboard's refusals panel covers both the 429s and these.
+- **Renewal:** a background task moves `run_until` on every `THREAD_LEASE_SECONDS / 3` (20 s of 60), matched on its own `run_id`, so a run can't extend a newer one's lease.
+  - **A renewal that fails** (the database briefly gone, or the lease lost) is logged and counted (`chatbot_thread_lease_renewal_failures_total`), and the run carries on. Stopping a reply halfway would be worse than the small chance of a second run once the lease expires.
+- **Release:** in a `finally`, on success, an error or the drain, and for a stream when it ends. A client that disconnects cancels the stream's scope (sse-starlette), and every await in a cancelled anyio scope is cancelled too, so the release runs shielded (`anyio.CancelScope(shield=True)`).
+- **A pod that dies** mid-run renews nothing, so its threads free themselves within 60 s. The user can then resend, or resume from the checkpoint (Phase 3).
+- **A run paused for approval holds no lease:** it has ended, and its resume takes a new one.
+- **The UI:** a refused message (a 409 or a 429) comes back out of the chat, and its text is shown under the error so it isn't lost.
+
+### Backups
+
+```mermaid
+flowchart LR
+    PG[("postgres<br/>+ plugin-barman-cloud sidecar")] -->|"WAL: as each segment fills, at most every 5 min"| MinIO[("MinIO<br/>s3://chatbot-backups")]
+    SB["ScheduledBackup<br/>02:00 nightly + on create"] -->|"base backup"| PG
+    MinIO -->|"recovery: base backup + WAL to T"| Copy[("postgres-restore<br/>deploy/restore.sh")]
+```
+
+- **`make cluster`** installs two more charts: **cert-manager** (`jetstack/cert-manager` v1.21.2, which the plugin needs for its TLS) and the **Barman Cloud plugin** (`cnpg/plugin-barman-cloud` 0.8.1, beside the operator in `cnpg-system`).
+- **`deploy/base/backup.yaml`:**
+  - **MinIO:** a Deployment with a 5 Gi volume and the console on 9001, linked from Tilt's `minio` resource. The image is Chainguard's (the one Langfuse's compose file uses: MinIO no longer publishes images), from its Docker Hub mirror and pinned by digest. `cgr.dev` only serves `:latest`, and a TLS-inspecting proxy broke pulls from it on the kind node.
+  - **`backup-bucket` Job:** creates the bucket with boto3 from the app image, because Barman doesn't create it.
+  - **`ObjectStore` `backups`:** `s3://chatbot-backups/`, gzip, 7-day retention.
+  - **`ScheduledBackup` `postgres-nightly`:** 02:00 every day, plus one at once when created.
+- **The cluster** (`data.yaml`) names the plugin as its WAL archiver and sets `archive_timeout: 5min`, so a restore loses at most the last 5 minutes.
+- **The store's keys:** `make secrets` makes them up once, into gitignored `deploy/local/backup-store.env`, as the `backup-store` Secret. They're kept on later runs, since the backups are only readable with the keys they were written with.
+- **Restore:** `make restore TARGET="2026-10-20 09:30:00+00"` (or no `TARGET` for the latest) runs `deploy/restore.sh`.
+  - **The copy:** a second Cluster, `postgres-restore`, bootstrapped by `recovery` from the ObjectStore. The live cluster keeps running.
+  - **The check:** it compares the two (users, threads, threads with checkpoints, the Alembic revision, the pgvector version).
+  - **Switching over:** it prints how to point the app at the copy. That stays a person's decision: it's an outage either way.
+- **`make restore-test`** (`deploy/restore-test.sh`) proves point-in-time recovery, not just that a backup exists:
+  1. Write a marker and note the time T.
+  2. Write a second marker.
+  3. Switch the WAL and wait until it's archived.
+  4. Restore to T.
+  5. Check that the copy has the first marker and not the second.
+  6. Remove the copy and the markers.
+- **Monitoring:** a `PodMonitor` scrapes the Postgres instance (CloudNativePG's port 9187).
+  - **`PostgresBackupMissing`:** no base backup in 26 h (`barman_cloud_cloudnative_pg_io_last_available_backup_timestamp`).
+  - **`PostgresWALArchiveFailing`:** for 10 minutes, the latest archiving attempt failed, meaning its failure is newer than its last success (`cnpg_pg_stat_archiver_*`).
+  - **Dashboard:** a "Postgres backups" panel shows the time since each.
+- **CI** runs it all too: `make cluster` installs both charts, and the CI overlay keeps MinIO and the backups, so WAL archiving runs during the smoke test. The restore test doesn't run in CI.
+
+### Tests and checks
+
+- **Unit:**
+  - **Lease** (`tests/unit/test_thread_lease.py`):
+    - Every run route, and delete, answers 409 with `Retry-After` on a busy thread; someone else's busy thread is still 404.
+    - The lease is released after success, after an error, and after a client disconnect. That test fails without the shield.
+    - An expired lease is taken over; a long run keeps its lease by renewing it; a failed renewal is counted and the run carries on.
+    - Two concurrent `/chat` requests on one thread give one 200 and one 409, with one model call.
+  - **Reliability** (`tests/unit/test_reliability.py`):
+    - **The breaker:** opens after the failures, then fails fast; failures spread past the window don't open it; a 400 isn't an outage; one probe after the cooldown, whose success closes it and whose failure opens it again; a dead probe expires; without Redis it keeps state in memory and logs once.
+    - **Model calls:** an outage is retried, then falls back; a refused request isn't retried or counted; an open breaker skips the model; a reply that failed partway gets one `reset`, and no reset when nothing was shown yet; an own-key user never reaches our fallback.
+    - **The rest:** memory pushes fall back; an open embeddings breaker fails fast; web search answers unavailable at once; a turn goes on without recall when the embeddings are down.
+- **Integration:**
+  - **Postgres:** ten concurrent lease takers get exactly one lease, and the renew, release and expiry rules hold. Knowledge base search with the embeddings down returns keyword results with the note.
+  - **Redis** (`tests/integration/test_breaker_redis.py`; CI now runs a Redis service, `REQUIRE_REDIS=1`): one pod's failures open the breaker for another; only one pod probes, and its success closes it for all; every key has an expiry.
+- **Live, on kind:**
+  - **Archiving:** WAL archives to MinIO, and the first base backup completed. The nightly one then ran on its own the next morning.
+  - **Restore test:** `make restore-test` restored to T in about 3 minutes, with only the first marker.
+  - **Postgres metrics:** they're scraped, and `barman_cloud_cloudnative_pg_io_last_available_backup_timestamp` is current.
+
+### Reliability: changes from the design
+
+| Designed | Built | Why |
+| --- | --- | --- |
+| Our own fallback middleware, with a custom `model_fallback` event marking a fallback reply | `ModelFallbackMiddleware`, `ModelRetryMiddleware` and `with_fallbacks`; `ModelBreaker` is the only middleware of ours | Built-ins first. Costs: a 400 goes to the fallback too, and replies no longer say a backup model answered them |
+| A `reset` event sent when the fallback starts | Sent when a model call starts while the previous one never ended | It needs no marker from the built-ins, and covers retries as well as the fallback |
+| Summaries fall back to gpt-4.1 | No fallback | The summarizer needs a chat model, not a runnable; a failed summary already degrades |
+| A fallbacks-by-reason counter | None; the fallback model's calls show under its own name | The built-in doesn't report why it fell back |
+| The client's `max_retries=1` | `ModelRetryMiddleware`, client retries off | Built-in, with backoff and an outage filter |
+| A new thread inserted with the lease already set | Created first, then leased | The lease is one atomic `UPDATE` either way, so there's no window |
+| Barman creates the bucket | A `backup-bucket` Job | It doesn't |
+| MinIO's own image | Chainguard's, from Docker Hub, pinned | MinIO stopped publishing images; `cgr.dev` was unreachable through the proxy |
+| CI deletes the backup objects | CI keeps them | It runs `make cluster` anyway, and archiving gets exercised |
 
 ## Cost and latency
 

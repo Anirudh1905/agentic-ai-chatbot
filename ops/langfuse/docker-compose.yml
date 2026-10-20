@@ -8,6 +8,14 @@
 # Every value here is a local-only placeholder. Don't reuse them anywhere real.
 # Values are hardcoded on purpose: Compose reads .env for ${...} interpolation,
 # and the app's DATABASE_URL there must not leak into Langfuse.
+#
+# The one service that stays outside the kind cluster (Phase 9): it's heavy, and a real
+# deployment often uses Langfuse Cloud. `make langfuse` starts it; Tilt does too, and links it
+# into the cluster (deploy/local/langfuse-link.sh).
+
+# The project's name from before this file was run directly, so its containers and volumes
+# (traces) carry over.
+name: agentic-ai-chatbot
 
 x-langfuse-env: &langfuse-env
   NEXTAUTH_URL: http://localhost:3000
