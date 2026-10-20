@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Request, status
 from fastapi.responses import JSONResponse
+from prometheus_client import start_http_server
 
 from chatbot.agent.middleware import UserModelError
 from chatbot.api.dependencies import limit_ip, resources
@@ -15,7 +16,11 @@ from chatbot.observability.metrics import RUN_ERRORS
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
-    configure_logging(get_settings())
+    settings = get_settings()
+    configure_logging(settings)
+    if settings.metrics_port:
+        # Metrics on their own port, which only Prometheus reaches (routes/health.py).
+        start_http_server(settings.metrics_port)
     yield
     await resources.close()
 

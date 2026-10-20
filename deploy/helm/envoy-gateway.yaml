@@ -1,0 +1,6 @@
+# Envoy Gateway: serves the Gateway API (Gateway, HTTPRoute) for the cluster's front door. It
+# replaces ingress-nginx, retired by the Kubernetes project in 2026. Defaults are fine on kind.
+deployment:
+  envoyGateway:
+    resources:
+      requests: {cpu: 50m, memory: 128Mi}

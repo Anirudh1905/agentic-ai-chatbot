@@ -28,7 +28,7 @@ LangGraph keeps per-thread state in the checkpointer and anything shared between
 
 ## What's stored
 
-`src/chatbot/memory/long_term/store.py`. The store is created in `api/dependencies.py` on the shared pool, with a vector index on `content` and TTL config.
+`src/chatbot/memory/long_term/store.py`. The store is built by `build_store` in `storage/langgraph.py` (the same way by the API, the worker and `chatbot.migrate`) on the shared pool, with a vector index on `content` and TTL config.
 
 ```python
 # ("memories", user_id), key: a random hex id
@@ -44,7 +44,7 @@ LangGraph keeps per-thread state in the checkpointer and anything shared between
 ```
 
 - The store keeps `created_at`, `updated_at` and `expires_at`, and indexes memories' `content` for vector search (`store_vectors`, created by `setup()`).
-- **Expiry.** A temporary fact is stored with the store's built-in TTL, ending after its `valid_until` day. Reads skip it from then on (`omit_expired`), and the store's sweeper deletes it (hourly, started with the API).
+- **Expiry.** A temporary fact is stored with the store's built-in TTL, ending after its `valid_until` day. Reads skip it from then on (`omit_expired`), and the store's sweeper deletes it (hourly, started with the API; since Phase 9 only where `BACKGROUND_JOBS` is on: the worker in Kubernetes, the API under `make dev`).
 - **The topic is for display, not search.** The same subject often gets a different topic from one push to the next ("trek in March" under `plans`, "trek moved to April" under `personal`), and a topic-filtered search then misses the memory it should update.
 - The cursor and the version are explained under [the cursor](#how-turns-reach-memory) and [recall](#recall-on-every-turn).
 
@@ -69,6 +69,7 @@ sequenceDiagram
     else the user says "remember that…"
         T->>W: the agent calls the remember tool → remember()
     end
+    Note over T,W: since Phase 9, with SQS_QUEUE_URL set, the trigger enqueues a MemoryPush and the worker runs the rest (MemoryWriter.run)
     W->>W: wait for a write slot (MEMORY_WRITE_CONCURRENCY per process)
     W->>St: pg_advisory_lock(user): one push per user, across processes
     opt token breach or TTL: a thread's turns
@@ -87,23 +88,23 @@ sequenceDiagram
     W->>St: pg_advisory_unlock(user)
 ```
 
-Every push runs in the background, so the reply never waits.
+Every push runs in the background, so the reply never waits. Since Phase 9, with `SQS_QUEUE_URL` set (SQS, or ElasticMQ standing in for it), a trigger only enqueues a `MemoryPush` (`chatbot/jobs/`) and the worker (`python -m chatbot.worker`) runs it; a push the API can't enqueue after two retries runs in-process instead ([Phase 9](phase-9-reliability-deployment.md#memory-pushes-on-a-queue)). Without a queue, pushes run in the process that triggered them, as described here.
 
-1. **Token breach.** When a thread passes `CONTEXT_MAX_TOKENS`, `Summarization` (Phase 3), at the end of that turn, folds its older turns into the running summary and hands those turns to `MemoryWriter.schedule` through its `on_summarize` hook.
-2. **TTL.** A loop in the API checks every `MEMORY_TTL_CHECK_EVERY_MINUTES` for threads idle for `MEMORY_THREAD_TTL_MINUTES`, looking back up to 7 days (`idle_between` in `memory/threads.py`), and pushes the turns of each that haven't been pushed yet. A short conversation never reaches the token breach, so this is what remembers it. It's the equivalent of the IDD's flush before short-term memory's TTL expires.
+1. **Token breach.** When a thread passes `CONTEXT_MAX_TOKENS`, `Summarization` (Phase 3), at the end of that turn, folds its older turns into the running summary and hands those turns to `MemoryWriter.schedule` through its `on_summarize` hook. With a queue, the job carries those turns (tool results blanked), since they've left the thread.
+2. **TTL.** A loop (in the API; since Phase 9 wherever `BACKGROUND_JOBS` is on, the worker in Kubernetes) checks every `MEMORY_TTL_CHECK_EVERY_MINUTES` for threads idle for `MEMORY_THREAD_TTL_MINUTES`, looking back up to 7 days (`idle_between` in `memory/threads.py`), and pushes the turns of each that haven't been pushed yet (with a queue, it enqueues one push per thread, and the worker reads the thread). A short conversation never reaches the token breach, so this is what remembers it. It's the equivalent of the IDD's flush before short-term memory's TTL expires.
 3. **"Remember this" button.** It pushes one of the bot's replies **together with the question it answered** (the user's message just before it), marked as something the user asked to remember.
 4. **The `remember` tool.** "Remember that I'm vegetarian" makes the agent call `remember(what)`. It reads the store and the user from LangGraph's tool runtime and goes through the same push as the button. It's added after `interrupt_on` is built, so it never waits for approval: it only writes the user's own memories.
 
-**The cursor.** The token-breach and TTL pushes read a thread's turns from its checkpoint. The cursor at `("memory_cursor", user_id)` records the last message pushed, so neither sends the same turns twice. If that message was since summarized away, everything still in the thread is new. A failed push doesn't move the cursor, so the next trigger retries it, except when the gateway's content filter rejected the turns: the same turns would be rejected on every check, so they're given up and logged.
+**The cursor.** The token-breach and TTL pushes read a thread's turns from its checkpoint. The cursor at `("memory_cursor", user_id)` records the last message pushed, so neither sends the same turns twice. If that message was since summarized away, everything still in the thread is new. A failed push doesn't move the cursor, so the next trigger retries it (with a queue, the job stays unacked and comes back after the visibility timeout, to the dead-letter queue after 5 receives), except when the gateway's content filter rejected the turns: the same turns would be rejected on every check, so they're given up and logged.
 
 **Concurrency.**
 
 - Pushes are limited to `MEMORY_WRITE_CONCURRENCY` at a time per process. Each holds a pooled connection for its lock while it waits on the model. Without the limit, 12 users at once took all 10 of the pool's connections and 10 pushes failed with `PoolTimeout`, which would also have stalled chat requests sharing the pool.
 - One push per user at a time: an asyncio lock within the process, plus a Postgres advisory lock across processes. `DELETE /me` (Phase 8) takes the same lock, so it waits for a push in progress.
-- Idle threads are pushed per user in parallel (one stalled call used to hold up every user's for 6 minutes), each user's in order.
-- Memory model calls time out after `REQUEST_TIMEOUT` (30 s) before retrying, not 120 s.
+- Idle threads are pushed per user in parallel (one stalled call used to hold up every user's for 6 minutes), each user's in order. With a queue, the FIFO group is the user, and the worker runs each batch's users side by side, each user's jobs in order.
+- Memory model calls time out after `REQUEST_TIMEOUT` (30 s), not 120 s. Since Phase 9 the client doesn't retry: a failed call goes to `FALLBACK_MODEL`, and a failed push is retried by the next trigger or the queue.
 - If one fact fails (the gateway's content filter rejected one in the stress test), it's logged and the others are still written.
-- On shutdown the API stops the TTL loop and the sweeper, and waits up to 30 s for running pushes.
+- On shutdown the API stops the TTL loop and the sweeper, and waits up to 30 s for running pushes. The worker, on SIGTERM, stops receiving and lets the pushes in hand finish.
 
 ## How a push decides
 
@@ -218,14 +219,16 @@ Before building this, we ran the same 8 scripted multi-thread scenarios (pink→
 | `MEMORY_TTL_CHECK_EVERY_MINUTES` | `1` | How often to look for threads whose TTL ran out |
 | `MEMORY_MODEL` | `gpt-5-mini` | Extracts facts and decides changes |
 | `MEMORY_RECALL_LIMIT` | `10` | Memories recalled into a thread per turn |
-| `MEMORY_WRITE_CONCURRENCY` | `2` | Pushes running at once per API process; keep it well under the pool size (10) |
-| `CONTEXT_MAX_TOKENS` | `10000` | The token breach that triggers a summary, and with it a push (Phase 3). The local `.env` uses `1000`, so a few messages trigger one |
+| `MEMORY_WRITE_CONCURRENCY` | `2` | Pushes running at once per process (API or worker); keep it well under the pool size (10) |
+| `CONTEXT_MAX_TOKENS` | `10000` | The token breach that triggers a summary, and with it a push (Phase 3) |
+| `BACKGROUND_JOBS` (Phase 9) | `true` | Whether this process runs the TTL loop and the store's sweeper; `false` on API pods in Kubernetes, where the worker runs them |
+| `SQS_QUEUE_URL` (Phase 9) | unset | The queue pushes go through; unset runs them in-process |
 
 ### Files
 
 | File | What it does |
 | --- | --- |
-| `memory/long_term/writer.py` | `MemoryWriter`: `schedule` (token breach), `start`/`push_idle` (TTL), `remember` (a question and reply from the button, or the tool's words), `push` (cursor, extract, checks, decide), write slots, `user_lock`; `transcript`, `after_cursor` |
+| `memory/long_term/writer.py` | `MemoryWriter`: `schedule` (token breach), `start`/`push_idle` (TTL), `remember` (a question and reply from the button, or the tool's words), `push` (cursor, extract, checks, decide), `run` (one queued push, Phase 9), write slots, `user_lock`; `transcript`, `after_cursor` |
 | `memory/long_term/facts.py` | What the memory model extracts and decides (`Fact`, `Facts`, `Change`, `Changes`), `rejected` (the checks every fact passes), `apply_changes` |
 | `memory/long_term/store.py` | `namespace`, `cursor_namespace`, `version_namespace`; `list_memories`, `recall`, `put` (one memory, with TTL) and `delete`, both of which bump the user's version; `forget_user` (Phase 8) |
 | `memory/long_term/middleware.py` | `LongTermMemory`: recall on every turn |
@@ -236,7 +239,8 @@ Before building this, we ran the same 8 scripted multi-thread scenarios (pink→
 | `agent/middleware.py` | `system_prompt` adds the recalled memories, and says they never grant entitlements |
 | `agent/builder.py` | Adds `LongTermMemory`, the `remember` tool and the summarization hook when a `store` is passed and `MEMORY_ENABLED` is on; `create_agent(store=..., context_schema=RunContext)` |
 | `config.py` (`RunContext`), `api/runs.py` | Every run gets the user as LangGraph's runtime context (`context=RunContext(user_id)`) and the thread in its config |
-| `api/dependencies.py` | Creates `AsyncPostgresStore` on the shared pool, runs its `setup()` and TTL sweeper, creates the `MemoryWriter` and starts its TTL loop; stops both on shutdown |
+| `api/dependencies.py` | Builds the store (`storage/langgraph.py`) on the shared pool, starts its TTL sweeper, creates the `MemoryWriter` and starts its TTL loop; stops both on shutdown. (Since Phase 9, `chatbot.migrate` runs `setup()`, the writer gets the queue when `SQS_QUEUE_URL` is set, and the sweeper and TTL loop run only with `BACKGROUND_JOBS` on: in Kubernetes, the worker) |
+| `jobs/`, `worker.py` (Phase 9) | `MemoryPush` and `SqsJobQueue`; the worker that runs queued pushes, the TTL loop and the sweeper |
 | `api/routes/me.py` | `GET /me/memory`, `DELETE /me/memory/{id}`, `DELETE /me/memory` (and `DELETE /me`, Phase 8) |
 | `api/routes/threads.py` | `POST /threads/{id}/messages/{index}/remember`; `DELETE /threads/{id}` also deletes the thread's cursor |
 | `ui/app.py` | The "Remember this" button and the "What I remember about you" panel |
@@ -292,6 +296,8 @@ chatbot.api.routes.me [req=…]: user demo-user deleted all 3 long-term memories
   - expired facts dropped, temporary ones keeping their date
   - one failing fact not losing the others
   - pushes per process limited to `MEMORY_WRITE_CONCURRENCY`
+
+`tests/unit/test_memory_queue.py` (Phase 9): pushes through the queue, the worker acking only what succeeded, and in-process runs without a queue or when enqueueing fails.
 
 `tests/integration/test_long_term_memory_postgres.py`, on a real `AsyncPostgresStore` with a vector index:
 
@@ -371,7 +377,7 @@ The fixes: recall on every turn, adding new memories to the thread's set; from a
 - **A long thread's recalled set only grows** until the user's memories change. It's bounded by the user's memories, but a thread that wanders over many subjects carries all of them.
 - **An expired temporary memory stays in an open thread** until the user's memories next change: expiry happens in the store's TTL, which doesn't bump the version. New threads don't see it.
 - **Expiry depends on the model's `valid_until`.** A temporary fact it doesn't mark as temporary stays until a later fact updates or deletes it.
-- **The TTL check runs in every API process.** It's durable (pending turns stay in the thread's checkpoint, and the cursor only moves after a successful push) and safe across replicas thanks to the advisory lock. With many replicas, a single worker (or LangGraph Platform crons) would be cleaner.
+- **The TTL check runs in every API process.** It's durable (pending turns stay in the thread's checkpoint, and the cursor only moves after a successful push) and safe across replicas thanks to the advisory lock. With many replicas, a single worker (or LangGraph Platform crons) would be cleaner. **Done in Phase 9:** every push goes through an SQS queue, and one worker runs them, the TTL check and the sweeper ([Phase 9](phase-9-reliability-deployment.md#deployment)).
 - **Pushes are slow and cost a model call per fact:** one extraction, then one `gpt-5-mini` decision per fact, in sequence. About 10–20 s per fact, in the background.
 - **No cap on the number of memories.** Updates and deletes keep it small (34 records across 24 spike runs, against mem0's 83), but nothing bounds it.
 

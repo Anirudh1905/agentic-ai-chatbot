@@ -105,7 +105,7 @@ The correctness disagreements are between "partly" and "wrong", which doesn't ch
 
 `tests/evals/scoring.py` and `report.py`. Answers vary between runs, and so does the judge ([measured](#measurements)).
 
-- **Tolerance:** a metric blocks when it drops below `main` by more than max(2 points, one case); with 30 cases one case is 3.3 points. The code-only suites (PII, approval policy) don't vary, so any drop there blocks.
+- **Tolerance:** a metric blocks when it drops below `main` by more than max(2 points, one case); with 30 cases one case is 3.3 points. The judged metrics (faithfulness, citations, correctness) get three cases: one claim the results don't state word for word fails a whole faithfulness case, and four runs of the same answers scored 65%, 72.5%, 72.5% and 77.5% on its 40 cases (Phases 8 and 9). The code-only suites (PII, approval policy) don't vary, so any drop there blocks.
 - **Re-runs:** a case that passed on `main` and fails now is run twice more, agent and judge; it fails only if 2 of 3 runs fail. A whole-metric drop within normal variation isn't a regression by itself; the re-runs of each case that flipped are what tell noise from a real change.
 - **Errors:** a question whose agent run or judging still fails after 3 tries is an error, listed but counted as neither a pass nor a fail.
 - Every failing case is listed with the judge's reason, so a reviewer can check it.
@@ -161,7 +161,7 @@ Every other setting that affects answers must be at its default during `make eva
 
 ### Measurements
 
-- **Latest scores** (`main`'s report): retrieval 100%, routing 100%, faithfulness 72%, citations 72%, correctness 100%, PII 95% recall and 92% of look-alikes left alone, approval policy 100%.
+- **Latest scores** (the committed `report.json`, Phase 9): retrieval 100%, routing 100%, faithfulness 77.5%, citations 90%, correctness 100%, PII 95% recall and 92% of look-alikes left alone, approval policy 100%.
 - **Run-to-run variance:** two runs of the same code an hour apart scored faithfulness 65% and 72%, citations 85% and 72% (correctness 100% both times).
 - **Errors:** without retries, 9 of 44 questions errored on the first run.
 - **Time and cost:** one `make eval` is 44 agent runs and about 130 judge measurements, at most 3 model calls at once: about 15 minutes with retries, a few dollars. Calibration adds 58 answers.

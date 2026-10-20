@@ -59,6 +59,9 @@ RULES = [
     RedactionRule("ip").resolve(),
     RedactionRule("phone", detector=detect_phone).resolve(),
 ]
+for _rule in RULES:  # each count starts at 0 (observability/metrics.py says why)
+    for _source in ("message", "tool_result", "reply"):
+        PII_REDACTIONS.labels(_rule.pii_type, _source)
 
 
 def redact_pii(text: str) -> tuple[str, list[str]]:

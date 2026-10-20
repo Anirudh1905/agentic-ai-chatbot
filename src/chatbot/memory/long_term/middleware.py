@@ -10,6 +10,7 @@ from langgraph.runtime import Runtime
 from chatbot.config import RunContext
 from chatbot.memory.long_term.store import recall, version
 from chatbot.observability.metrics import MEMORY_RECALLS
+from chatbot.reliability.breaker import BreakerOpen, is_outage
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +48,15 @@ class LongTermMemory(AgentMiddleware[MemoryState, RunContext]):
             return None
         user_id = runtime.context.user_id
         current = await version(runtime.store, user_id)
-        memories = await recall(runtime.store, user_id, said[-1].text, self.limit)
+        try:
+            memories = await recall(runtime.store, user_id, said[-1].text, self.limit)
+        except Exception as e:
+            # Recall searches by embedding. In an outage of the embeddings (Phase 9) the turn
+            # goes ahead with the memories this thread already has.
+            if not (isinstance(e, BreakerOpen) or is_outage(e)):
+                raise
+            logger.warning("couldn't recall long-term memories (%r); going on without", e)
+            return None
         MEMORY_RECALLS.labels("hit" if memories else "miss").inc()
         if "recalled_memories" in state and state.get("recalled_at_version") == current:
             known = state["recalled_memories"].splitlines()

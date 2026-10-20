@@ -41,6 +41,11 @@ MIN_AGREEMENT = 0.9
 # and verdicts vary between runs. The code-only suites don't, so any drop there is a regression.
 TOLERANCE = 0.02
 EXACT = {"pii_recall", "pii_no_false_positives", "approval_policy"}
+# The judged metrics vary more: one claim the results don't state word for word fails a whole
+# faithfulness case. Four runs of the same answers (Phase 8 and 9) scored 65%, 72.5%, 72.5% and
+# 77.5% on its 40 cases, so they get this many cases.
+JUDGED = ("faithfulness", "citations", "correctness")
+JUDGED_TOLERANCE_CASES = 3
 GROUND_TRUTH_BY = "Claude (model-written labels and reference answers, not human-labelled)"
 
 
@@ -145,12 +150,20 @@ class Row:
         return self.gates and self.regressed
 
 
+def cases(metric: str) -> int:
+    """How many cases a metric may drop by before it regresses."""
+    return JUDGED_TOLERANCE_CASES if metric in JUDGED else 1
+
+
 def compare(baseline: dict[str, Any] | None, metrics: dict[str, Any]) -> list[Row]:
     rows = []
     for name, m in metrics.items():
         base = (baseline or {}).get("metrics", {}).get(name)
         before = base["score"] if base else None
-        allowed = 0.0 if name in EXACT else max(TOLERANCE, 1 / m["n"]) if m["n"] else TOLERANCE
+        if name in EXACT:
+            allowed = 0.0
+        else:
+            allowed = max(TOLERANCE, cases(name) / m["n"]) if m["n"] else TOLERANCE
         regressed = before is not None and m["score"] < before - allowed - 1e-9
         rows.append(Row(name, before, m["score"], m["n"], m["gates"], regressed))
     return rows

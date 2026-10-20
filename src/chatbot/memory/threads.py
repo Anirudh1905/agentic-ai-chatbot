@@ -42,6 +42,19 @@ class ThreadStore(Protocol):
 
     async def delete(self, thread_id: UUID) -> None: ...
 
+    async def lease(self, thread_id: UUID, user_id: str, run_id: UUID, seconds: float) -> bool:
+        """Take the thread's run lease for `run_id` (Phase 9, api/leases.py). False if another
+        run holds one that hasn't expired, or the thread isn't the user's."""
+        ...
+
+    async def renew(self, thread_id: UUID, run_id: UUID, seconds: float) -> bool:
+        """Extend the lease by `seconds` from now. False if `run_id` no longer holds it."""
+        ...
+
+    async def release(self, thread_id: UUID, run_id: UUID) -> None:
+        """Give the lease up, if `run_id` still holds it."""
+        ...
+
     async def ids_for_user(self, user_id: str) -> list[UUID]:
         """Every thread of the user's (deleting their data)."""
         ...
@@ -110,6 +123,35 @@ class PostgresThreadStore:
     async def delete(self, thread_id: UUID) -> None:
         async with self.pool.connection() as conn:
             await conn.execute("DELETE FROM threads WHERE id = %s", (thread_id,))
+
+    async def lease(self, thread_id: UUID, user_id: str, run_id: UUID, seconds: float) -> bool:
+        # One conditional UPDATE, so two runs racing for the thread can't both take it.
+        async with self.pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                UPDATE threads SET run_id = %s, run_until = now() + make_interval(secs => %s)
+                WHERE id = %s AND user_id = %s AND (run_until IS NULL OR run_until < now())
+                RETURNING id
+                """,
+                (run_id, seconds, thread_id, user_id),
+            )
+            return await cur.fetchone() is not None
+
+    async def renew(self, thread_id: UUID, run_id: UUID, seconds: float) -> bool:
+        async with self.pool.connection() as conn:
+            cur = await conn.execute(
+                "UPDATE threads SET run_until = now() + make_interval(secs => %s) "
+                "WHERE id = %s AND run_id = %s RETURNING id",
+                (seconds, thread_id, run_id),
+            )
+            return await cur.fetchone() is not None
+
+    async def release(self, thread_id: UUID, run_id: UUID) -> None:
+        async with self.pool.connection() as conn:
+            await conn.execute(
+                "UPDATE threads SET run_id = NULL, run_until = NULL WHERE id = %s AND run_id = %s",
+                (thread_id, run_id),
+            )
 
     async def ids_for_user(self, user_id: str) -> list[UUID]:
         async with self.pool.connection() as conn:

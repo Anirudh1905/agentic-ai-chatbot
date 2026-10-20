@@ -11,6 +11,7 @@ from pgvector import Vector
 
 from chatbot.config import Settings
 from chatbot.prompts import as_data
+from chatbot.reliability.breaker import BreakerOpen, is_outage
 from chatbot.storage.db import Conn, Pool
 
 if TYPE_CHECKING:
@@ -19,6 +20,9 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 RRF_K = 60
+# The token estimate for the retrieval cap: about four characters a token, as LangChain's
+# count_tokens_approximately (no tokenizer download).
+CHARS_PER_TOKEN = 4
 
 VECTOR_SQL = """
     SELECT id::text, doc_id, title, heading, page, content
@@ -71,11 +75,14 @@ def reciprocal_rank_fusion(rankings: Sequence[Sequence[str]], k: int = RRF_K) ->
 
 
 async def hybrid_search(
-    conn: Conn, query_vector: list[float], query: str, candidates: int, top_k: int
+    conn: Conn, query_vector: list[float] | None, query: str, candidates: int, top_k: int
 ) -> list[SearchHit]:
-    vector_rows = await (
-        await conn.execute(VECTOR_SQL, (Vector(query_vector), candidates))
-    ).fetchall()
+    """Vector and full-text search, fused; full text only without a `query_vector`."""
+    vector_rows = (
+        await (await conn.execute(VECTOR_SQL, (Vector(query_vector), candidates))).fetchall()
+        if query_vector is not None
+        else []
+    )
     text_rows = await (await conn.execute(FULLTEXT_SQL, (query, candidates))).fetchall()
 
     rows = {r["id"]: r for r in [*vector_rows, *text_rows]}
@@ -103,6 +110,25 @@ def format_hits(query: str, hits: list[SearchHit]) -> str:
     return f'<kb_results query="{escape(query)}">\n{results}\n</kb_results>'
 
 
+# Said in the results when the embeddings are down (Phase 9), so the model can tell the user.
+KEYWORD_ONLY = (
+    "Note: semantic search is unavailable right now, so these results come from keyword "
+    "search only and may miss documents that use other words. Mention it if they don't answer "
+    "the question."
+)
+
+
+async def embed_query(embeddings: Embeddings, query: str) -> list[float] | None:
+    """The query's vector, or None in an outage of the embeddings (search on full text only)."""
+    try:
+        return await embeddings.aembed_query(query)
+    except Exception as e:
+        if not (isinstance(e, BreakerOpen) or is_outage(e)):
+            raise
+        logger.warning("embeddings unavailable (%r); searching full text only", e)
+        return None
+
+
 async def retrieve(
     pool: Pool,
     embeddings: Embeddings,
@@ -111,7 +137,18 @@ async def retrieve(
     reranker: "Reranker | None" = None,
 ) -> list[SearchHit]:
     """Hybrid search, then (optionally) rerank the best fused candidates and keep the top k."""
-    vector = await embeddings.aembed_query(query)
+    return await search_chunks(
+        pool, settings, query, await embed_query(embeddings, query), reranker
+    )
+
+
+async def search_chunks(
+    pool: Pool,
+    settings: Settings,
+    query: str,
+    vector: list[float] | None,
+    reranker: "Reranker | None" = None,
+) -> list[SearchHit]:
     limit = (
         max(settings.rerank_candidates, settings.retrieval_top_k)
         if reranker
@@ -125,7 +162,20 @@ async def retrieve(
         except Exception:
             # Fused order is still a good ranking; don't fail the search over the reranker.
             logger.exception("reranking failed; using fused order")
-    return hits[: settings.retrieval_top_k]
+    return within_tokens(hits[: settings.retrieval_top_k], settings.retrieval_max_tokens)
+
+
+def within_tokens(hits: list[SearchHit], max_tokens: int) -> list[SearchHit]:
+    """The best-ranked hits whose content fits in `max_tokens` (estimated), and always the
+    first: a search that found something returns something."""
+    kept: list[SearchHit] = []
+    total = 0
+    for hit in hits:
+        total += len(hit.content) // CHARS_PER_TOKEN
+        if kept and total > max_tokens:
+            break
+        kept.append(hit)
+    return kept
 
 
 def build_knowledge_base_tool(
@@ -148,7 +198,8 @@ def build_knowledge_base_tool(
         """
         start = time.monotonic()
         # Errors propagate to ToolRetryMiddleware, which retries once, then tells the model.
-        hits = await retrieve(pool, embeddings, settings, query, reranker)
+        vector = await embed_query(embeddings, query)
+        hits = await search_chunks(pool, settings, query, vector, reranker)
         logger.info(
             "knowledge base search %r: %d hits in %.1fs (top: %s)",
             query,
@@ -157,6 +208,7 @@ def build_knowledge_base_tool(
             hits[0].cite_as if hits else "none",
         )
         sources = [{"type": "kb", "cite_as": h.cite_as, **asdict(h)} for h in hits]
-        return format_hits(query, hits), sources
+        text = format_hits(query, hits)
+        return (text if vector is not None else f"{KEYWORD_ONLY}\n\n{text}"), sources
 
     return search_knowledge_base

@@ -1,0 +1,591 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Agentic AI Chatbot on Kubernetes",
+    "output": ".archify/architecture-chatbot-k8s-20261019-231500/chatbot-k8s.html",
+    "quality_profile": "showcase",
+    "locale": "en"
+  },
+  "components": [
+    {
+      "id": "langfuse",
+      "type": "external",
+      "label": "Langfuse",
+      "sublabel": "traces · sessions · scores",
+      "pos": [
+        614,
+        40
+      ],
+      "size": [
+        190,
+        84
+      ],
+      "tag": "Docker Compose"
+    },
+    {
+      "id": "model",
+      "type": "external",
+      "label": "Model gateway",
+      "sublabel": "gpt-5.4 · fallback gpt-4.1 · embeddings",
+      "pos": [
+        1160,
+        40
+      ],
+      "size": [
+        190,
+        84
+      ],
+      "tag": "OpenAI-compatible"
+    },
+    {
+      "id": "ddg",
+      "type": "external",
+      "label": "DuckDuckGo",
+      "sublabel": "web results",
+      "pos": [
+        1440,
+        40
+      ],
+      "size": [
+        190,
+        84
+      ],
+      "tag": "then ddgs auto"
+    },
+    {
+      "id": "evals",
+      "type": "backend",
+      "label": "Eval suites",
+      "sublabel": "golden sets · judge gpt-4.1",
+      "pos": [
+        320,
+        40
+      ],
+      "size": [
+        190,
+        84
+      ],
+      "tag": "make eval on the host"
+    },
+    {
+      "id": "ui",
+      "type": "frontend",
+      "label": "ui",
+      "sublabel": "Streamlit · login · approvals",
+      "pos": [
+        320,
+        200
+      ],
+      "size": [
+        190,
+        84
+      ],
+      "tag": "Deployment ×1"
+    },
+    {
+      "id": "redis",
+      "type": "database",
+      "label": "Redis",
+      "sublabel": "limits · breakers · search cache",
+      "pos": [
+        880,
+        200
+      ],
+      "size": [
+        190,
+        84
+      ],
+      "tag": "no volume · fails open"
+    },
+    {
+      "id": "web",
+      "type": "backend",
+      "label": "web_search",
+      "sublabel": "sensitive query → approval",
+      "pos": [
+        1440,
+        200
+      ],
+      "size": [
+        190,
+        84
+      ],
+      "tag": "api pod · tool"
+    },
+    {
+      "id": "browser",
+      "type": "external",
+      "label": "Browser",
+      "sublabel": "chat · API · Grafana",
+      "pos": [
+        40,
+        360
+      ],
+      "size": [
+        190,
+        84
+      ],
+      "tag": "localhost:8088"
+    },
+    {
+      "id": "gateway",
+      "type": "security",
+      "label": "Envoy Gateway",
+      "sublabel": "Gateway API · 5 HTTPRoutes",
+      "pos": [
+        320,
+        360
+      ],
+      "size": [
+        190,
+        84
+      ],
+      "tag": "NodePort 30080"
+    },
+    {
+      "id": "app",
+      "type": "backend",
+      "label": "FastAPI app ×2",
+      "sublabel": "routes · SSE · PII · drain",
+      "pos": [
+        600,
+        360
+      ],
+      "size": [
+        190,
+        84
+      ],
+      "tag": "api pods · metrics :9100"
+    },
+    {
+      "id": "auth",
+      "type": "security",
+      "label": "Auth + limits",
+      "sublabel": "JWT · rate limits · budget",
+      "pos": [
+        880,
+        360
+      ],
+      "size": [
+        190,
+        84
+      ],
+      "tag": "api pod · HS256"
+    },
+    {
+      "id": "agent",
+      "type": "backend",
+      "label": "Agent loop",
+      "sublabel": "create_agent · middleware",
+      "pos": [
+        1160,
+        360
+      ],
+      "size": [
+        190,
+        84
+      ],
+      "tag": "api pod · checkpointed"
+    },
+    {
+      "id": "remember",
+      "type": "backend",
+      "label": "remember",
+      "sublabel": "enqueues a remember push",
+      "pos": [
+        1440,
+        360
+      ],
+      "size": [
+        190,
+        84
+      ],
+      "tag": "api pod · tool"
+    },
+    {
+      "id": "queue",
+      "type": "messagebus",
+      "label": "ElasticMQ (SQS)",
+      "sublabel": "memory-pushes.fifo + DLQ",
+      "pos": [
+        1160,
+        520
+      ],
+      "size": [
+        190,
+        84
+      ],
+      "tag": "grouped by user · 5 tries"
+    },
+    {
+      "id": "kb",
+      "type": "backend",
+      "label": "search_knowledge_base",
+      "sublabel": "vector + FTS · RRF · rerank",
+      "pos": [
+        1440,
+        520
+      ],
+      "size": [
+        190,
+        84
+      ],
+      "tag": "api pod · tool"
+    },
+    {
+      "id": "prom",
+      "type": "cloud",
+      "label": "kube-prometheus-stack",
+      "sublabel": "Prometheus · Grafana · Alerts",
+      "pos": [
+        320,
+        680
+      ],
+      "size": [
+        190,
+        84
+      ],
+      "tag": "13 alert rules"
+    },
+    {
+      "id": "jobs",
+      "type": "backend",
+      "label": "migrate · retention",
+      "sublabel": "Job · nightly CronJob",
+      "pos": [
+        600,
+        680
+      ],
+      "size": [
+        190,
+        84
+      ],
+      "tag": "+ reranker-model Job"
+    },
+    {
+      "id": "worker",
+      "type": "backend",
+      "label": "worker",
+      "sublabel": "MemoryWriter · idle scan · TTL",
+      "pos": [
+        1160,
+        680
+      ],
+      "size": [
+        190,
+        84
+      ],
+      "tag": "memory model via gateway"
+    },
+    {
+      "id": "chunks",
+      "type": "database",
+      "label": "Postgres: chunks",
+      "sublabel": "HNSW + tsvector",
+      "pos": [
+        1440,
+        680
+      ],
+      "size": [
+        190,
+        84
+      ],
+      "tag": "same database"
+    },
+    {
+      "id": "pg",
+      "type": "database",
+      "label": "Postgres (CloudNativePG)",
+      "sublabel": "users · threads + leases · checkpoints",
+      "pos": [
+        880,
+        680
+      ],
+      "size": [
+        190,
+        84
+      ],
+      "tag": "memory store · pgvector"
+    },
+    {
+      "id": "ingest",
+      "type": "backend",
+      "label": "ingest Job",
+      "sublabel": "load · chunk · embed changed",
+      "pos": [
+        1440,
+        840
+      ],
+      "size": [
+        190,
+        84
+      ],
+      "tag": "data/sample in the image"
+    },
+    {
+      "id": "minio",
+      "type": "database",
+      "label": "MinIO backups",
+      "sublabel": "WAL archive · nightly base",
+      "pos": [
+        880,
+        840
+      ],
+      "size": [
+        190,
+        84
+      ],
+      "tag": "Barman Cloud plugin"
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "kind cluster · namespaces chatbot and monitoring",
+      "wraps": [
+        "ui",
+        "gateway",
+        "app",
+        "auth",
+        "agent",
+        "web",
+        "kb",
+        "remember",
+        "redis",
+        "chunks",
+        "ingest",
+        "prom",
+        "queue",
+        "worker",
+        "jobs",
+        "pg",
+        "minio"
+      ],
+      "pad": 24
+    }
+  ],
+  "connections": [
+    {
+      "from": "browser",
+      "to": "gateway",
+      "label": "HTTP :8088",
+      "variant": "emphasis"
+    },
+    {
+      "from": "gateway",
+      "to": "app",
+      "label": "/api",
+      "variant": "emphasis"
+    },
+    {
+      "from": "app",
+      "to": "auth",
+      "label": "each route",
+      "variant": "emphasis"
+    },
+    {
+      "from": "auth",
+      "to": "agent",
+      "label": "the user",
+      "variant": "emphasis"
+    },
+    {
+      "from": "agent",
+      "to": "remember",
+      "variant": "dashed"
+    },
+    {
+      "from": "agent",
+      "to": "web",
+      "label": "web search",
+      "variant": "security",
+      "fromSide": "right",
+      "toSide": "left",
+      "route": "orthogonal-h"
+    },
+    {
+      "from": "agent",
+      "to": "kb",
+      "label": "KB search",
+      "fromSide": "right",
+      "toSide": "left",
+      "route": "orthogonal-h"
+    },
+    {
+      "from": "gateway",
+      "to": "ui",
+      "label": "/"
+    },
+    {
+      "from": "ui",
+      "to": "app",
+      "label": "api:8000",
+      "fromSide": "right",
+      "toSide": "top"
+    },
+    {
+      "from": "gateway",
+      "to": "prom",
+      "label": "/grafana",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "from": "prom",
+      "to": "app",
+      "label": "scrape",
+      "variant": "dashed",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "from": "prom",
+      "to": "worker",
+      "label": "scrape",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "bottom"
+    },
+    {
+      "from": "auth",
+      "to": "redis",
+      "label": "limits",
+      "variant": "security"
+    },
+    {
+      "from": "agent",
+      "to": "model",
+      "label": "retry · fallback"
+    },
+    {
+      "from": "web",
+      "to": "ddg",
+      "label": "query"
+    },
+    {
+      "from": "kb",
+      "to": "chunks",
+      "label": "vector + FTS"
+    },
+    {
+      "from": "ingest",
+      "to": "chunks",
+      "label": "upsert",
+      "variant": "dashed"
+    },
+    {
+      "from": "auth",
+      "to": "pg",
+      "label": "accounts",
+      "variant": "security"
+    },
+    {
+      "from": "agent",
+      "to": "pg",
+      "label": "checkpoints · recall",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "from": "agent",
+      "to": "queue",
+      "label": "memory pushes",
+      "variant": "dashed"
+    },
+    {
+      "from": "queue",
+      "to": "worker",
+      "label": "long poll",
+      "variant": "emphasis"
+    },
+    {
+      "from": "worker",
+      "to": "pg",
+      "label": "memories"
+    },
+    {
+      "from": "jobs",
+      "to": "pg",
+      "label": "schema · prune",
+      "variant": "dashed"
+    },
+    {
+      "from": "app",
+      "to": "langfuse",
+      "label": "run traces",
+      "variant": "dashed",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "from": "evals",
+      "to": "langfuse",
+      "label": "scores",
+      "variant": "dashed"
+    },
+    {
+      "from": "pg",
+      "to": "minio",
+      "label": "WAL · 02:00 backup",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Request path",
+      "items": [
+        "Envoy Gateway on localhost:8088: / is the UI, /api both API pods (prefix stripped), /grafana, /prometheus, /alertmanager",
+        "Auth checks the HS256 JWT and the account, then the user's rate limit and the day's token budget (Redis)",
+        "Readiness is /readyz (database answers); metrics live on :9100, which no route reaches"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "Memory through the queue",
+      "items": [
+        "Summaries, idle threads, Remember this and the remember tool become one SQS FIFO message each, grouped by user",
+        "The worker acks a push only after it's written; a failure comes back in 5 min, the 6th lands in the DLQ",
+        "If the queue is down, the API runs the push itself and counts it"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Safety",
+      "items": [
+        "PII is redacted in the message, tool results, replies and the stream",
+        "A web search with sensitive terms or an order number waits for approval and resumes from its checkpoint",
+        "Secrets are files in /run/secrets from a generated Secret; the pods mount no service account token"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Rollouts and jobs",
+      "items": [
+        "migrate runs Alembic and the LangGraph setup before the API and worker roll out",
+        "preStop waits for open streams before uvicorn gets SIGTERM; PDB keeps one API pod up",
+        "reranker-model fills the shared model volume once; retention prunes checkpoints nightly; Postgres archives WAL to MinIO and takes a base backup at 02:00"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Reliability",
+      "items": [
+        "Model calls retry once, then fall back to gpt-4.1 (FALLBACK_MODEL)",
+        "Circuit breakers per model, embeddings and web search, shared in Redis: 5 outages in 60 s open one for 30 s",
+        "Embeddings, web search and memory recall degrade instead of failing the turn; web results are cached in Redis for 10 min",
+        "One run per thread across pods: a lease on the thread's row, a second run gets 409"
+      ]
+    },
+    {
+      "dot": "orange",
+      "title": "Observability and evals",
+      "items": [
+        "ServiceMonitors scrape every API pod and the worker; 13 PrometheusRule alerts; the Chatbot dashboard in Grafana",
+        "Runs are traced to Langfuse (Docker Compose), reached through a Service with a manual EndpointSlice",
+        "make eval judges the same agent and scores each trace; CI rejects a stale or worse report"
+      ]
+    }
+  ]
+}

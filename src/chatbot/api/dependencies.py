@@ -17,13 +17,17 @@ from chatbot.accounts.users import PostgresUserStore, UserStore
 from chatbot.agent.approvals import interrupt_on
 from chatbot.agent.builder import Agent, build_graph, build_llm
 from chatbot.config import get_settings
+from chatbot.jobs import SqsJobQueue
 from chatbot.memory.long_term import MemoryWriter
 from chatbot.memory.threads import PostgresThreadStore, ThreadStore
 from chatbot.observability.tracing import build_callbacks
+from chatbot.reliability.breaker import Breakers
 from chatbot.storage.db import Pool, open_pool
 from chatbot.storage.embeddings import build_embeddings
+from chatbot.storage.langgraph import build_checkpointer, build_store
 from chatbot.tools.registry import build_tools
 from chatbot.tools.rerank import build_reranker
+from chatbot.tools.web_search import build_search_cache
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +43,7 @@ class Resources:
         self.threads: PostgresThreadStore | None = None
         self.store: AsyncPostgresStore | None = None
         self.writer: MemoryWriter | None = None
+        self.queue: SqsJobQueue | None = None
         self._lock = asyncio.Lock()
 
     async def ensure(self) -> None:
@@ -48,38 +53,38 @@ class Resources:
             settings = get_settings()
             if self.pool is None:
                 self.pool = await open_pool(settings)
-            checkpointer = AsyncPostgresSaver(self.pool)
-            # Creates and migrates the checkpoint tables; a no-op once they're current.
-            await checkpointer.setup()
-            embeddings = build_embeddings(settings)
-            # Long-term memory (memory/long_term/), searched by meaning. Creates and
-            # migrates its own tables, including the vector index, too. Temporary items get a
-            # TTL: reads skip them once expired, and the sweeper deletes them.
-            store = AsyncPostgresStore(
-                self.pool,
-                index={
-                    "dims": settings.embedding_dimensions,
-                    "embed": embeddings,
-                    "fields": ["content"],
-                },
-                ttl={"refresh_on_read": False, "omit_expired": True, "sweep_interval_minutes": 60},
-            )
-            await store.setup()
-            await store.start_ttl_sweeper()
+            # Their tables come from `python -m chatbot.migrate`, run before this process.
+            checkpointer = build_checkpointer(self.pool)
+            # Shared in Redis with the other pods and the worker (reliability/breaker.py).
+            breakers = Breakers.shared(settings)
+            embeddings = build_embeddings(settings, breakers)
+            store = build_store(self.pool, settings, embeddings)
+            if settings.background_jobs:
+                await store.start_ttl_sweeper()
             reranker = build_reranker(settings)
             if reranker:
                 # Load the model now rather than during the first search.
                 await asyncio.to_thread(reranker.load)
-            tools = build_tools(settings, self.pool, embeddings, reranker)
+            tools = build_tools(
+                settings, self.pool, embeddings, reranker, breakers, build_search_cache(settings)
+            )
             self.checkpointer = checkpointer
             self.threads = PostgresThreadStore(self.pool)
             self.store = store
             if settings.memory_enabled:
+                if settings.sqs_queue_url and self.queue is None:
+                    # Pushes go to the worker (Phase 9); without a queue they run here.
+                    self.queue = SqsJobQueue(settings)
+                    await self.queue.open()
                 self.writer = MemoryWriter(
                     # REQUEST_TIMEOUT, though nothing waits on a push: a call takes 3-6 s, and a
                     # stalled gateway call is better retried soon (at 120 s, one push took 6 min).
                     build_llm(settings, settings.memory_model, streaming=False),
+                    fallback=build_llm(settings, settings.fallback_model, streaming=False)
+                    if settings.fallback_model
+                    else None,
                     concurrency=settings.memory_write_concurrency,
+                    queue=self.queue,
                 )
             self.graph = build_graph(
                 settings,
@@ -88,11 +93,12 @@ class Resources:
                 store=store,
                 memory_writer=self.writer,
                 usage=get_limits(),
+                breakers=breakers,
                 interrupt_on=interrupt_on(tools, settings.hitl_sensitive_terms)
                 if settings.hitl_enabled
                 else None,
             )
-            if self.writer is not None:
+            if self.writer is not None and settings.background_jobs:
                 graph = self.graph
 
                 async def messages_of(thread_id: str) -> list[AnyMessage]:
@@ -129,6 +135,8 @@ class Resources:
                 await asyncio.wait_for(self.writer.stop(), timeout=30)
             except TimeoutError:
                 logger.warning("shutting down with long-term memory pushes still running")
+        if self.queue is not None:
+            await self.queue.close()
         if self.pool is not None:
             await self.pool.close()
 
@@ -163,6 +171,21 @@ async def get_threads() -> ThreadStore:
     await resources.ensure()
     assert resources.threads is not None
     return resources.threads
+
+
+async def get_readiness() -> bool:
+    """Whether this process can serve: its resources are up and the database answers. The
+    readiness probe; a pod that loses Postgres leaves the Service instead of being restarted
+    (that's /healthz, the liveness probe)."""
+    try:
+        await resources.ensure()
+        assert resources.pool is not None
+        async with resources.pool.connection() as conn:
+            await conn.execute("SELECT 1")
+    except Exception:
+        logger.warning("not ready", exc_info=True)
+        return False
+    return True
 
 
 async def get_users() -> UserStore:

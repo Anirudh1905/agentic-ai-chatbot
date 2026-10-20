@@ -21,10 +21,25 @@ jobs:
           --health-cmd "pg_isready -U chatbot"
           --health-interval 5s
           --health-retries 10
+      # Stands in for SQS; the queue tests create their own queues.
+      elasticmq:
+        image: softwaremill/elasticmq-native:1.6.11
+        ports:
+          - 9324:9324
+      # The circuit breakers' shared state (Phase 9).
+      redis:
+        image: redis:7.4-alpine
+        ports:
+          - 6379:6379
     env:
       TEST_DATABASE_URL: postgresql://chatbot:chatbot@localhost:5432/chatbot
-      # Fail instead of skipping the integration tests if Postgres isn't reachable.
+      TEST_SQS_ENDPOINT: http://localhost:9324
+      TEST_REDIS_URL: redis://localhost:6379/0
+      # Fail instead of skipping the integration tests if Postgres, ElasticMQ or Redis isn't
+      # reachable.
       REQUIRE_DB: "1"
+      REQUIRE_SQS: "1"
+      REQUIRE_REDIS: "1"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -39,3 +54,49 @@ jobs:
       - run: uv run pytest
       - name: Eval check
         run: make eval-check
+
+  # Phase 9: the image builds, the manifests are valid, and the app deploys to kind and works.
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      KUBECONFORM_VERSION: v0.7.0
+    steps:
+      - uses: actions/checkout@v4
+      - name: Secrets
+        # Placeholders: the smoke test calls no model, and without Langfuse keys tracing is off.
+        run: |
+          echo "JWT_SECRET=$(openssl rand -hex 32)" > .env
+          echo "OPENAI_API_KEY=ci-placeholder" >> .env
+          ./deploy/local/make-secrets.sh
+      - name: Validate the manifests
+        run: |
+          curl -fsSL "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" \
+            | tar -xz -C /usr/local/bin kubeconform
+          kubectl kustomize deploy/ci | kubeconform -strict -summary \
+            -schema-location default \
+            -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
+      - name: Build the image
+        run: docker build -t chatbot:ci .
+      - uses: helm/kind-action@v1
+        with:
+          install_only: true
+      - name: Cluster
+        run: |
+          ./deploy/cluster.sh
+          kind load docker-image chatbot:ci --name chatbot
+      - name: Deploy
+        run: |
+          kubectl config use-context kind-chatbot
+          kubectl apply --server-side -k deploy/ci
+          kubectl -n chatbot wait cluster.postgresql.cnpg.io/postgres --for=condition=Ready --timeout=5m
+          kubectl -n chatbot wait job/migrate --for=condition=Complete --timeout=5m
+          kubectl -n chatbot rollout status deployment/api deployment/worker deployment/ui --timeout=5m
+      - name: Smoke test
+        run: ./deploy/smoke.sh
+      - name: Cluster state
+        if: failure()
+        run: |
+          kubectl get pods -A
+          kubectl -n chatbot get events --sort-by=.lastTimestamp | tail -40
+          for app in api worker; do kubectl -n chatbot logs -l app=$app --tail=80 --all-containers; done
+          kubectl -n chatbot logs job/migrate --tail=80 || true

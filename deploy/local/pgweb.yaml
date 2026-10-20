@@ -1,0 +1,26 @@
+# pgweb, a database browser (local only): the chunks, threads, checkpoints, users and the memory
+# store, as the dev role. Tilt port-forwards it to http://localhost:8081.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pgweb
+  namespace: chatbot
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: pgweb}
+  template:
+    metadata:
+      labels: {app: pgweb}
+    spec:
+      containers:
+        - name: pgweb
+          image: sosedoff/pgweb:0.17.0
+          env:
+            - {name: PGWEB_DATABASE_URL, value: "postgres://dev:dev@postgres-rw:5432/chatbot?sslmode=require"}
+          ports:
+            - {name: http, containerPort: 8081}
+          readinessProbe:
+            httpGet: {path: /, port: http}
+          resources:
+            requests: {cpu: 20m, memory: 32Mi}

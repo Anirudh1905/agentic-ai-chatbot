@@ -37,7 +37,7 @@ def database_url() -> Iterator[str]:
     url = ADMIN_URL.rsplit("/", 1)[0] + f"/{name}"
     try:
         subprocess.run(
-            [sys.executable, "-m", "alembic", "upgrade", "head"],
+            [sys.executable, "-m", "chatbot.migrate"],
             cwd=ROOT,
             env={**os.environ, "DATABASE_URL": url},
             check=True,

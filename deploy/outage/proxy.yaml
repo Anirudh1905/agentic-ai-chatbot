@@ -1,0 +1,53 @@
+# The outage proxy (Phase 9, deploy/outage-test.sh applies it and removes it after): a model
+# gateway that fails gpt-5.4 and passes everything else to the real one. Not part of the app.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: outage-proxy
+  namespace: chatbot
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: outage-proxy}
+  template:
+    metadata:
+      labels: {app: outage-proxy}
+    spec:
+      containers:
+        - name: proxy
+          # The API's own image (Starlette, httpx, uvicorn), Secret and trust store: outage-test.sh
+          # fills them in from the running Deployment (Tilt tags the image; generated names have a
+          # hash).
+          image: API_IMAGE
+          imagePullPolicy: IfNotPresent
+          command: [uvicorn, proxy:app, --app-dir=/proxy, --host=0.0.0.0, --port=8000]
+          env:
+            - {name: FAIL_MODELS, value: gpt-5.4}
+            - {name: SSL_CERT_FILE, value: /etc/ssl/local/ca-bundle.pem}
+          ports:
+            - {name: http, containerPort: 8000}
+          readinessProbe:
+            httpGet: {path: /_outage, port: http}
+          volumeMounts:
+            - {name: proxy, mountPath: /proxy, readOnly: true}
+            - {name: secrets, mountPath: /run/secrets, readOnly: true}
+            - {name: ca-bundle, mountPath: /etc/ssl/local, readOnly: true}
+      automountServiceAccountToken: false
+      volumes:
+        - name: proxy
+          configMap: {name: outage-proxy}
+        - name: secrets
+          secret: {secretName: API_SECRETS}
+        - name: ca-bundle
+          configMap: {name: API_CA_BUNDLE}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: outage-proxy
+  namespace: chatbot
+spec:
+  selector: {app: outage-proxy}
+  ports:
+    - {name: http, port: 8000, targetPort: http}

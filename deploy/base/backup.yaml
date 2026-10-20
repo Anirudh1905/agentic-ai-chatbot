@@ -1,0 +1,124 @@
+# Postgres backups (Phase 9): continuous WAL archiving and nightly base backups, through
+# CloudNativePG's Barman Cloud plugin (installed by `make cluster`), to an S3 bucket. Locally the
+# bucket is on MinIO, in the cluster; in production only the ObjectStore's endpoint and
+# credentials change. Restore to a point in time: deploy/restore.sh.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: minio
+spec:
+  replicas: 1
+  strategy: {type: Recreate}  # one volume, one writer
+  selector:
+    matchLabels: {app: minio}
+  template:
+    metadata:
+      labels: {app: minio}
+    spec:
+      containers:
+        - name: minio
+          # Chainguard's build, the one Langfuse's compose file uses (ops/langfuse): MinIO no
+          # longer publishes images. From its Docker Hub mirror, pinned: cgr.dev only serves
+          # :latest, and a TLS-inspecting proxy can break pulls from it.
+          image: docker.io/chainguard/minio@sha256:2915cb406f38ed6ff9634de0a3e4a9423e2dda06a6f1aca18f8c968aa37a01f6
+          args: [server, /data, --console-address, ":9001"]
+          ports:
+            - {name: s3, containerPort: 9000}
+            - {name: console, containerPort: 9001}
+          env:
+            - name: MINIO_ROOT_USER
+              valueFrom: {secretKeyRef: {name: backup-store, key: ACCESS_KEY_ID}}
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom: {secretKeyRef: {name: backup-store, key: ACCESS_SECRET_KEY}}
+          readinessProbe:
+            httpGet: {path: /minio/health/ready, port: s3}
+          volumeMounts:
+            - {name: data, mountPath: /data}
+          resources:
+            requests: {cpu: 50m, memory: 256Mi}
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: minio}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: minio
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests: {storage: 5Gi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio
+spec:
+  selector: {app: minio}
+  ports:
+    - {name: s3, port: 9000, targetPort: s3}
+    - {name: console, port: 9001, targetPort: console}
+---
+# The bucket, made once: Barman won't create it. From the app image, which has boto3.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: backup-bucket
+spec:
+  backoffLimit: 6  # until MinIO is up
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: bucket
+          image: chatbot
+          command:
+            - python
+            - -c
+            - |
+              import os, boto3
+              s3 = boto3.client("s3", endpoint_url="http://minio:9000", region_name="us-east-1",
+                                aws_access_key_id=os.environ["ACCESS_KEY_ID"],
+                                aws_secret_access_key=os.environ["ACCESS_SECRET_KEY"])
+              try:
+                  s3.create_bucket(Bucket="chatbot-backups")
+              except s3.exceptions.BucketAlreadyOwnedByYou:
+                  pass
+              print("bucket chatbot-backups ready")
+          envFrom:
+            - secretRef: {name: backup-store}
+---
+# Where the backups go.
+apiVersion: barmancloud.cnpg.io/v1
+kind: ObjectStore
+metadata:
+  name: backups
+spec:
+  retentionPolicy: 7d  # base backups, and the WAL needed to restore from them
+  configuration:
+    destinationPath: s3://chatbot-backups/
+    endpointURL: http://minio:9000
+    s3Credentials:
+      accessKeyId: {name: backup-store, key: ACCESS_KEY_ID}
+      secretAccessKey: {name: backup-store, key: ACCESS_SECRET_KEY}
+    wal:
+      compression: gzip
+    data:
+      compression: gzip
+---
+# A base backup nightly, and one as soon as this is created, so a new cluster has a restore
+# point at once. Between them, the archived WAL restores to any moment.
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: postgres-nightly
+spec:
+  schedule: "0 0 2 * * *"  # seconds first: 02:00 every day
+  immediate: true
+  backupOwnerReference: self
+  cluster:
+    name: postgres
+  method: plugin
+  pluginConfiguration:
+    name: barman-cloud.cloudnative-pg.io

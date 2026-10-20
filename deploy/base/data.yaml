@@ -1,0 +1,113 @@
+# The data services the app uses inside the cluster (Phase 9).
+---
+# Postgres with pgvector, run by the CloudNativePG operator: one instance locally. The operator
+# creates the `chatbot` database, its owner, and a Secret `postgres-app` whose `uri` is the
+# DATABASE_URL; the Service `postgres-rw` always points at the primary.
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: postgres
+spec:
+  instances: 1
+  imageName: ghcr.io/cloudnative-pg/postgresql:16-standard-bookworm  # includes pgvector
+  storage:
+    size: 2Gi
+  bootstrap:
+    initdb:
+      database: chatbot
+      owner: chatbot
+      # pgvector isn't a trusted extension, so the app's owner can't create it: the superuser
+      # does, once (migration 0001's CREATE EXTENSION IF NOT EXISTS is then a no-op).
+      postInitApplicationSQL:
+        - CREATE EXTENSION IF NOT EXISTS vector
+      # And in template1, so every database created later has it too (the integration tests
+      # create a throwaway one each).
+      postInitTemplateSQL:
+        - CREATE EXTENSION IF NOT EXISTS vector
+  # Backups (Phase 9, backup.yaml): every WAL segment goes to the ObjectStore as it fills, or
+  # after at most 5 minutes, so a restore loses at most the last 5 minutes.
+  plugins:
+    - name: barman-cloud.cloudnative-pg.io
+      isWALArchiver: true
+      parameters:
+        barmanObjectName: backups
+  postgresql:
+    parameters:
+      archive_timeout: 5min
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+---
+# Rate-limit windows and token counts (Phase 8). Disposable by design, so no volume.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: redis}
+  template:
+    metadata:
+      labels: {app: redis}
+    spec:
+      containers:
+        - name: redis
+          image: redis:7.4-alpine
+          ports: [{containerPort: 6379}]
+          readinessProbe:
+            exec: {command: [redis-cli, ping]}
+          resources:
+            requests: {cpu: 20m, memory: 32Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+spec:
+  selector: {app: redis}
+  ports: [{port: 6379}]
+---
+# The memory-push queue: ElasticMQ, standing in for Amazon SQS (config/elasticmq.conf declares
+# the FIFO queue and its dead-letter queue). Messages persist on the volume, as on SQS.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: elasticmq
+spec:
+  serviceName: elasticmq
+  replicas: 1
+  selector:
+    matchLabels: {app: elasticmq}
+  template:
+    metadata:
+      labels: {app: elasticmq}
+    spec:
+      containers:
+        - name: elasticmq
+          image: softwaremill/elasticmq-native:1.6.11
+          ports: [{containerPort: 9324}]
+          readinessProbe:
+            httpGet: {path: "/?Action=ListQueues", port: 9324}
+          volumeMounts:
+            - {name: config, mountPath: /opt/elasticmq.conf, subPath: elasticmq.conf}
+            - {name: data, mountPath: /data}
+          resources:
+            requests: {cpu: 20m, memory: 64Mi}
+      volumes:
+        - name: config
+          configMap: {name: elasticmq-config}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests: {storage: 256Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: elasticmq
+spec:
+  selector: {app: elasticmq}
+  ports: [{port: 9324}]

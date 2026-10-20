@@ -1,0 +1,23 @@
+# The app on Kubernetes (Phase 9), without environment-specific settings: those come from an
+# overlay (deploy/local for kind), which also generates app-config and app-secrets.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: chatbot
+resources:
+  - namespace.yaml
+  - data.yaml
+  - backup.yaml
+  - app.yaml
+  - jobs.yaml
+  - gateway.yaml
+  - monitoring.yaml
+configMapGenerator:
+  - name: elasticmq-config
+    files:
+      - config/elasticmq.conf
+  - name: chatbot-dashboard
+    files:
+      - config/chatbot-dashboard.json
+    options:
+      labels:
+        grafana_dashboard: "1"  # the Grafana sidecar loads ConfigMaps with this label

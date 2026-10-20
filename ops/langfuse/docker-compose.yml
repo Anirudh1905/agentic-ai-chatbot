@@ -8,6 +8,14 @@
 # Every value here is a local-only placeholder. Don't reuse them anywhere real.
 # Values are hardcoded on purpose: Compose reads .env for ${...} interpolation,
 # and the app's DATABASE_URL there must not leak into Langfuse.
+#
+# The one service that stays outside the kind cluster (Phase 9): it's heavy, and a real
+# deployment often uses Langfuse Cloud. `make langfuse` starts it; Tilt does too, and links it
+# into the cluster (deploy/local/langfuse-link.sh).
+
+# The project's name from before this file was run directly, so its containers and volumes
+# (traces) carry over.
+name: agentic-ai-chatbot
 
 x-langfuse-env: &langfuse-env
   NEXTAUTH_URL: http://localhost:3000
@@ -58,6 +66,9 @@ services:
     environment:
       <<: *langfuse-env
       NEXTAUTH_SECRET: local-dev-nextauth-secret
+      # Listen on every network the container joins, not only its first (Next.js binds to
+      # HOSTNAME): the kind cluster reaches it on kind's Docker network (Phase 9).
+      HOSTNAME: 0.0.0.0
       # The browser uploads media straight to MinIO, so this one points at the host port.
       LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://localhost:9090
       LANGFUSE_S3_MEDIA_UPLOAD_INTERNAL_ENDPOINT: http://langfuse-minio:9000
@@ -71,8 +82,7 @@ services:
       LANGFUSE_INIT_USER_NAME: Dev
       LANGFUSE_INIT_USER_PASSWORD: password
     healthcheck:
-      # Next.js binds to the container hostname, not localhost.
-      test: ["CMD-SHELL", "wget -q --spider http://$$HOSTNAME:3000/api/public/health || exit 1"]
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:3000/api/public/health || exit 1"]
       interval: 5s
       timeout: 5s
       retries: 30

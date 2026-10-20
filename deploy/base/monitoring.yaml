@@ -1,0 +1,168 @@
+# Scraping and alerts (Phase 9), for kube-prometheus-stack: a ServiceMonitor per workload with
+# metrics (every pod behind the Service is scraped, so the replica count doesn't matter), the
+# alert rules (Phase 8's seven, the queue's three, the circuit breakers' and the backups'), and the Grafana dashboard (a ConfigMap the
+# sidecar loads, generated in kustomization.yaml). Nothing pages yet: Alertmanager has no
+# receiver configured.
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: api
+spec:
+  selector:
+    matchLabels: {app: api}
+  endpoints:
+    - {port: metrics, interval: 15s}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: worker
+spec:
+  selector:
+    matchLabels: {app: worker}
+  endpoints:
+    - {port: metrics, interval: 15s}
+---
+# Postgres (CloudNativePG's metrics port on each instance), for its backups and WAL archiving.
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: postgres
+spec:
+  selector:
+    matchLabels: {cnpg.io/cluster: postgres}
+  podMetricsEndpoints:
+    - {port: metrics, interval: 30s}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: chatbot
+spec:
+  groups:
+  - name: chatbot
+    rules:
+    - alert: ChatbotDown
+      expr: up{namespace="chatbot", service="api"} == 0
+      for: 2m
+      labels:
+        severity: critical
+      annotations:
+        summary: An API pod can't be scraped
+        description: '{{ $labels.pod }} hasn''t answered on its metrics port for 2 minutes.'
+    - alert: ChatbotErrorRate
+      expr: "(\n  (sum(rate(chatbot_http_requests_total{status=~\"5..\"}[5m])) or vector(0))\n  + (sum(rate(chatbot_run_errors_total{kind=\"\
+        internal\"}[5m])) or vector(0))\n)\n/ sum(rate(chatbot_http_requests_total[5m])) > 0.05\n"
+      for: 5m
+      labels:
+        severity: critical
+      annotations:
+        summary: More than 5% of requests are failing
+        description: '{{ $value | humanizePercentage }} of requests failed over 5 minutes.'
+    - alert: ChatbotSlowFirstToken
+      expr: 'histogram_quantile(0.95, sum by (le) (rate(chatbot_time_to_first_token_seconds_bucket[10m])))
+        > 15
+
+        '
+      for: 10m
+      labels:
+        severity: warning
+      annotations:
+        summary: Replies are slow to start
+        description: p95 time to first token is {{ $value | humanizeDuration }} (over 15 s).
+    - alert: ChatbotSlowModel
+      expr: 'histogram_quantile(0.95, sum by (le, model) (rate(chatbot_model_call_duration_seconds_bucket[10m])))
+        > 20
+
+        '
+      for: 10m
+      labels:
+        severity: warning
+      annotations:
+        summary: Model {{ $labels.model }} is slow
+        description: 'p95 model call is {{ $value | humanizeDuration }} (over 20 s): the gateway is struggling.'
+    - alert: ChatbotModelErrors
+      expr: 'sum by (model) (rate(chatbot_model_call_errors_total[10m]))
+
+        / sum by (model) (rate(chatbot_model_call_duration_seconds_count[10m]) + rate(chatbot_model_call_errors_total[10m]))
+
+        > 0.1
+
+        '
+      for: 10m
+      labels:
+        severity: warning
+      annotations:
+        summary: Calls to {{ $labels.model }} are failing
+        description: '{{ $value | humanizePercentage }} of model calls raised over 10 minutes.'
+    - alert: ChatbotBreakerOpen
+      expr: max by (dependency) (chatbot_breaker_open) == 1
+      for: 1m
+      labels:
+        severity: warning
+      annotations:
+        summary: '{{ $labels.dependency }} is down: its circuit breaker is open'
+        description: 'Calls to {{ $labels.dependency }} fail fast. Models go to the fallback model, the knowledge base searches full text only, and web search answers unavailable.'
+    - alert: PostgresBackupMissing
+      expr: time() - max(barman_cloud_cloudnative_pg_io_last_available_backup_timestamp{namespace="chatbot"}) > 26 * 3600
+      for: 10m
+      labels:
+        severity: warning
+      annotations:
+        summary: No Postgres base backup in over a day
+        description: 'The last one finished {{ $value | humanizeDuration }} ago; the nightly ScheduledBackup (02:00) should have taken one.'
+    - alert: PostgresWALArchiveFailing
+      # The latest archiving attempt failed: its failure is more recent than its last success.
+      expr: max(cnpg_pg_stat_archiver_seconds_since_last_failure{namespace="chatbot"} < cnpg_pg_stat_archiver_seconds_since_last_archival{namespace="chatbot"})
+      for: 10m
+      labels:
+        severity: critical
+      annotations:
+        summary: Postgres can't archive its WAL
+        description: 'Nothing archived for {{ $value | humanizeDuration }}: a restore would lose everything since, and pg_wal keeps growing. Check MinIO and the plugin-barman-cloud sidecar.'
+    - alert: ChatbotTokenSpike
+      expr: 'sum(increase(chatbot_model_tokens_total[1h])) > 3 * sum(increase(chatbot_model_tokens_total[1d]
+        offset 1h)) / 24
+
+        and sum(increase(chatbot_model_tokens_total[1h])) > 100000
+
+        '
+      labels:
+        severity: warning
+      annotations:
+        summary: Token use is 3x the usual rate
+        description: '{{ $value | humanize }} tokens in the last hour. Check for a looping run or one
+          user''s traffic (DAILY_TOKEN_BUDGET caps each).'
+    - alert: ChatbotPIIInReplies
+      expr: sum by (type) (increase(chatbot_pii_redactions_total{source="reply"}[15m])) > 0
+      labels:
+        severity: warning
+      annotations:
+        summary: The model wrote PII ({{ $labels.type }}) in a reply
+        description: It was redacted, but find the run in Langfuse to see where it came from.
+    - alert: ChatbotWorkerDown
+      expr: absent(up{namespace="chatbot", service="worker"} == 1)
+      for: 5m
+      labels:
+        severity: critical
+      annotations:
+        summary: The worker is down
+        description: 'No worker has answered for 5 minutes: memory pushes are waiting on the queue.'
+    - alert: ChatbotMemoryPushesDeadLettered
+      expr: max(chatbot_queue_messages{state="dead"}) > 0
+      labels:
+        severity: warning
+      annotations:
+        summary: Memory pushes reached the dead-letter queue
+        description: '{{ $value }} push(es) failed 5 times. Each message holds everything needed to replay
+          it.'
+    - alert: ChatbotMemoryQueueStuck
+      expr: max(chatbot_queue_messages{state="visible"}) > 0 and on() (sum(increase(chatbot_memory_pushes_total[15m])) or vector(0)) == 0
+      for: 15m
+      labels:
+        severity: warning
+      annotations:
+        summary: Memory pushes are waiting and none ran
+        description: 'Pushes have waited 15 minutes with none run: the worker is stuck or can''t reach
+          the queue.'

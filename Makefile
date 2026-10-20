@@ -1,13 +1,41 @@
-.PHONY: dev ui tilt test test-unit lint fmt typecheck up down check migrate ingest eval eval-calibrate eval-check retention
+.PHONY: dev worker ui tilt langfuse cluster cluster-delete secrets restore restore-test test test-unit lint fmt typecheck up down check migrate ingest eval eval-calibrate eval-check retention load outage-test
 
 dev:
 	uv run uvicorn chatbot.api.main:app --reload
+
+# Runs the memory pushes from the queue (needs SQS_QUEUE_URL; see .env.example).
+worker:
+	uv run python -m chatbot.worker
 
 ui:
 	uv run --group ui streamlit run ui/app.py
 
 tilt:
-	tilt up
+	tilt up --context kind-chatbot
+
+# Langfuse only (Docker Compose); everything else runs in the cluster.
+langfuse:
+	docker compose -f ops/langfuse/docker-compose.yml up -d
+
+# The local Kubernetes cluster (kind) and the services it runs on: Envoy Gateway,
+# CloudNativePG, kube-prometheus-stack. Run once; safe to run again.
+cluster:
+	./deploy/cluster.sh
+
+cluster-delete:
+	kind delete cluster --name chatbot
+
+# deploy/local/secrets.env (gitignored) from .env: the keys the cluster's Secret holds.
+# Postgres backups (Phase 9): restore into a second cluster, postgres-restore (TARGET: a time,
+# e.g. TARGET="2026-10-20 09:30:00+00"; the latest without), and the point-in-time restore test.
+restore:
+	./deploy/restore.sh "$(TARGET)"
+
+restore-test:
+	./deploy/restore-test.sh
+
+secrets:
+	./deploy/local/make-secrets.sh
 
 test:
 	uv run pytest
@@ -16,7 +44,7 @@ test-unit:
 	uv run pytest tests/unit
 
 migrate:
-	uv run alembic upgrade head
+	uv run python -m chatbot.migrate
 
 # make ingest PATH_TO_DOCS=path/to/docs
 PATH_TO_DOCS ?= data/sample
@@ -40,6 +68,16 @@ eval-calibrate:
 eval-check:
 	PYTHONPATH=tests uv run python -m evals.check
 
+# A load test of the deployed app, through the gateway (tests/load/run.py). Needs `tilt up`.
+USERS ?= 10
+DURATION ?= 300
+load:
+	USERS=$(USERS) DURATION=$(DURATION) uv run python -u tests/load/run.py
+
+# A provider outage on the deployed app: gpt-5.4 fails, gpt-4.1 answers (deploy/outage-test.sh).
+outage-test:
+	./deploy/outage-test.sh
+
 retention:
 	uv run python -m chatbot.memory.retention
 
@@ -56,8 +94,7 @@ typecheck:
 
 check: lint typecheck test
 
-up:
-	docker compose up -d
+up: langfuse
 
 down:
-	docker compose down
+	docker compose -f ops/langfuse/docker-compose.yml down

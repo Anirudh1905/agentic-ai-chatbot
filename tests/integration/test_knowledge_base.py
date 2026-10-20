@@ -8,8 +8,15 @@ from langchain_core.embeddings import DeterministicFakeEmbedding
 
 from chatbot.config import Settings
 from chatbot.ingestion.pipeline import ingest_path
+from chatbot.reliability.breaker import BreakerOpen
 from chatbot.storage.db import Pool, open_pool
-from chatbot.tools.rag import SearchHit, build_knowledge_base_tool, hybrid_search, retrieve
+from chatbot.tools.rag import (
+    KEYWORD_ONLY,
+    SearchHit,
+    build_knowledge_base_tool,
+    hybrid_search,
+    retrieve,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -149,3 +156,19 @@ async def test_retrieve_falls_back_to_fused_order_when_reranker_fails(
     hits = await retrieve(pool, embeddings, SETTINGS, query, BrokenReranker())
 
     assert hits[0].cite_as == "Refund Policy › Timing"
+
+
+async def test_search_goes_on_with_keywords_when_the_embeddings_are_down(
+    pool: Pool, embeddings: DeterministicFakeEmbedding, docs: Path
+) -> None:
+    await ingest_path(pool, embeddings, SETTINGS, docs)
+
+    class Down(DeterministicFakeEmbedding):
+        async def aembed_query(self, text: str) -> list[float]:
+            raise BreakerOpen("embeddings")
+
+    tool = build_knowledge_base_tool(pool, Down(size=embeddings.size), SETTINGS)
+    text = await tool.ainvoke({"query": "how long do refunds take"})
+
+    assert text.startswith(KEYWORD_ONLY)
+    assert "Refund Policy › Timing" in text

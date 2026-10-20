@@ -1,0 +1,21 @@
+# Only what the image needs: src, ui, migrations, alembic.ini and the uv project files.
+.env
+.env.*
+!.env.example
+.git
+.github
+.venv
+.archify
+.deepeval
+.mypy_cache
+.pytest_cache
+.ruff_cache
+**/__pycache__
+data/*
+!data/sample
+docs
+deploy
+ops
+tests
+*.md
+!README.md

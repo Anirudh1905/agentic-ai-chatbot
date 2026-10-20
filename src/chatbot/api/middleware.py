@@ -9,8 +9,8 @@ from chatbot.observability.metrics import REQUEST_SECONDS, REQUESTS
 
 logger = logging.getLogger("chatbot.api")
 
-# Tilt's readiness probe hits this every few seconds, and Prometheus the other.
-QUIET_PATHS = {"/healthz", "/metrics"}
+# Probes hit these every few seconds, and Prometheus scrapes /metrics.
+QUIET_PATHS = {"/healthz", "/readyz", "/metrics"}
 
 
 class RequestMiddleware:

@@ -12,7 +12,7 @@
 | API | FastAPI with `POST /chat` (JSON) and `POST /chat/stream` (SSE), and `GET /healthz` | [API and streaming](#api-and-streaming) |
 | Config | Typed settings from env vars (`pydantic-settings`) | [Config and model choice](#config-and-model-choice) |
 | Observability | A Langfuse trace for every model call; a request ID and thread on every log line | [Tracing and logging](#tracing-and-logging) |
-| Tooling | `uv`, ruff, mypy, pytest, CI; Docker Compose with Postgres + pgvector (unused until Phase 2); a Streamlit UI; a Tiltfile | [Local stack and tooling](#local-stack-and-tooling) |
+| Tooling | `uv`, ruff, mypy, pytest, CI; Docker Compose with Postgres + pgvector (unused until Phase 2; Phase 9 moves it to Kubernetes); a Streamlit UI; a Tiltfile | [Local stack and tooling](#local-stack-and-tooling) |
 
 ```mermaid
 flowchart LR
@@ -90,7 +90,7 @@ sequenceDiagram
 | `GET /healthz` | Liveness |
 
 - `stream_run` runs the graph with `astream_events(..., version="v2")` and forwards `on_chat_model_stream` chunks from the `model` node only, as `token` events. Only that node's tokens are the reply, so the summarizer (Phase 3) never leaks into it.
-- **The SSE event types were defined up front** (`StreamEvent` in `api/schemas.py`: `token`, `tool_start`, `tool_end`, `interrupt`, `done`, `error`). Once tools and interrupts arrived, the stream carried more than tokens, and later phases added events without changing the contract.
+- **The SSE event types were defined up front** (`StreamEvent` in `api/schemas.py`: `token`, `tool_start`, `tool_end`, `interrupt`, `done`, `error`). Once tools and interrupts arrived, the stream carried more than tokens without changing the contract. Phase 9 added one more, `reset`: a model call failed partway through the reply and a retry or the fallback model starts it over.
 - Since Phase 5, tokens pass through `StreamRedactor` (`guardrails/pii.py`) first, which redacts PII and holds back the last 128 characters, so short replies arrive in one piece.
 
 ## Config and model choice
@@ -109,7 +109,7 @@ sequenceDiagram
 
 ## Local stack and tooling
 
-- `tilt up` runs Postgres, the self-hosted Langfuse stack, migrations, the API and the Streamlit UI, plus pgweb (<http://localhost:8081>) for browsing the database. Without Tilt: `make up`, `make migrate`, then `make dev` and `make ui`.
+- In Phase 1, `tilt up` ran Postgres (Docker Compose), the self-hosted Langfuse stack, migrations, the API and the Streamlit UI, plus pgweb (<http://localhost:8081>) for browsing the database. Since Phase 9, `make tilt` deploys everything but Langfuse to a local Kubernetes cluster (kind), with the UI at <http://localhost:8088>; see [Phase 9](phase-9-reliability-deployment.md#dev-workflow). Without Kubernetes: start Postgres and Redis yourself, then `make migrate`, `make dev` and `make ui` (`make up` now starts only Langfuse).
 - `make lint`, `make typecheck` and `make test` (or `make check` for all three); CI runs the same (`.github/workflows/ci.yml`).
 - The Streamlit UI (`ui/app.py`) talks to `/chat/stream`.
 
@@ -123,7 +123,7 @@ sequenceDiagram
 | `OPENAI_BASE_URL` | (none) | Optional, for an OpenAI-compatible gateway |
 | `MODEL` | `gpt-5.4` | The chat model |
 | `REASONING_EFFORT` | `low` | Sent to reasoning models only |
-| `DATABASE_URL` | (none, required; `postgresql://chatbot:chatbot@localhost:5433/chatbot` for the local stack) | Postgres + pgvector |
+| `DATABASE_URL` | (none, required; `postgresql://dev:dev@localhost:5433/chatbot` for the local stack) | Postgres + pgvector |
 | `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` | (none; `pk-lf-local-dev` / `sk-lf-local-dev` for the local stack) | Tracing |
 | `LANGFUSE_HOST` | (none; `http://localhost:3000` for the local stack) | Tracing, with both keys |
 | `LOG_LEVEL` | `INFO` | `DEBUG` adds HTTP client and access logs |
@@ -139,8 +139,8 @@ sequenceDiagram
 | `src/chatbot/api/main.py`, `api/routes/chat.py`, `api/routes/health.py` | The app and the three endpoints |
 | `src/chatbot/api/streaming.py`, `api/schemas.py` | `stream_run`; the request, response and SSE event types |
 | `src/chatbot/observability/tracing.py`, `observability/logs.py`, `api/middleware.py` | Langfuse callbacks; log format with request ID and thread |
-| `docker-compose.yml`, `ops/langfuse/docker-compose.yml` | `pgvector/pgvector:pg16`, pgweb; the self-hosted Langfuse stack |
-| `Makefile`, `Tiltfile`, `.github/workflows/ci.yml` | `dev`, `ui`, `test`, `lint`, `typecheck`, `up`, `migrate`; the local stack; CI |
+| `docker-compose.yml`, `ops/langfuse/docker-compose.yml` | `pgvector/pgvector:pg16`, pgweb; the self-hosted Langfuse stack (Phase 9 removes the root `docker-compose.yml`: Postgres and pgweb run in `deploy/`) |
+| `Makefile`, `Tiltfile`, `.github/workflows/ci.yml` | `dev`, `ui`, `test`, `lint`, `typecheck`, `check`, `up`, `migrate`; the local stack; CI |
 | `ui/app.py` | The Streamlit chat UI |
 
 ### Tests

@@ -31,6 +31,10 @@ class CrossEncoderReranker:
         self.cache_dir = cache_dir
         self._model: TextCrossEncoder | None = None
         self._lock = threading.Lock()
+        # One rerank at a time (Phase 9): each ONNX run already uses every core, and runs side by
+        # side only multiply its working memory. Ten users at once took an API pod past 2 GB and
+        # the kind node out of memory.
+        self._running = asyncio.Lock()
 
     def load(self) -> TextCrossEncoder:
         with self._lock:
@@ -52,8 +56,9 @@ class CrossEncoderReranker:
     async def rerank(self, query: str, hits: list[SearchHit]) -> list[SearchHit]:
         if not hits:
             return hits
-        # CPU-bound; keep it off the event loop.
-        scores = await asyncio.to_thread(self._score, query, [self.hit_text(h) for h in hits])
+        # CPU-bound; keep it off the event loop. Waiting here holds no thread.
+        async with self._running:
+            scores = await asyncio.to_thread(self._score, query, [self.hit_text(h) for h in hits])
         ranked = sorted(zip(scores, hits, strict=True), key=lambda pair: pair[0], reverse=True)
         return [replace(hit, score=score) for score, hit in ranked]
 

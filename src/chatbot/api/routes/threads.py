@@ -19,6 +19,7 @@ from chatbot.api.dependencies import (
     Threads,
     Writer,
 )
+from chatbot.api.leases import take_lease
 from chatbot.api.runs import chat_response, redact, run_config
 from chatbot.api.schemas import (
     ChatMessage,
@@ -261,9 +262,10 @@ async def resume_thread(
     """
     await owned_thread(thread_id, user_id, threads)
     context = RunContext(user_id, credentials)
-    config, graph_input = await prepare_resume(thread_id, body, graph, context, callbacks)
-    result = await graph.ainvoke(graph_input, config=config, context=context)
-    return await chat_response(graph, result, thread_id)
+    async with await take_lease(threads, thread_id, user_id):
+        config, graph_input = await prepare_resume(thread_id, body, graph, context, callbacks)
+        result = await graph.ainvoke(graph_input, config=config, context=context)
+        return await chat_response(graph, result, thread_id)
 
 
 @router.post("/{thread_id}/resume/stream")
@@ -279,8 +281,13 @@ async def resume_thread_stream(
     """Same as POST .../resume, streamed like /chat/stream."""
     await owned_thread(thread_id, user_id, threads)
     context = RunContext(user_id, credentials)
-    config, graph_input = await prepare_resume(thread_id, body, graph, context, callbacks)
-    return EventSourceResponse(stream_run(graph, graph_input, config, context, thread_id))
+    lease = await take_lease(threads, thread_id, user_id)
+    try:
+        config, graph_input = await prepare_resume(thread_id, body, graph, context, callbacks)
+    except BaseException:
+        await lease.release()
+        raise
+    return EventSourceResponse(stream_run(graph, graph_input, config, context, thread_id, lease))
 
 
 @router.delete("/{thread_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -288,12 +295,15 @@ async def delete_thread(
     thread_id: UUID, threads: Threads, checkpointer: Checkpointer, store: Store, user_id: UserId
 ) -> Response:
     """Hard delete: every checkpoint of the thread, then its metadata. Long-term memories
-    already pushed from it stay (DELETE /me/memory clears them)."""
+    already pushed from it stay (DELETE /me/memory clears them). 409 while a run on it is going:
+    the run would write checkpoints back after the delete."""
     await owned_thread(thread_id, user_id, threads)
-    # Checkpoints first: if this fails the thread is still listed and the delete can be retried.
-    await checkpointer.adelete_thread(str(thread_id))
-    if store:
-        await store.adelete(cursor_namespace(user_id), str(thread_id))
-    await threads.delete(thread_id)
+    async with await take_lease(threads, thread_id, user_id):
+        # Checkpoints first: if this fails the thread is still listed and the delete can be
+        # retried.
+        await checkpointer.adelete_thread(str(thread_id))
+        if store:
+            await store.adelete(cursor_namespace(user_id), str(thread_id))
+        await threads.delete(thread_id)
     logger.info("deleted thread and all its checkpoints")
     return Response(status_code=status.HTTP_204_NO_CONTENT)

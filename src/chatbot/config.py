@@ -40,6 +40,26 @@ class Settings(BaseSettings):
     # hung for 126 s at 120).
     request_timeout: float = 30.0
 
+    # When a call to MODEL fails, it goes to this one instead, on the same endpoint
+    # (ModelFallbackMiddleware, Phase 9). Memory pushes fall back to it too. Empty turns
+    # fallbacks off.
+    fallback_model: str = "gpt-4.1"
+    # Retries of a model call that failed with an outage (timeouts, connection errors, 429s,
+    # 5xx), before the fallback (ModelRetryMiddleware). One: a stalled call takes
+    # REQUEST_TIMEOUT each time, and the fallback answers sooner than a third try.
+    model_max_retries: int = 1
+    # Circuit breakers (reliability/breaker.py), per model, the embeddings and web search,
+    # shared in Redis by every API pod and the worker: this many failures within the window
+    # open one for the cooldown; then one call probes, and its success closes it.
+    breaker_failures: int = 5
+    breaker_window_seconds: int = 60
+    breaker_cooldown_seconds: int = 30
+
+    # One run at a time per thread (Phase 9, api/leases.py): a run's lease on its thread lasts
+    # this long and is renewed every third of it, so a pod that dies frees its threads this
+    # long after.
+    thread_lease_seconds: float = 60.0
+
     # Cap on model calls per request (each is followed by a round of tool calls), so a
     # confused model can't loop forever.
     max_model_calls: int = 6
@@ -56,6 +76,12 @@ class Settings(BaseSettings):
     # model's window: every turn resends the history. Each summary also updates the user's
     # long-term memory.
     context_max_tokens: int = 10_000
+    # Before that, old search results go (Phase 9, LangChain's ContextEditingMiddleware): past
+    # this many tokens, each model call sees all but the latest CONTEXT_KEEP_TOOL_RESULTS tool
+    # results as a placeholder. Every call resends them, and old ones are rarely still needed.
+    # The thread keeps them; only what the model is sent changes. 0 turns it off.
+    context_clear_tool_results_tokens: int = 6_000
+    context_keep_tool_results: int = 3
     # The retention job keeps only the latest checkpoint of threads idle this many days.
     checkpoint_retention_days: int = 30
 
@@ -71,6 +97,9 @@ class Settings(BaseSettings):
     # Candidates fetched from each of vector and full-text search before fusion.
     retrieval_candidates: int = 30
     retrieval_top_k: int = 6
+    # Cap on one search's results (Phase 9), in estimated tokens: the best-ranked chunks that
+    # fit, at least one. Six chunks of up to CHUNK_SIZE_TOKENS would be about 3,600.
+    retrieval_max_tokens: int = 2_500
     # Cross-encoder that reorders the fused results (fastembed model name). Empty disables it.
     # Measured on the golden set: top-1 accuracy 96% -> 100%, about +0.5 s per search on CPU.
     reranker_model: str | None = "BAAI/bge-reranker-v2-m3-int8"
@@ -82,6 +111,10 @@ class Settings(BaseSettings):
     web_search_enabled: bool = True
     web_search_max_results: int = 5
     web_search_timeout: float = 15.0
+    # Results of a query are kept in Redis this long (Phase 9), shared by every API pod: the
+    # same question asked again gets them at once, and keyless search is rate-limited. Only
+    # searches that returned results. 0, or no REDIS_URL, turns it off.
+    web_search_cache_seconds: int = 600
 
     # Redact emails, card numbers, IPs and phone numbers: from user messages before the agent
     # runs, and from tool results and replies inside it (guardrails/pii.py).
@@ -107,6 +140,29 @@ class Settings(BaseSettings):
     # Long-term memory pushes running at once per API process. Each holds a pooled connection
     # (for its per-user lock) while it waits on the model, so keep it well under the pool size.
     memory_write_concurrency: int = 2
+
+    # Whether this process runs the background loops: the idle-thread memory loop and the
+    # memory store's TTL sweeper. On for `make dev`; in Kubernetes the worker runs them and the
+    # API pods set it to false, so N replicas don't run the same scans N times (Phase 9).
+    background_jobs: bool = True
+
+    # The queue memory pushes go through (chatbot/jobs, Phase 9): Amazon SQS, or ElasticMQ
+    # standing in for it (SQS_ENDPOINT_URL). Unset SQS_QUEUE_URL means no queue: pushes run in
+    # the process that triggered them, as before Phase 9. A FIFO queue, with a redrive policy to
+    # the dead-letter queue.
+    sqs_queue_url: str | None = None
+    sqs_dead_letter_queue_url: str | None = None
+    sqs_endpoint_url: str | None = None
+    sqs_region: str = "us-east-1"
+    # Only for ElasticMQ, which accepts any; on AWS leave them unset and use the pod's IAM role.
+    sqs_access_key_id: str | None = None
+    sqs_secret_access_key: SecretStr | None = None
+    # Where the worker (python -m chatbot.worker) serves its Prometheus metrics.
+    worker_metrics_port: int = 9100
+    # With a port, the API serves its metrics there instead of on /metrics, which then answers
+    # 404: the public port (and so the gateway) never exposes them. Set in Kubernetes; unset for
+    # make dev, where Prometheus scrapes /metrics.
+    metrics_port: int | None = None
 
     # Human approval before risky tool calls (see agent/approvals.py).
     hitl_enabled: bool = True

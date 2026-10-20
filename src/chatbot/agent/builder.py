@@ -6,8 +6,12 @@ from langchain.agents import AgentState as _AgentState
 from langchain.agents import create_agent
 from langchain.agents.middleware import (
     AgentMiddleware,
+    ClearToolUsesEdit,
+    ContextEditingMiddleware,
     HumanInTheLoopMiddleware,
     InterruptOnConfig,
+    ModelFallbackMiddleware,
+    ModelRetryMiddleware,
 )
 from langchain_core.language_models import BaseChatModel
 from langchain_core.tools import BaseTool
@@ -18,6 +22,7 @@ from langgraph.store.base import BaseStore
 
 from chatbot.accounts.limits import SpendTokens, UsageLimits
 from chatbot.agent.middleware import (
+    ModelBreaker,
     ModelCallLimit,
     ModelCallMiddleware,
     ToolCallMetrics,
@@ -28,6 +33,7 @@ from chatbot.config import ModelCredentials, RunContext, Settings
 from chatbot.guardrails.pii import output_middleware
 from chatbot.memory.long_term import LongTermMemory, MemoryWriter
 from chatbot.memory.short_term import summarization
+from chatbot.reliability.breaker import Breakers, is_outage
 from chatbot.tools.memory import build_remember_tool
 from chatbot.tools.registry import tool_retry
 
@@ -42,6 +48,12 @@ Agent = CompiledStateGraph[AgentState, RunContext]
 # of 25 would stop a run after two rounds. Setting it with agent.with_config() doesn't work:
 # a run's own config replaces it.
 RECURSION_LIMIT = 200
+
+# What the model sees instead of an old search result once the context is long (Phase 9).
+CLEARED_TOOL_RESULT = (
+    "[An earlier search result, removed to keep the conversation short. Search again if you "
+    "need it.]"
+)
 
 # The node that calls the chat model in create_agent's graph. Its tokens are the reply.
 MODEL_NODE = "model"
@@ -64,6 +76,8 @@ def build_llm(
         reasoning_effort=settings.reasoning_effort if is_reasoning(model) else None,
         max_completion_tokens=settings.max_tokens,
         timeout=timeout or settings.request_timeout,
+        # Retries are ModelRetryMiddleware's (build_graph); the memory writer's are the queue's.
+        max_retries=0,
         streaming=streaming,
         # Token counts on streamed responses too (for logs and tracing).
         stream_usage=True,
@@ -135,6 +149,18 @@ async def check_credentials(settings: Settings, credentials: ModelCredentials) -
     return f"The model couldn't be called ({reason})"
 
 
+def context_editing(settings: Settings) -> ContextEditingMiddleware[Any, Any]:
+    return ContextEditingMiddleware(
+        edits=[
+            ClearToolUsesEdit(
+                trigger=settings.context_clear_tool_results_tokens,
+                keep=settings.context_keep_tool_results,
+                placeholder=CLEARED_TOOL_RESULT,
+            )
+        ]
+    )
+
+
 def build_graph(
     settings: Settings,
     tools: Sequence[BaseTool] = (),
@@ -145,6 +171,8 @@ def build_graph(
     store: BaseStore | None = None,
     memory_writer: MemoryWriter | None = None,
     usage: UsageLimits | None = None,
+    fallback: BaseChatModel | None = None,
+    breakers: Breakers | None = None,
 ) -> Agent:
     """The agent: LangChain's create_agent loop (model ↔ tools) plus middleware.
 
@@ -155,8 +183,15 @@ def build_graph(
     (memory/long_term/); with a `memory_writer` too, the turns a summary folds away are
     pushed into them. With `usage` (chatbot/accounts/limits.py), every model call's tokens
     count against the user's daily budget.
+
+    Model calls that fail with an outage are retried (MODEL_MAX_RETRIES), go through a circuit
+    breaker per model (`breakers`, in memory unless given: Breakers.shared is in Redis), and
+    then go to `fallback`: by default FALLBACK_MODEL, none when `llm` is injected (tests).
     """
+    breakers = breakers or Breakers(settings)
     model = llm or build_llm(settings)
+    if fallback is None and llm is None and settings.fallback_model:
+        fallback = build_llm(settings, settings.fallback_model)
     summary_model = summarizer or llm or build_llm(settings, settings.summary_model, False)
     memory = store is not None and settings.memory_enabled
     writer = memory_writer if memory else None
@@ -165,13 +200,24 @@ def build_graph(
         # `interrupt_on`, so it never waits for approval: it only writes the user's own memories.
         tools = [*tools, build_remember_tool(writer)]
     middleware: list[AgentMiddleware[Any, Any]] = [
-        ToolCallMetrics(),
+        ToolCallMetrics([t.name for t in tools]),
         # Every turn: recall the user's long-term memories closest to their latest message.
         *([LongTermMemory(settings.memory_recall_limit)] if memory else []),
         # PII in tool results and replies (user messages are redacted earlier, by the API).
         *(output_middleware() if settings.pii_enabled else []),
         summarization(settings, summary_model, on_summarize=writer.schedule if writer else None),
+        # Past CONTEXT_CLEAR_TOOL_RESULTS_TOKENS, the model is sent only the latest few tool
+        # results (Phase 9); the thread keeps all of them, and summarization still applies.
+        *([context_editing(settings)] if settings.context_clear_tool_results_tokens else []),
         system_prompt,
+        # Outermost first (Phase 9). In an outage the fallback model answers; each model's call
+        # is retried, then counted by its breaker, which fails it at once while open. Outside
+        # ModelCallMiddleware, so every attempt is measured under its own model's name.
+        *([ModelFallbackMiddleware(fallback)] if fallback else []),
+        ModelRetryMiddleware(
+            max_retries=settings.model_max_retries, retry_on=is_outage, on_failure="error"
+        ),
+        ModelBreaker(breakers),
         ModelCallMiddleware(),
         # A user who logged in with their own endpoint and key: their runs' model calls use it.
         UserModel(settings),

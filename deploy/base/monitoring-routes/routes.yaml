@@ -1,0 +1,33 @@
+# Grafana, Prometheus and Alertmanager behind the same front door, at /grafana, /prometheus and
+# /alertmanager (each serves from that path: deploy/helm/kube-prometheus-stack.yaml). The
+# routes live in the monitoring namespace, next to their Services.
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: grafana
+spec:
+  parentRefs: [{name: chatbot, namespace: chatbot}]
+  rules:
+    - matches: [{path: {type: PathPrefix, value: /grafana}}]
+      backendRefs: [{name: monitoring-grafana, port: 80}]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: prometheus
+spec:
+  parentRefs: [{name: chatbot, namespace: chatbot}]
+  rules:
+    - matches: [{path: {type: PathPrefix, value: /prometheus}}]
+      backendRefs: [{name: monitoring-kube-prometheus-prometheus, port: 9090}]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: alertmanager
+spec:
+  parentRefs: [{name: chatbot, namespace: chatbot}]
+  rules:
+    - matches: [{path: {type: PathPrefix, value: /alertmanager}}]
+      backendRefs: [{name: monitoring-kube-prometheus-alertmanager, port: 9093}]
