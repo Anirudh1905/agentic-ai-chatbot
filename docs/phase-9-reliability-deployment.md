@@ -11,7 +11,7 @@
 | [Deployment](#deployment) | Built 2026-10-19 | The app on kind: one image, 2 API replicas behind Envoy Gateway, a worker on an SQS queue, a migrate Job, CloudNativePG, kube-prometheus-stack, a kind smoke test in CI |
 | [Reliability](#reliability) | Built 2026-10-20 | Retries, circuit breakers and a fallback model on the model calls; breakers on the embeddings and web search; a per-thread lock; Postgres backups with a tested point-in-time restore |
 | [Cost and latency](#cost-and-latency) | Built 2026-10-20 | Prompt caching measured (automatic at the gateway), caps on retrieved context and on old tool results, a web search cache in Redis |
-| [Load test](#load-test) | Run 2026-10-20 | 5 users with no errors; p95 time to first token 13.7 to 18.5 s, over the 10 s target |
+| [Load test](#load-test) | Run 2026-10-20 and 21 | 10 users with no errors on an 8-CPU, 24 GB VM; p95 time to first token 17.9 s, over the 10 s target |
 | [Outage test](#outage-test) | Passed 2026-10-21 | `gpt-5.4` fails at a proxy: chats finish on `gpt-4.1`, the breaker opens and the alert fires, then it all recovers |
 | [Runbook](runbook.md) | Written 2026-10-21 | Provider outage, embeddings and web search, stuck approvals, a PII leak, memory pushes, backups, a slow or out-of-memory node, a Docker restart |
 
@@ -310,7 +310,7 @@ flowchart LR
 - **Too short alone:** the tools and the system prompt come to 971 tokens (`o200k_base`), just under the minimum, so a thread's first call can't hit. Every later call can: a turn's second call (after a search) repeats the first call's prompt, and the next turn repeats the whole previous one.
 - **Memories stay put:** a thread's recalled set only grows when a message brings up one it hasn't seen (Phase 6).
 - **On the gateway:** three identical calls of 1,887 tokens read 0, 0, then 1,664 `cached_tokens`. Hits depend on which backend serves a call, which `prompt_cache_key` would steer, but the gateway refuses it.
-- **Measured:** `chatbot_model_cached_tokens_total{model}`, from `usage_metadata.input_token_details.cache_read`; its own counter, so `chatbot_model_tokens_total`'s sums and the token alert stay input plus output. Each model call's log line has it ("2104 tokens in, 1664 cached, 85 out"), and a "Prompt cache hit rate" panel charts it. Under the load test, 21% of input tokens were cached.
+- **Measured:** `chatbot_model_cached_tokens_total{model}`, from `usage_metadata.input_token_details.cache_read`; its own counter, so `chatbot_model_tokens_total`'s sums and the token alert stay input plus output. Each model call's log line has it ("2104 tokens in, 1664 cached, 85 out"), and a "Prompt cache hit rate" panel charts it. Under the load tests, 20 to 21% of input tokens were cached.
 - **Guarded:** a unit test checks that every call of a thread gets the same system prompt, and memories come after the static part. A per-request value in the prompt (a timestamp, a thread ID) would quietly make every call a miss.
 
 ### A cap on context
@@ -336,7 +336,7 @@ flowchart LR
 - **Shared** by every API pod, for `WEB_SEARCH_CACHE_SECONDS` (600); `n` is `WEB_SEARCH_MAX_RESULTS`, so a different count is a different search.
 - **Only searches with results** are cached: keyless search returns nothing when rate-limited, and a failure goes to the retry and the breaker as before. An approval still applies to a cached query, since it runs before the tool.
 - **Without Redis** (no `REDIS_URL`, or a TTL of 0) there's no cache; while Redis is down, searches run uncached with one warning per outage, and 0.5 s client timeouts keep a slow Redis from slowing a search.
-- **Measured:** `chatbot_web_search_cache_total{result}`, a "Web search cache hit rate" panel, and `(cached)` in each search's log line. Under the load test it answered 6 of 26 searches.
+- **Measured:** `chatbot_web_search_cache_total{result}`, a "Web search cache hit rate" panel, and `(cached)` in each search's log line. Under the load tests it answered a fifth to a third of searches (12 of 33 in the 10-user run on the larger VM).
 
 ## Load test
 
@@ -345,29 +345,30 @@ flowchart LR
 - **Each user** has its own account, and they start 13 s apart: registering and logging in are two of the 10 attempts a minute allowed per IP, and they all come from one. Each repeats a conversation for `DURATION` seconds: a knowledge base question from the golden set on a new thread, a follow-up on the same thread, 2 to 5 s of thought. Every fourth conversation asks one of three web questions instead, so the search cache sees repeats.
 - **It passes** with no failed turn (a status other than 200, an `error` event, or no `done`) and a p95 time to first token within `P95_TTFT_SECONDS` (10 s). It writes `tests/load/report.json` (gitignored), and each user deletes its account at the end.
 
-| Run, 2026-10-20 | Turns | Failed | First token p50 / p95 | Whole turn p50 / p95 | What it showed |
-| --- | --- | --- | --- | --- | --- |
-| 10 users | 41 | 3 | 10.1 s / 142 s | 10.9 s / 209 s | The kind VM ran out of memory: the kernel killed an API pod at 2 GB, and Postgres, Redis and every probe stalled |
-| 10 users, after the fixes | 152 | 0 | 11.2 s / 37.4 s | 11.9 s / 41.2 s | No errors, but searches took 8.2 s at p50 and 25 s at p95, at a load of 33 on 6 cores; Grafana itself timed out |
-| **5 users** | **125** | **0** | **8.3 s / 18.5 s** | **8.7 s / 18.8 s** | No errors, probe failures or restarts. Follow-ups (no search) 4.0 s at p50, first questions 9.7 s |
-| 5 users, 4 minutes, after a VM restart | 113 | 0 | 8.0 s / 13.7 s | 8.2 s / 14.2 s | The same picture; the dashboard below is from this run |
+| Run | Docker VM | Turns | Failed | First token p50 / p95 | Whole turn p50 / p95 | What it showed |
+| --- | --- | --- | --- | --- | --- | --- |
+| 10 users, 2026-10-20 | 6 CPUs, 16 GB | 41 | 3 | 10.1 s / 142 s | 10.9 s / 209 s | The VM ran out of memory: the kernel killed an API pod at 2 GB, and Postgres, Redis and every probe stalled |
+| 10 users, after the fixes | 6 CPUs, 16 GB | 152 | 0 | 11.2 s / 37.4 s | 11.9 s / 41.2 s | No errors, but searches took 8.2 s at p50 and 25 s at p95, at a load of 33 on 6 cores; Grafana itself timed out |
+| 5 users | 6 CPUs, 16 GB | 125 | 0 | 8.3 s / 18.5 s | 8.7 s / 18.8 s | No errors, probe failures or restarts. Follow-ups (no search) 4.0 s at p50, first questions 9.7 s |
+| 5 users, 4 minutes | 6 CPUs, 16 GB | 113 | 0 | 8.0 s / 13.7 s | 8.2 s / 14.2 s | The same picture |
+| **10 users, 2026-10-21** | **8 CPUs, 24 GB** | **221** | **0** | **9.1 s / 17.9 s** | **9.3 s / 18.4 s** | No errors, probe failures or restarts, at a load of 12 on 8 cores. Searches 4.2 s at p50 and 12.0 s at p95; follow-ups 5.1 s at p50, first questions 10.5 s. The dashboard below is from this run |
 
 ```mermaid
 xychart-beta
-    title "Time to first token (s) after the fixes"
-    x-axis ["10 users p50", "10 users p95", "5 users p50", "5 users p95"]
+    title "Time to first token (s), after the fixes"
+    x-axis ["10/6 p50", "10/6 p95", "5/6 p50", "5/6 p95", "10/8 p50", "10/8 p95"]
     y-axis "seconds" 0 --> 40
-    bar [11.2, 37.4, 8.3, 18.5]
-    line [10, 10, 10, 10]
+    bar [11.2, 37.4, 8.3, 18.5, 9.1, 17.9]
+    line [10, 10, 10, 10, 10, 10]
 ```
 
-The line is the 10 s target. The dashboard during the last 5-user run:
+Each bar is users/CPUs and a percentile; the line is the 10 s target. The dashboard during the 10-user run on the larger VM:
 
-![The Chatbot dashboard in Grafana during a 5-user load test: 0% errors, p95 time to first token 14.8 s, model call latency, tokens per minute, and the token-spike alert firing](images/grafana-dark.png)
+![The Chatbot dashboard in Grafana during a 10-user load test: 1.24 requests a second, 0% errors, p95 time to first token 18.7 s, model calls at 2.4 s p50 and under 5 s p95, tokens per minute rising, and the token-spike alert firing](images/grafana-10-users-dark.png)
 
-- **The bottleneck is the CPU reranker, not the model or the app.** Under 10 users model calls stayed at 2.6 s p50 and 7.3 s p95, while knowledge base searches took 8.2 s at p50 (reranking adds about 0.5 s on an idle machine, Phase 2). The kind node is a 6-core Docker VM shared with other projects' containers, with about 2 GB of memory free.
+- **The bottleneck is the CPU reranker, not the model or the app.** Under 10 users model calls stayed at 2.4 to 2.6 s p50 and 4.9 to 7.3 s p95, while knowledge base searches took 8.2 s at p50 on 6 cores and 4.2 s on 8 (reranking adds about 0.5 s on an idle machine, Phase 2). The Docker VM is shared with other projects' containers; with 8 CPUs and 24 GB instead of 6 and 16, searches got twice as fast and the node stayed healthy at 10 users.
 - **Fixed along the way:** one rerank at a time per pod (`tools/rerank.py`: concurrent ONNX runs each used every core and allocated their own working memory; with the lock the 10-user run had no out-of-memory kill), API memory requests and limits that match use (above), and the load test retrying a dropped login.
-- **Capacity on this laptop: 5 users with no errors, p95 time to first token 13.7 to 18.5 s.** The 10 s target holds at p50, not p95. Meeting it needs a reranker that doesn't compete for the CPU (skipped when busy, fewer candidates, a GPU, or a hosted API); it's kept as is for now, since it raised top-1 retrieval from 96% to 100%.
+- **Capacity on this laptop: 10 users with no errors on 8 CPUs and 24 GB (5 on 6 CPUs and 16 GB), p95 time to first token about 18 s.** The 10 s target holds at p50 (9.1 s), not p95: a turn that searches still waits on the reranker, and first questions take 10.5 s at p50. Meeting it needs a reranker that doesn't compete for the CPU (skipped when busy, fewer candidates, a GPU, or a hosted API); it's kept as is for now, since it raised top-1 retrieval from 96% to 100%.
 
 ## Outage test
 
@@ -441,7 +442,7 @@ To document, not build: the real SQS queues and their IAM permissions (Terraform
 - [x] `tilt up` brings up the whole stack on kind; a chat works through the gateway, spread over 2 API pods
 - [x] A rolling restart of the API breaks no streaming reply
 - [x] The worker alone runs the background loops; Prometheus scrapes every API pod
-- [ ] CI builds the image, validates the manifests and passes the kind smoke test (runs on the first PR)
-- [ ] Load test: target concurrent users at the p95 latency target with no errors. Run: 5 users with no errors, but p95 time to first token is 13.7 to 18.5 s against 10 s ([Load test](#load-test))
+- [x] CI builds the image, validates the manifests and passes the kind smoke test (on [PR #10](https://github.com/Anirudh1905/agentic-ai-chatbot/pull/10))
+- [ ] Load test: target concurrent users at the p95 latency target with no errors. Run: 10 users with no errors on 8 CPUs and 24 GB, but p95 time to first token is 17.9 s against 10 s ([Load test](#load-test))
 - [x] A provider outage degrades to the fallback model, not errors ([Outage test](#outage-test))
 - [x] Runbook for common incidents: provider outage, stuck interrupts, a PII leak report ([runbook](runbook.md); the stuck-approval query and the reject-on-behalf steps were tried on the cluster)

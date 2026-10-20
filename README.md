@@ -115,9 +115,9 @@ Every endpoint's flow is in [API](docs/api.md), and each feature in [How it work
 
 ## Observability
 
-Traces go to Langfuse, metrics to Prometheus with 13 alerts, and the "Chatbot" dashboard in Grafana charts them. Here it is under `make load` with 5 users: no errors, p95 time to first token 13.7 to 18.5 s, held back by the CPU reranker ([Load test](docs/phase-9-reliability-deployment.md#load-test)):
+Traces go to Langfuse, metrics to Prometheus with 13 alerts, and the "Chatbot" dashboard in Grafana charts them. Here it is under `make load` with 10 users: no errors, p95 time to first token 17.9 s, held back by the CPU reranker ([Load test](docs/phase-9-reliability-deployment.md#load-test)):
 
-<img alt="The Chatbot dashboard in Grafana, dark theme, during a 5-user load test: about 1 request a second, 0% errors, p95 time to first token 14.8 s, request and model call latency by route and model, tokens per minute rising, and the ChatbotTokenSpike alert firing." src="docs/images/grafana-dark.png" width="800">
+<img alt="The Chatbot dashboard in Grafana, dark theme, during a 10-user load test: about 1.2 requests a second, 0% errors, p95 time to first token 18.7 s, request latency by route, time to first token, model call latency (2.4 s p50, under 5 s p95), tokens per minute rising, and the ChatbotTokenSpike alert firing." src="docs/images/grafana-10-users-dark.png" width="800">
 
 ## Docs
 

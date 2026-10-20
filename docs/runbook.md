@@ -122,7 +122,7 @@ What to do when something goes wrong with the deployed chatbot (Phase 9). Each e
 
 **Do:**
 
-- **Too much load for the node:** fewer users. On this laptop, 5 concurrent users is the measured capacity.
+- **Too much load for the node:** fewer users, or a bigger Docker VM. On this laptop the measured capacity is 10 concurrent users on 8 CPUs and 24 GB, and 5 on 6 CPUs and 16 GB.
 - **Reranking is the bottleneck:** turn it off (add `RERANKER_MODEL=` to the `app-config` literals): searches use the fused order, slightly worse at top-1 (96% against 100%), much faster under load.
 - **Out of memory:** stop other containers sharing the Docker VM, or give the VM more memory. The API pods' 3 Gi limit makes one of them, not Postgres, the pod that's killed.
 
@@ -132,7 +132,8 @@ What to do when something goes wrong with the deployed chatbot (Phase 9). Each e
 
 **Do:**
 
-1. `make cluster`: it raises the VM kernel's inotify limits, which a restart resets.
-2. Delete the pods in `CrashLoopBackOff` (`kubectl --context kind-chatbot get pods -A`), so they start again now rather than after their back-off.
-3. In Tilt, re-run any resource left in error (`tilt trigger postgres`), so the ones waiting on it roll out.
-4. `deploy/smoke.sh` to check.
+1. Check `docker info` answers. After a Rancher Desktop restart, `/var/run/docker.sock` can point at Docker Desktop's socket instead of Rancher's: `export DOCKER_HOST=unix://$HOME/.rd/docker.sock`, or fix the socket in Rancher Desktop's settings.
+2. `make cluster`: it raises the VM kernel's inotify limits, which a restart resets.
+3. Delete the pods in `CrashLoopBackOff` (`kubectl --context kind-chatbot get pods -A`), so they start again now rather than after their back-off.
+4. In Tilt, re-run any resource left in error (`tilt trigger postgres`), so the ones waiting on it roll out.
+5. `deploy/smoke.sh` to check.
