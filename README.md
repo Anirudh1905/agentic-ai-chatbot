@@ -18,9 +18,9 @@ The phase plans and as-built docs are in [docs/](docs/); the [Status](#status) t
 | [6. Long-term memory](docs/phase-6-long-term-memory.md) | Per-fact memories per user across threads: pushed at the token breach, after 30 idle minutes, or on request; recalled each turn, closest to the message | Built ([PR #7](https://github.com/Anirudh1905/agentic-ai-chatbot/pull/7)) |
 | [7. Eval gate](docs/phase-7-eval-gate.md) | Golden sets, a judge model (DeepEval) and a regression gate on every PR | Built ([PR #8](https://github.com/Anirudh1905/agentic-ai-chatbot/pull/8)) |
 | [8. Security and observability](docs/phase-8-security-observability.md) | Accounts and login (JWT), your own model key, Redis rate limits and token budgets, deleting a user's data, trace metadata, Prometheus metrics, a Grafana dashboard and alerts | Built ([PR #9](https://github.com/Anirudh1905/agentic-ai-chatbot/pull/9)) |
-| [9. Reliability and deployment](docs/phase-9-reliability-deployment.md) | Kubernetes (kind): 2 API replicas behind Envoy Gateway, memory pushes on an SQS queue run by a worker, CloudNativePG, kube-prometheus-stack, a kind smoke test in CI; retries, circuit breakers and a fallback model, a per-thread lock, Postgres backups with a tested point-in-time restore; then cost controls and a load test | Deployment and reliability built (on `phase-9-reliability-deployment`); the rest planned |
+| [9. Reliability and deployment](docs/phase-9-reliability-deployment.md) | Kubernetes (kind): 2 API replicas behind Envoy Gateway, memory pushes on an SQS queue run by a worker, CloudNativePG, kube-prometheus-stack, a kind smoke test in CI; retries, circuit breakers and a fallback model, a per-thread lock, Postgres backups with a tested point-in-time restore; prompt caching measured, caps on context, a web search cache; a load test | Deployment, reliability, and cost and latency built, the load test run (on `phase-9-reliability-deployment`); the outage test and runbook planned |
 
-`make check` runs ruff, mypy and the tests (276 at the moment: unit, and integration against the cluster's Postgres, ElasticMQ and Redis). `make eval` runs the eval suites against the real model and writes `tests/evals/report.json`, which CI checks on every PR (see [Evals](#evals)).
+`make check` runs ruff, mypy and the tests (289 at the moment: unit, and integration against the cluster's Postgres, ElasticMQ and Redis). `make eval` runs the eval suites against the real model and writes `tests/evals/report.json`, which CI checks on every PR (see [Evals](#evals)).
 
 ## Repository layout
 
@@ -87,7 +87,7 @@ Without Kubernetes: start Postgres and Redis yourself, then `make migrate`, `mak
 
 Try asking "Can I return a tent I bought at 40% off?" (answered from the sample docs) or "What's the latest news about REI?" (web search).
 
-<img alt="The chat UI: a question about returning a clearance jacket and packing for a trek, answered from the refund policy with citations and a Sources list, and a Remember this button beside the reply. The sidebar shows the user, their chats, and what the bot remembers about them (a Ladakh trek in April, lives in Bangalore), which the answer used." src="docs/images/ui-dark.png" width="800">
+<img alt="The chat UI: a question about returning a clearance jacket and packing for a trek, answered from the refund policy with citations and a Sources list, and a Remember this button beside the reply. The sidebar shows the user, their chats, and what the bot remembers about them (lives in Bangalore, a Ladakh trek in April 2027). The answer also covers the EU right of withdrawal." src="docs/images/ui-chat-dark.png" width="800">
 
 The answer cites the refund policy, lists its sources, and uses two long-term memories from an earlier conversation (the sidebar's "What I remember about you"). The bookmark button beside the reply saves it to memory.
 
@@ -245,9 +245,15 @@ Each run's trace is named `chat` or `resume`, grouped by thread (Langfuse's sess
 
 ### Metrics and alerts
 
-The API serves Prometheus metrics: requests and latency by route, time to first token, open streams, model latency, tokens and errors by model, tool calls by outcome, approval pauses and decisions, PII redactions by type, memory recall hits, refusals by limit (429s, and 409s for a busy thread), the memory queue's depth and pushes, and open circuit breakers. In the cluster they're on a separate port (`METRICS_PORT`) that the gateway doesn't route, and Prometheus scrapes every API pod, the worker and Postgres; outside it, `GET /metrics`. Grafana charts them on the "Chatbot" dashboard, and thirteen alerts (API or worker down, error rate, slow first token, slow or failing model, token spike, PII in replies, pushes dead-lettered or stuck, a circuit breaker open, no Postgres backup in a day, WAL archiving failing) are a `PrometheusRule` in `deploy/base/monitoring.yaml`. They show as firing in Prometheus, on the dashboard and in Alertmanager; nothing pages. Details in [the Phase 8 doc](docs/phase-8-security-observability.md#observability) and [Phase 9](docs/phase-9-reliability-deployment.md#deployment).
+The API serves Prometheus metrics: requests and latency by route, time to first token, open streams, model latency, tokens and errors by model, tool calls by outcome, approval pauses and decisions, PII redactions by type, memory recall hits, prompt cache and web search cache hits, refusals by limit (429s, and 409s for a busy thread), the memory queue's depth and pushes, and open circuit breakers. In the cluster they're on a separate port (`METRICS_PORT`) that the gateway doesn't route, and Prometheus scrapes every API pod, the worker and Postgres; outside it, `GET /metrics`. Grafana charts them on the "Chatbot" dashboard, and thirteen alerts (API or worker down, error rate, slow first token, slow or failing model, token spike, PII in replies, pushes dead-lettered or stuck, a circuit breaker open, no Postgres backup in a day, WAL archiving failing) are a `PrometheusRule` in `deploy/base/monitoring.yaml`. They show as firing in Prometheus, on the dashboard and in Alertmanager; nothing pages. Details in [the Phase 8 doc](docs/phase-8-security-observability.md#observability) and [Phase 9](docs/phase-9-reliability-deployment.md#deployment).
+
+The "Chatbot" dashboard under `make load` with 5 users on the kind cluster: no errors, p95 time to first token 13.7 to 18.5 s across runs, held back by the CPU reranker. Details in [Load test](docs/phase-9-reliability-deployment.md#load-test):
+
+<img alt="The Chatbot dashboard in Grafana, dark theme, during a 5-user load test: about 1 request a second, 0% errors, p95 time to first token 14.8 s, request and model call latency by route and model, tokens per minute rising, and the ChatbotTokenSpike alert firing." src="docs/images/grafana-dark.png" width="800">
 
 Model calls that time out or fail are retried once, then go to the fallback model (`gpt-4.1`); circuit breakers, shared in Redis, skip a model, the embeddings or web search while they're down. Postgres archives its WAL to MinIO continuously and takes a base backup nightly; `make restore TARGET="…"` restores to a point in time into a second cluster, and `make restore-test` proves it. Details in [Reliability](docs/phase-9-reliability-deployment.md#reliability).
+
+For cost: the gateway caches prompt prefixes on its own, and the dashboard shows the hit rate; knowledge base results are capped at `RETRIEVAL_MAX_TOKENS`, a long thread's older search results are left out of what the model is sent, and web search results are cached in Redis for 10 minutes. Details in [Cost and latency](docs/phase-9-reliability-deployment.md#cost-and-latency).
 
 ## Endpoints
 
@@ -292,12 +298,15 @@ Set in `.env` (see `.env.example`), the environment, or, for secrets, files in `
 | `CHUNK_SIZE_TOKENS` / `CHUNK_OVERLAP_TOKENS` | `600` / `80` | How documents are split at ingestion |
 | `WEB_SEARCH_ENABLED` | `true` | DuckDuckGo web search; no key needed |
 | `WEB_SEARCH_MAX_RESULTS` / `WEB_SEARCH_TIMEOUT` | `5` / `15` | Results per search, and seconds before a search gives up |
+| `WEB_SEARCH_CACHE_SECONDS` | `600` | How long a query's results are kept in Redis, shared by the API pods. `0`, or no `REDIS_URL`: no cache |
 | `RETRIEVAL_CANDIDATES` / `RETRIEVAL_TOP_K` | `30` / `6` | Candidates from each of vector and full-text search before fusion, and chunks returned per knowledge base search |
+| `RETRIEVAL_MAX_TOKENS` | `2500` | Cap on one knowledge base search's results (estimated tokens): the best-ranked chunks that fit, at least one |
 | `RERANKER_MODEL` | `BAAI/bge-reranker-v2-m3-int8` | Local cross-encoder that reorders the top `RERANK_CANDIDATES` (8) results. Empty turns it off |
 | `RERANKER_CACHE_DIR` | `~/.cache/fastembed` | Where the reranker model is downloaded |
 | `MAX_MODEL_CALLS` | `6` | Model calls per request (`ModelCallLimitMiddleware`); each can be followed by tool calls |
 | `SUMMARY_MODEL` | `gpt-4.1-mini` | Summarizes older turns of long threads |
 | `CONTEXT_MAX_TOKENS` | `10000` | Summarize older turns once a thread's messages pass this (estimated) |
+| `CONTEXT_CLEAR_TOOL_RESULTS_TOKENS` / `CONTEXT_KEEP_TOOL_RESULTS` | `6000` / `3` | Past this many tokens, the model is sent only the latest few tool results (`ContextEditingMiddleware`); the thread keeps them all. `0`: off |
 | `CHECKPOINT_RETENTION_DAYS` | `30` | `make retention` prunes checkpoint history of threads idle this long |
 | `MEMORY_ENABLED` | `true` | Long-term memory: pushes, recall, the "Remember this" API and the `remember` tool |
 | `MEMORY_THREAD_TTL_MINUTES` | `30` | A thread idle this long has its turns not yet pushed sent to long-term memory |

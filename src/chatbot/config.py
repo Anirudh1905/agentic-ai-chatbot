@@ -76,6 +76,12 @@ class Settings(BaseSettings):
     # model's window: every turn resends the history. Each summary also updates the user's
     # long-term memory.
     context_max_tokens: int = 10_000
+    # Before that, old search results go (Phase 9, LangChain's ContextEditingMiddleware): past
+    # this many tokens, each model call sees all but the latest CONTEXT_KEEP_TOOL_RESULTS tool
+    # results as a placeholder. Every call resends them, and old ones are rarely still needed.
+    # The thread keeps them; only what the model is sent changes. 0 turns it off.
+    context_clear_tool_results_tokens: int = 6_000
+    context_keep_tool_results: int = 3
     # The retention job keeps only the latest checkpoint of threads idle this many days.
     checkpoint_retention_days: int = 30
 
@@ -91,6 +97,9 @@ class Settings(BaseSettings):
     # Candidates fetched from each of vector and full-text search before fusion.
     retrieval_candidates: int = 30
     retrieval_top_k: int = 6
+    # Cap on one search's results (Phase 9), in estimated tokens: the best-ranked chunks that
+    # fit, at least one. Six chunks of up to CHUNK_SIZE_TOKENS would be about 3,600.
+    retrieval_max_tokens: int = 2_500
     # Cross-encoder that reorders the fused results (fastembed model name). Empty disables it.
     # Measured on the golden set: top-1 accuracy 96% -> 100%, about +0.5 s per search on CPU.
     reranker_model: str | None = "BAAI/bge-reranker-v2-m3-int8"
@@ -102,6 +111,10 @@ class Settings(BaseSettings):
     web_search_enabled: bool = True
     web_search_max_results: int = 5
     web_search_timeout: float = 15.0
+    # Results of a query are kept in Redis this long (Phase 9), shared by every API pod: the
+    # same question asked again gets them at once, and keyless search is rate-limited. Only
+    # searches that returned results. 0, or no REDIS_URL, turns it off.
+    web_search_cache_seconds: int = 600
 
     # Redact emails, card numbers, IPs and phone numbers: from user messages before the agent
     # runs, and from tool results and replies inside it (guardrails/pii.py).

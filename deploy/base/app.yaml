@@ -57,7 +57,10 @@ spec:
             - {name: secrets, mountPath: /run/secrets, readOnly: true}
             - {name: models, mountPath: /models, readOnly: true}
           resources:
-            requests: {cpu: 200m, memory: 1Gi}  # the reranker model is about 600 MB in memory
+            # About 1.7 GB with the reranker loaded, measured under load (Phase 9). The limit makes
+            # a pod that grows past it the one that's killed, not whatever the node's kernel picks.
+            requests: {cpu: 200m, memory: 2Gi}
+            limits: {memory: 3Gi}
       automountServiceAccountToken: false  # no Kubernetes API calls; frees /run/secrets
       volumes:
         - name: secrets

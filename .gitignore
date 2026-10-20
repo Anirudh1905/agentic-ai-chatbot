@@ -229,3 +229,4 @@ data/*
 deploy/local/secrets.env
 deploy/local/ca-bundle.pem
 deploy/local/backup-store.env
+tests/load/report.json

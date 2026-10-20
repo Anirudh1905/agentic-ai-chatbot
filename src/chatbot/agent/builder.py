@@ -6,6 +6,8 @@ from langchain.agents import AgentState as _AgentState
 from langchain.agents import create_agent
 from langchain.agents.middleware import (
     AgentMiddleware,
+    ClearToolUsesEdit,
+    ContextEditingMiddleware,
     HumanInTheLoopMiddleware,
     InterruptOnConfig,
     ModelFallbackMiddleware,
@@ -46,6 +48,12 @@ Agent = CompiledStateGraph[AgentState, RunContext]
 # of 25 would stop a run after two rounds. Setting it with agent.with_config() doesn't work:
 # a run's own config replaces it.
 RECURSION_LIMIT = 200
+
+# What the model sees instead of an old search result once the context is long (Phase 9).
+CLEARED_TOOL_RESULT = (
+    "[An earlier search result, removed to keep the conversation short. Search again if you "
+    "need it.]"
+)
 
 # The node that calls the chat model in create_agent's graph. Its tokens are the reply.
 MODEL_NODE = "model"
@@ -141,6 +149,18 @@ async def check_credentials(settings: Settings, credentials: ModelCredentials) -
     return f"The model couldn't be called ({reason})"
 
 
+def context_editing(settings: Settings) -> ContextEditingMiddleware[Any, Any]:
+    return ContextEditingMiddleware(
+        edits=[
+            ClearToolUsesEdit(
+                trigger=settings.context_clear_tool_results_tokens,
+                keep=settings.context_keep_tool_results,
+                placeholder=CLEARED_TOOL_RESULT,
+            )
+        ]
+    )
+
+
 def build_graph(
     settings: Settings,
     tools: Sequence[BaseTool] = (),
@@ -186,6 +206,9 @@ def build_graph(
         # PII in tool results and replies (user messages are redacted earlier, by the API).
         *(output_middleware() if settings.pii_enabled else []),
         summarization(settings, summary_model, on_summarize=writer.schedule if writer else None),
+        # Past CONTEXT_CLEAR_TOOL_RESULTS_TOKENS, the model is sent only the latest few tool
+        # results (Phase 9); the thread keeps all of them, and summarization still applies.
+        *([context_editing(settings)] if settings.context_clear_tool_results_tokens else []),
         system_prompt,
         # Outermost first (Phase 9). In an outage the fallback model answers; each model's call
         # is retried, then counted by its breaker, which fails it at once while open. Outside

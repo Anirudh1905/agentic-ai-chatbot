@@ -20,6 +20,9 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 RRF_K = 60
+# The token estimate for the retrieval cap: about four characters a token, as LangChain's
+# count_tokens_approximately (no tokenizer download).
+CHARS_PER_TOKEN = 4
 
 VECTOR_SQL = """
     SELECT id::text, doc_id, title, heading, page, content
@@ -159,7 +162,20 @@ async def search_chunks(
         except Exception:
             # Fused order is still a good ranking; don't fail the search over the reranker.
             logger.exception("reranking failed; using fused order")
-    return hits[: settings.retrieval_top_k]
+    return within_tokens(hits[: settings.retrieval_top_k], settings.retrieval_max_tokens)
+
+
+def within_tokens(hits: list[SearchHit], max_tokens: int) -> list[SearchHit]:
+    """The best-ranked hits whose content fits in `max_tokens` (estimated), and always the
+    first: a search that found something returns something."""
+    kept: list[SearchHit] = []
+    total = 0
+    for hit in hits:
+        total += len(hit.content) // CHARS_PER_TOKEN
+        if kept and total > max_tokens:
+            break
+        kept.append(hit)
+    return kept
 
 
 def build_knowledge_base_tool(

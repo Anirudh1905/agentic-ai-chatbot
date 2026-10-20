@@ -883,6 +883,90 @@
         }
       },
       "description": "Time since the last base backup (nightly at 02:00) and since the last WAL segment was archived (every 5 minutes at most). A restore loses what came after the last archived segment."
+    },
+    {
+      "id": 21,
+      "type": "timeseries",
+      "title": "Prompt cache hit rate",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 71,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (model) (rate(chatbot_model_cached_tokens_total[15m])) / sum by (model) (rate(chatbot_model_tokens_total{kind=\"input\"}[15m]))",
+          "legendFormat": "{{model}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "description": "Share of the agent's input tokens the model endpoint served from its prompt cache (Phase 9). The gateway caches prompt prefixes of 1,024 tokens or more on its own."
+    },
+    {
+      "id": 22,
+      "type": "timeseries",
+      "title": "Web search cache hit rate",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 71,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(rate(chatbot_web_search_cache_total{result=\"hit\"}[15m])) / sum(rate(chatbot_web_search_cache_total[15m]))",
+          "legendFormat": "hit rate"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "description": "Web searches answered from the Redis cache (WEB_SEARCH_CACHE_SECONDS, Phase 9)."
     }
   ],
   "editable": true

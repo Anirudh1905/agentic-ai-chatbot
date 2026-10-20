@@ -27,6 +27,7 @@ from chatbot.storage.embeddings import build_embeddings
 from chatbot.storage.langgraph import build_checkpointer, build_store
 from chatbot.tools.registry import build_tools
 from chatbot.tools.rerank import build_reranker
+from chatbot.tools.web_search import build_search_cache
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +65,9 @@ class Resources:
             if reranker:
                 # Load the model now rather than during the first search.
                 await asyncio.to_thread(reranker.load)
-            tools = build_tools(settings, self.pool, embeddings, reranker, breakers)
+            tools = build_tools(
+                settings, self.pool, embeddings, reranker, breakers, build_search_cache(settings)
+            )
             self.checkpointer = checkpointer
             self.threads = PostgresThreadStore(self.pool)
             self.store = store

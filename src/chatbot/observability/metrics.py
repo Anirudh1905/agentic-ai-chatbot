@@ -50,11 +50,22 @@ MODEL_CALL_ERRORS = Counter(
 MODEL_TOKENS = Counter(
     "chatbot_model_tokens_total", "Tokens of the agent's model calls", ["model", "kind"]
 )
+# Apart from MODEL_TOKENS, so its sums stay input plus output.
+MODEL_CACHED_TOKENS = Counter(
+    "chatbot_model_cached_tokens_total",
+    "Input tokens of the agent's model calls served from the endpoint's prompt cache (Phase 9)",
+    ["model"],
+)
 
 TOOL_CALLS = Counter(
     "chatbot_tool_calls_total",
     "Tool calls, after retries; outcome is ok or error",
     ["tool", "outcome"],
+)
+WEB_SEARCH_CACHE = Counter(
+    "chatbot_web_search_cache_total",
+    "Web searches looked up in the cache (Phase 9); result is hit or miss",
+    ["result"],
 )
 APPROVAL_PAUSES = Counter(
     "chatbot_approval_pauses_total", "Runs that paused for a human to approve a tool call"
@@ -124,6 +135,7 @@ for _decision in ("approve", "edit", "reject"):
     APPROVAL_DECISIONS.labels(_decision)
 for _result in ("hit", "miss"):
     MEMORY_RECALLS.labels(_result)
+    WEB_SEARCH_CACHE.labels(_result)
 for _limit in ("user", "ip", "login", "budget", "thread_busy"):
     LIMITED.labels(_limit)
 for _kind in ("summary", "idle", "remember"):

@@ -1,7 +1,8 @@
 # The CI overlay (Phase 9): the kind overlay with the image CI builds and loads (chatbot:ci), and
 # without what the smoke test doesn't need: the ingest Job calls the embeddings model (CI has no
 # key), the reranker-model Job downloads 570 MB, and pgweb is a dev tool. (postgres-host stays:
-# a NodePort, harmless.) Without that Job the model volume is empty, so reranking is off.
+# a NodePort, harmless.) Without that Job the model volume is empty, so reranking is off, and the
+# API pods ask for less memory.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
@@ -35,3 +36,9 @@ patches:
       apiVersion: apps/v1
       kind: Deployment
       metadata: {name: pgweb}
+  # Without the reranker an API pod needs a few hundred MB, not the 2 Gi base asks for.
+  - target: {kind: Deployment, name: api}
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/memory
+        value: 512Mi

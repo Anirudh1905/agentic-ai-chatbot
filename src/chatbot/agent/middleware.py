@@ -26,6 +26,7 @@ from langgraph.types import Command
 from chatbot.config import ModelCredentials, RunContext, Settings
 from chatbot.memory.short_term import close_dangling_tool_calls
 from chatbot.observability.metrics import (
+    MODEL_CACHED_TOKENS,
     MODEL_CALL_ERRORS,
     MODEL_CALL_SECONDS,
     MODEL_TOKENS,
@@ -96,6 +97,8 @@ class ModelCallMiddleware(AgentMiddleware[AgentState[Any], Any]):
             if usage := reply.usage_metadata:
                 MODEL_TOKENS.labels(model, "input").inc(usage["input_tokens"])
                 MODEL_TOKENS.labels(model, "output").inc(usage["output_tokens"])
+                # Part of "input", billed at a discount. The gateway caches on its own.
+                MODEL_CACHED_TOKENS.labels(model).inc(cached_tokens(reply))
         return response
 
 
@@ -146,6 +149,14 @@ class ToolCallMetrics(AgentMiddleware[AgentState[Any], Any]):
         return result
 
 
+def cached_tokens(response: AIMessage) -> int:
+    """Input tokens read from the endpoint's prompt cache. OpenAI caches a prompt's longest
+    previously seen prefix of 1,024 tokens or more, so the system prompt and the tools come
+    first, and what changes per turn (memories, history) after them."""
+    usage = response.usage_metadata
+    return (usage.get("input_token_details", {}).get("cache_read") or 0) if usage else 0
+
+
 def log_model_call(response: AIMessage, seconds: float) -> None:
     usage = response.usage_metadata
     if response.tool_calls:
@@ -153,9 +164,10 @@ def log_model_call(response: AIMessage, seconds: float) -> None:
     else:
         outcome = f"answer of {len(response.text)} chars"
     logger.info(
-        "model replied in %.1fs (%s tokens in, %s out): %s",
+        "model replied in %.1fs (%s tokens in, %d cached, %s out): %s",
         seconds,
         usage["input_tokens"] if usage else "?",
+        cached_tokens(response),
         usage["output_tokens"] if usage else "?",
         outcome,
     )

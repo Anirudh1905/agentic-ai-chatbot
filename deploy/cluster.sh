@@ -7,6 +7,12 @@ cd "$(dirname "$0")/.."
 CLUSTER=chatbot
 CONTEXT=kind-$CLUSTER
 
+# kind's node runs kube-proxy and every pod's file watchers on the Docker VM's kernel, whose
+# default inotify limits are too low: kube-proxy then fails with "too many open files" and no
+# pod reaches the API server. The limits reset when the VM restarts, so after one, run this again.
+docker run --rm --privileged alpine:3 \
+  sysctl -qw fs.inotify.max_user_instances=512 fs.inotify.max_user_watches=524288
+
 if ! kind get clusters | grep -qx "$CLUSTER"; then
   # kind makes the new cluster your current context; put back the one you had.
   previous=$(kubectl config current-context 2>/dev/null || true)

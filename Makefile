@@ -1,4 +1,4 @@
-.PHONY: dev worker ui tilt langfuse cluster cluster-delete secrets restore restore-test test test-unit lint fmt typecheck up down check migrate ingest eval eval-calibrate eval-check retention
+.PHONY: dev worker ui tilt langfuse cluster cluster-delete secrets restore restore-test test test-unit lint fmt typecheck up down check migrate ingest eval eval-calibrate eval-check retention load
 
 dev:
 	uv run uvicorn chatbot.api.main:app --reload
@@ -67,6 +67,12 @@ eval-calibrate:
 # What CI runs: the code-only suites, and report.json against main's. No model calls.
 eval-check:
 	PYTHONPATH=tests uv run python -m evals.check
+
+# A load test of the deployed app, through the gateway (tests/load/run.py). Needs `tilt up`.
+USERS ?= 10
+DURATION ?= 300
+load:
+	USERS=$(USERS) DURATION=$(DURATION) uv run python -u tests/load/run.py
 
 retention:
 	uv run python -m chatbot.memory.retention
