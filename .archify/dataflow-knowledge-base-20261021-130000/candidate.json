@@ -1,0 +1,415 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "Knowledge base: ingest and search",
+    "output": ".archify/dataflow-knowledge-base-20261021-130000/knowledge-base.html",
+    "quality_profile": "showcase",
+    "locale": "en",
+    "repository": {
+      "url": "https://github.com/Anirudh1905/agentic-ai-chatbot.git",
+      "provider": "github",
+      "link_mode": "web",
+      "revision": "d384ee888d1bc5399ca23aebe3a1a855f23b160d"
+    },
+    "viewBox": [
+      1080,
+      560
+    ]
+  },
+  "stages": [
+    {
+      "label": "Sources"
+    },
+    {
+      "label": "Prepare"
+    },
+    {
+      "label": "Embed · store"
+    },
+    {
+      "label": "Fuse"
+    },
+    {
+      "label": "Rank · deliver"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "sample",
+      "type": "external",
+      "label": "data/sample",
+      "sublabel": "baked into the image",
+      "tag": "ingest Job --prune",
+      "stage": 0,
+      "row": 0,
+      "sources": [
+        {
+          "path": "deploy/base/jobs.yaml",
+          "line": 65,
+          "end_line": 79,
+          "label": "ingest Job"
+        },
+        {
+          "path": "src/chatbot/ingestion/__main__.py",
+          "line": 16,
+          "end_line": 31,
+          "label": "entry point"
+        }
+      ],
+      "width": 140
+    },
+    {
+      "id": "chunker",
+      "type": "backend",
+      "label": "Load + chunk",
+      "sublabel": "600 tok · 80 overlap",
+      "tag": "split on headings first",
+      "stage": 1,
+      "row": 0,
+      "sources": [
+        {
+          "path": "src/chatbot/ingestion/loaders.py",
+          "line": 64,
+          "end_line": 82,
+          "label": "loaders"
+        },
+        {
+          "path": "src/chatbot/ingestion/chunking.py",
+          "line": 28,
+          "end_line": 56,
+          "label": "chunk_document"
+        },
+        {
+          "path": "src/chatbot/config.py",
+          "line": 98,
+          "end_line": 99,
+          "label": "chunk size, overlap"
+        }
+      ],
+      "width": 140
+    },
+    {
+      "id": "embedchunks",
+      "type": "backend",
+      "label": "Embed changed chunks",
+      "sublabel": "new hashes · 64 per call",
+      "tag": "text-embedding-3-small",
+      "stage": 2,
+      "row": 0,
+      "sources": [
+        {
+          "path": "src/chatbot/ingestion/pipeline.py",
+          "line": 49,
+          "end_line": 106,
+          "label": "ingest_file"
+        },
+        {
+          "path": "src/chatbot/ingestion/pipeline.py",
+          "line": 15,
+          "end_line": 46,
+          "label": "batches of 64"
+        }
+      ],
+      "width": 140
+    },
+    {
+      "id": "chunks",
+      "type": "database",
+      "label": "Postgres chunks",
+      "sublabel": "HNSW cosine · GIN tsvector",
+      "tag": "vector(1536)",
+      "stage": 2,
+      "row": 1,
+      "sources": [
+        {
+          "path": "migrations/versions/0001_chunks.py",
+          "line": 19,
+          "end_line": 43,
+          "label": "table and indexes"
+        }
+      ],
+      "width": 140
+    },
+    {
+      "id": "tool",
+      "type": "frontend",
+      "label": "search_knowledge_base",
+      "sublabel": "agent tool · retried once",
+      "tag": "api pod",
+      "stage": 0,
+      "row": 2,
+      "sources": [
+        {
+          "path": "src/chatbot/tools/rag.py",
+          "line": 181,
+          "end_line": 214,
+          "label": "the tool"
+        },
+        {
+          "path": "src/chatbot/tools/registry.py",
+          "line": 47,
+          "end_line": 58,
+          "label": "tool_retry"
+        }
+      ],
+      "width": 140
+    },
+    {
+      "id": "embedquery",
+      "type": "security",
+      "label": "Embed query",
+      "sublabel": "embeddings breaker",
+      "tag": "outage: no vector",
+      "stage": 1,
+      "row": 2,
+      "sources": [
+        {
+          "path": "src/chatbot/tools/rag.py",
+          "line": 121,
+          "end_line": 129,
+          "label": "embed_query"
+        },
+        {
+          "path": "src/chatbot/storage/embeddings.py",
+          "line": 7,
+          "end_line": 30,
+          "label": "GuardedEmbeddings"
+        }
+      ],
+      "width": 140
+    },
+    {
+      "id": "rrf",
+      "type": "backend",
+      "label": "RRF fusion",
+      "sublabel": "1 / (60 + rank), summed",
+      "tag": "keeps the best 8",
+      "stage": 3,
+      "row": 1,
+      "sources": [
+        {
+          "path": "src/chatbot/tools/rag.py",
+          "line": 68,
+          "end_line": 101,
+          "label": "fusion, hybrid_search"
+        },
+        {
+          "path": "src/chatbot/tools/rag.py",
+          "line": 152,
+          "end_line": 158,
+          "label": "candidate limit"
+        }
+      ],
+      "width": 140
+    },
+    {
+      "id": "volume",
+      "type": "database",
+      "label": "reranker-model volume",
+      "sublabel": "filled once by a Job",
+      "tag": "read-only in the API",
+      "stage": 3,
+      "row": 0,
+      "sources": [
+        {
+          "path": "deploy/base/jobs.yaml",
+          "line": 30,
+          "end_line": 63,
+          "label": "PVC and Job"
+        },
+        {
+          "path": "deploy/base/app.yaml",
+          "line": 58,
+          "end_line": 69,
+          "label": "API mount"
+        },
+        {
+          "path": "deploy/local/kustomization.yaml",
+          "line": 44,
+          "label": "RERANKER_CACHE_DIR"
+        }
+      ],
+      "width": 140
+    },
+    {
+      "id": "rerank",
+      "type": "backend",
+      "label": "Cross-encoder rerank",
+      "sublabel": "bge-reranker-v2-m3-int8",
+      "tag": "one at a time per pod",
+      "stage": 4,
+      "row": 1,
+      "sources": [
+        {
+          "path": "src/chatbot/tools/rerank.py",
+          "line": 26,
+          "end_line": 63,
+          "label": "CrossEncoderReranker"
+        },
+        {
+          "path": "src/chatbot/config.py",
+          "line": 108,
+          "end_line": 111,
+          "label": "model, 8 candidates"
+        }
+      ],
+      "width": 140
+    },
+    {
+      "id": "result",
+      "type": "frontend",
+      "label": "Tool result",
+      "sublabel": "top 6 · ≤2,500 tokens",
+      "tag": "<kb_results>",
+      "stage": 4,
+      "row": 2,
+      "sources": [
+        {
+          "path": "src/chatbot/tools/rag.py",
+          "line": 159,
+          "end_line": 178,
+          "label": "top k, token cap"
+        },
+        {
+          "path": "src/chatbot/tools/rag.py",
+          "line": 104,
+          "end_line": 118,
+          "label": "format, keyword note"
+        }
+      ],
+      "width": 140
+    }
+  ],
+  "flows": [
+    {
+      "from": "sample",
+      "to": "chunker",
+      "label": "files",
+      "variant": "emphasis"
+    },
+    {
+      "from": "chunker",
+      "to": "embedchunks",
+      "label": "chunks",
+      "variant": "emphasis"
+    },
+    {
+      "from": "embedchunks",
+      "to": "chunks",
+      "label": "insert · delete stale",
+      "variant": "emphasis",
+      "labelAt": [
+        530,
+        201
+      ]
+    },
+    {
+      "from": "tool",
+      "to": "embedquery",
+      "label": "query",
+      "variant": "emphasis"
+    },
+    {
+      "from": "embedquery",
+      "to": "chunks",
+      "label": "vector or none + text",
+      "variant": "emphasis"
+    },
+    {
+      "from": "chunks",
+      "to": "rrf",
+      "label": "30 + 30 rows",
+      "variant": "emphasis"
+    },
+    {
+      "from": "volume",
+      "to": "rerank",
+      "label": "weights, first use",
+      "variant": "dashed",
+      "fromSide": "right",
+      "toSide": "top",
+      "via": [
+        [
+          960,
+          157
+        ]
+      ]
+    },
+    {
+      "from": "rrf",
+      "to": "rerank",
+      "label": "8 fused hits",
+      "variant": "emphasis",
+      "route": "straight"
+    },
+    {
+      "from": "rerank",
+      "to": "result",
+      "label": "rescored order",
+      "variant": "emphasis",
+      "labelAt": [
+        960,
+        315
+      ]
+    },
+    {
+      "from": "rrf",
+      "to": "result",
+      "label": "fused order, if rerank fails",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "left",
+      "via": [
+        [
+          745,
+          385
+        ]
+      ],
+      "labelAt": [
+        790,
+        412
+      ]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "Ingest",
+      "items": [
+        "Loaders turn md, txt, html, docx and pdf into text pages; the title is the first heading or the file name",
+        "Each chunk embeds its title and heading path with its text, and is keyed by sha256 of that, normalized",
+        "Only hashes not already stored for the file are embedded; unchanged chunks are kept, missing ones deleted, all in one transaction",
+        "--prune deletes chunks of files that no longer exist under the path"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "Search",
+      "items": [
+        "Vector search orders by cosine distance on the HNSW index; full text ORs the query's terms and ranks with ts_rank_cd",
+        "RRF merges both lists (k = 60) without comparing their scores",
+        "The reranker scores at most 8 pairs (latency grows quickly past about 10); then the top 6 that fit 2,500 estimated tokens are kept, and always the first"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "When something fails",
+      "items": [
+        "Embeddings down or their breaker open: the search runs on full text only, and the result tells the model so",
+        "Reranker error: the fused order is used",
+        "Any other error: ToolRetryMiddleware retries the search once, then gives the model a message to relay",
+        "RERANKER_MODEL empty (CI) turns reranking off"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "Reranker on the API pods",
+      "items": [
+        "The reranker-model Job downloads the model once into a volume the API pods mount read-only",
+        "It loads on first use, and one rerank runs at a time per pod, since each ONNX run already uses every core",
+        "It's why the API pods ask for 2 GiB: about 1.7 GB with the model loaded, under load"
+      ]
+    }
+  ]
+}

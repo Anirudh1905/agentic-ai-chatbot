@@ -1,0 +1,640 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Agent middleware chain",
+    "output": ".archify/workflow-agent-middleware-20261021-130000/agent-middleware.html",
+    "quality_profile": "showcase",
+    "locale": "en",
+    "repository": {
+      "url": "https://github.com/Anirudh1905/agentic-ai-chatbot.git",
+      "provider": "github",
+      "link_mode": "web",
+      "revision": "d384ee888d1bc5399ca23aebe3a1a855f23b160d"
+    }
+  },
+  "lanes": [
+    {
+      "id": "before",
+      "label": "before hooks"
+    },
+    {
+      "id": "wrap",
+      "label": "wrap_model_call"
+    },
+    {
+      "id": "after",
+      "label": "after_model"
+    },
+    {
+      "id": "tools",
+      "label": "tools · pause · end"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "user",
+      "lane": "before",
+      "col": 0,
+      "type": "external",
+      "label": "User message",
+      "sublabel": "PII redacted by the API",
+      "width": 136,
+      "sources": [
+        {
+          "path": "src/chatbot/guardrails/pii.py",
+          "line": 98,
+          "end_line": 111,
+          "label": "apply_to_input=False"
+        }
+      ]
+    },
+    {
+      "id": "ltm",
+      "lane": "before",
+      "col": 1,
+      "type": "database",
+      "label": "LongTermMemory",
+      "sublabel": "before_agent · recall",
+      "tag": "MEMORY_ENABLED + store",
+      "width": 136,
+      "sources": [
+        {
+          "path": "src/chatbot/memory/long_term/middleware.py",
+          "line": 41,
+          "end_line": 73,
+          "label": "abefore_agent"
+        },
+        {
+          "path": "src/chatbot/agent/builder.py",
+          "line": 205
+        }
+      ]
+    },
+    {
+      "id": "pii_in",
+      "lane": "before",
+      "col": 2,
+      "type": "security",
+      "label": "PIIMiddleware ×4",
+      "sublabel": "redact tool results",
+      "tag": "PII_ENABLED",
+      "width": 136,
+      "sources": [
+        {
+          "path": "src/chatbot/guardrails/pii.py",
+          "line": 76,
+          "end_line": 111,
+          "label": "output_middleware"
+        },
+        {
+          "path": "src/chatbot/agent/builder.py",
+          "line": 207
+        }
+      ]
+    },
+    {
+      "id": "summ_in",
+      "lane": "before",
+      "col": 3,
+      "type": "backend",
+      "label": "Summarization",
+      "sublabel": "only at a turn's start",
+      "tag": "usually a no-op",
+      "width": 136,
+      "sources": [
+        {
+          "path": "src/chatbot/memory/short_term.py",
+          "line": 59,
+          "end_line": 70,
+          "label": "abefore_model"
+        }
+      ]
+    },
+    {
+      "id": "limit_in",
+      "lane": "before",
+      "col": 4,
+      "type": "security",
+      "label": "ModelCallLimit",
+      "sublabel": "6 calls a run, then end",
+      "tag": "MAX_MODEL_CALLS",
+      "width": 136,
+      "sources": [
+        {
+          "path": "src/chatbot/agent/middleware.py",
+          "line": 61,
+          "end_line": 72,
+          "label": "jump to end"
+        },
+        {
+          "path": "src/chatbot/agent/builder.py",
+          "line": 226
+        }
+      ]
+    },
+    {
+      "id": "ctxedit",
+      "lane": "before",
+      "col": 5,
+      "type": "backend",
+      "label": "Context editing",
+      "sublabel": "wrap · keeps 3 results",
+      "tag": "past 6,000 tokens",
+      "width": 136,
+      "sources": [
+        {
+          "path": "src/chatbot/agent/builder.py",
+          "line": 151,
+          "end_line": 160,
+          "label": "context_editing"
+        },
+        {
+          "path": "src/chatbot/agent/builder.py",
+          "line": 211
+        }
+      ]
+    },
+    {
+      "id": "sysprompt",
+      "lane": "wrap",
+      "col": 5,
+      "type": "backend",
+      "label": "system_prompt",
+      "sublabel": "adds recalled memories",
+      "width": 136,
+      "sources": [
+        {
+          "path": "src/chatbot/agent/middleware.py",
+          "line": 45,
+          "end_line": 58,
+          "label": "dynamic_prompt"
+        }
+      ]
+    },
+    {
+      "id": "fallback",
+      "lane": "wrap",
+      "col": 4,
+      "type": "backend",
+      "label": "ModelFallback",
+      "sublabel": "on failure: gpt-4.1",
+      "tag": "FALLBACK_MODEL",
+      "width": 136,
+      "sources": [
+        {
+          "path": "src/chatbot/agent/builder.py",
+          "line": 213,
+          "end_line": 217
+        }
+      ]
+    },
+    {
+      "id": "retry",
+      "lane": "wrap",
+      "col": 3,
+      "type": "backend",
+      "label": "ModelRetry",
+      "sublabel": "1 retry, outages only",
+      "tag": "MODEL_MAX_RETRIES",
+      "width": 136,
+      "sources": [
+        {
+          "path": "src/chatbot/agent/builder.py",
+          "line": 218,
+          "end_line": 220
+        }
+      ]
+    },
+    {
+      "id": "breaker",
+      "lane": "wrap",
+      "col": 2,
+      "type": "security",
+      "label": "ModelBreaker",
+      "sublabel": "per model, in Redis",
+      "tag": "not for a user's key",
+      "width": 136,
+      "sources": [
+        {
+          "path": "src/chatbot/agent/middleware.py",
+          "line": 106,
+          "end_line": 124,
+          "label": "ModelBreaker"
+        },
+        {
+          "path": "src/chatbot/reliability/breaker.py",
+          "line": 169,
+          "end_line": 262
+        }
+      ]
+    },
+    {
+      "id": "callmw",
+      "lane": "wrap",
+      "col": 1,
+      "type": "backend",
+      "label": "ModelCallMiddleware",
+      "sublabel": "fixes dangling calls",
+      "width": 136,
+      "sources": [
+        {
+          "path": "src/chatbot/agent/middleware.py",
+          "line": 75,
+          "end_line": 103
+        }
+      ],
+      "tag": "logs + metrics"
+    },
+    {
+      "id": "usermodel",
+      "lane": "wrap",
+      "col": 0,
+      "type": "backend",
+      "label": "UserModel",
+      "sublabel": "user's own endpoint",
+      "tag": "only if they gave one",
+      "width": 136,
+      "sources": [
+        {
+          "path": "src/chatbot/agent/middleware.py",
+          "line": 184,
+          "end_line": 221
+        }
+      ]
+    },
+    {
+      "id": "model",
+      "lane": "after",
+      "col": 0,
+      "type": "external",
+      "label": "Chat model",
+      "sublabel": "gpt-5.4 via the gateway",
+      "width": 136,
+      "sources": [
+        {
+          "path": "src/chatbot/config.py",
+          "line": 32,
+          "label": "MODEL"
+        }
+      ]
+    },
+    {
+      "id": "hitl",
+      "lane": "after",
+      "col": 1,
+      "type": "security",
+      "label": "HumanInTheLoop",
+      "sublabel": "sensitive search waits",
+      "tag": "HITL_ENABLED",
+      "width": 136,
+      "sources": [
+        {
+          "path": "src/chatbot/agent/approvals.py",
+          "line": 34,
+          "end_line": 72,
+          "label": "interrupt_on"
+        },
+        {
+          "path": "src/chatbot/api/dependencies.py",
+          "line": 98,
+          "end_line": 100
+        }
+      ]
+    },
+    {
+      "id": "spend",
+      "lane": "after",
+      "col": 2,
+      "type": "security",
+      "label": "SpendTokens",
+      "sublabel": "add to the day's budget",
+      "tag": "RATE_LIMITS_ENABLED",
+      "width": 136,
+      "sources": [
+        {
+          "path": "src/chatbot/accounts/limits.py",
+          "line": 116,
+          "end_line": 130
+        }
+      ]
+    },
+    {
+      "id": "limit_out",
+      "lane": "after",
+      "col": 3,
+      "type": "security",
+      "label": "ModelCallLimit",
+      "sublabel": "counts the call",
+      "width": 136,
+      "sources": [
+        {
+          "path": "src/chatbot/agent/builder.py",
+          "line": 226
+        }
+      ]
+    },
+    {
+      "id": "pii_out",
+      "lane": "after",
+      "col": 4,
+      "type": "security",
+      "label": "PIIMiddleware ×4",
+      "sublabel": "redact the reply",
+      "tag": "PII_ENABLED",
+      "width": 136,
+      "sources": [
+        {
+          "path": "src/chatbot/guardrails/pii.py",
+          "line": 88,
+          "end_line": 96,
+          "label": "aafter_model"
+        }
+      ]
+    },
+    {
+      "id": "route",
+      "lane": "after",
+      "col": 5,
+      "type": "backend",
+      "label": "Tool calls?",
+      "sublabel": "the loop's exit",
+      "width": 136
+    },
+    {
+      "id": "paused",
+      "lane": "tools",
+      "col": 1,
+      "type": "security",
+      "label": "Paused for approval",
+      "sublabel": "approve · edit · reject",
+      "tag": "POST /resume",
+      "width": 136,
+      "sources": [
+        {
+          "path": "src/chatbot/api/routes/threads.py",
+          "line": 246,
+          "end_line": 290,
+          "label": "resume routes"
+        }
+      ]
+    },
+    {
+      "id": "summ_out",
+      "lane": "tools",
+      "col": 2,
+      "type": "backend",
+      "label": "Turn ends",
+      "sublabel": "after_agent: summarize",
+      "tag": "→ memory push",
+      "width": 136,
+      "sources": [
+        {
+          "path": "src/chatbot/memory/short_term.py",
+          "line": 71,
+          "end_line": 101,
+          "label": "aafter_agent"
+        },
+        {
+          "path": "src/chatbot/memory/long_term/writer.py",
+          "line": 111,
+          "end_line": 124,
+          "label": "writer.schedule"
+        }
+      ]
+    },
+    {
+      "id": "toolmetrics",
+      "lane": "tools",
+      "col": 5,
+      "type": "backend",
+      "label": "ToolCallMetrics",
+      "sublabel": "outermost · ok / error",
+      "width": 136,
+      "sources": [
+        {
+          "path": "src/chatbot/agent/middleware.py",
+          "line": 127,
+          "end_line": 148
+        }
+      ]
+    },
+    {
+      "id": "toolretry",
+      "lane": "tools",
+      "col": 4,
+      "type": "backend",
+      "label": "ToolRetry",
+      "sublabel": "1 retry after a pause",
+      "tag": "KB + web_search",
+      "width": 136,
+      "sources": [
+        {
+          "path": "src/chatbot/tools/registry.py",
+          "line": 20,
+          "label": "RETRYABLE"
+        },
+        {
+          "path": "src/chatbot/tools/registry.py",
+          "line": 48,
+          "end_line": 58
+        }
+      ]
+    },
+    {
+      "id": "tools",
+      "lane": "tools",
+      "col": 3,
+      "type": "backend",
+      "label": "Tool node",
+      "sublabel": "KB, web, remember",
+      "width": 136,
+      "sources": [
+        {
+          "path": "src/chatbot/agent/builder.py",
+          "line": 198,
+          "end_line": 201,
+          "label": "remember tool"
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "from": "user",
+      "to": "ltm"
+    },
+    {
+      "from": "ltm",
+      "to": "pii_in"
+    },
+    {
+      "from": "pii_in",
+      "to": "summ_in"
+    },
+    {
+      "from": "summ_in",
+      "to": "limit_in"
+    },
+    {
+      "from": "limit_in",
+      "to": "ctxedit",
+      "variant": "emphasis",
+      "label": "under limit"
+    },
+    {
+      "from": "ctxedit",
+      "to": "sysprompt",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "from": "sysprompt",
+      "to": "fallback"
+    },
+    {
+      "from": "fallback",
+      "to": "retry"
+    },
+    {
+      "from": "retry",
+      "to": "breaker"
+    },
+    {
+      "from": "breaker",
+      "to": "callmw"
+    },
+    {
+      "from": "callmw",
+      "to": "usermodel"
+    },
+    {
+      "from": "usermodel",
+      "to": "model",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "from": "model",
+      "to": "hitl",
+      "label": "reply"
+    },
+    {
+      "from": "hitl",
+      "to": "spend"
+    },
+    {
+      "from": "spend",
+      "to": "limit_out"
+    },
+    {
+      "from": "limit_out",
+      "to": "pii_out"
+    },
+    {
+      "from": "pii_out",
+      "to": "route",
+      "label": "redacted"
+    },
+    {
+      "from": "hitl",
+      "to": "paused",
+      "label": "interrupt",
+      "variant": "security",
+      "role": "branch",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "from": "route",
+      "to": "summ_out",
+      "label": "no: answer",
+      "role": "branch",
+      "fromSide": "left",
+      "toSide": "top"
+    },
+    {
+      "from": "route",
+      "to": "toolmetrics",
+      "label": "yes",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "from": "toolmetrics",
+      "to": "toolretry"
+    },
+    {
+      "from": "toolretry",
+      "to": "tools"
+    },
+    {
+      "from": "tools",
+      "to": "pii_in",
+      "label": "next model call",
+      "role": "return",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "bottom",
+      "via": [
+        [
+          661.2,
+          538
+        ],
+        [
+          44,
+          538
+        ],
+        [
+          44,
+          180
+        ],
+        [
+          497.2,
+          180
+        ]
+      ],
+      "labelSegment": 3
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "How the hooks run",
+      "items": [
+        "before_agent and before_model hooks run in list order; after_model hooks in reverse, so HumanInTheLoop (appended last) sees the reply first",
+        "wrap_model_call: the first listed is the outermost, so the fallback wraps the retries, which wrap each model's breaker",
+        "Each tool round goes back through before_model: PII on the new tool results, then the call limit"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "In an outage",
+      "items": [
+        "An outage is retried once (MODEL_MAX_RETRIES); an open breaker isn't retried, it fails at once",
+        "Then ModelFallback calls gpt-4.1 through the same inner stack, under its own breaker",
+        "5 outages in 60 s open a model's breaker for 30 s; a user's own endpoint isn't counted"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Approvals",
+      "items": [
+        "search_knowledge_base never asks; web_search asks only when the query has a sensitive term or an order number",
+        "Any other tool always asks, except remember, which isn't in interrupt_on",
+        "A paused run resumes from its checkpoint with the reviewer's decision"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Conditional steps",
+      "items": [
+        "LongTermMemory and the remember tool: MEMORY_ENABLED and a store",
+        "PII: PII_ENABLED · context editing: CONTEXT_CLEAR_TOOL_RESULTS_TOKENS > 0 · fallback: FALLBACK_MODEL",
+        "SpendTokens: RATE_LIMITS_ENABLED · HumanInTheLoop: HITL_ENABLED · ToolRetry: a retryable tool exists"
+      ]
+    }
+  ]
+}

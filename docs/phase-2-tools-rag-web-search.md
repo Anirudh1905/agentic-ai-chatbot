@@ -42,6 +42,8 @@ flowchart TB
 
 ## Ingestion
 
+<img alt="Knowledge base ingest and search as it is now (since this phase, Phase 10 added the embeddings breaker and Phase 11 the 2,500-token cap). Ingest: data/sample is loaded and chunked (600 tokens, 80 overlap, headings first), chunks with new hashes are embedded 64 per call and inserted into the Postgres chunks table (HNSW and GIN tsvector), stale ones deleted. Search: the query is embedded through the embeddings breaker, up to 30 vector and 30 full-text rows are fused with RRF (k 60) into the best 8, a cross-encoder reranks them, and the top 6 (at most 2,500 tokens) go back to the model; if the rerank fails, the fused order is used." src="images/knowledge-base-dark.png" width="800">
+
 `src/chatbot/ingestion/` (`loaders.py`, `chunking.py`, `pipeline.py`), `storage/embeddings.py`, migration `0001_chunks`. Run with `python -m chatbot.ingestion PATH [--prune]`, or `make ingest PATH_TO_DOCS=...` (default `data/sample`, with `--prune`).
 
 | Step | How | Notes |

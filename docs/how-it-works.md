@@ -18,6 +18,8 @@ Requests are limited per user (`RATE_LIMIT_PER_USER`, 120 a minute) and per IP (
 
 ## Knowledge base
 
+<img alt="Knowledge base ingest and search, as a five-stage dataflow. Ingest: data/sample (baked into the image, run by the ingest Job with --prune) is loaded and chunked (600 tokens with 80 overlap, split on headings first), only chunks with new hashes are embedded (64 per call, text-embedding-3-small), and they're inserted into the Postgres chunks table (HNSW cosine and GIN tsvector indexes, vector(1536)) while stale ones are deleted. Search: the search_knowledge_base tool embeds the query through the embeddings breaker (in an outage there's no vector), takes up to 30 vector and 30 full-text rows, fuses them with RRF (1 / (60 + rank), summed) keeping the best 8, and reranks those with the bge-reranker-v2-m3-int8 cross-encoder, one at a time per pod, with weights from the reranker-model volume. The top 6, at most 2,500 tokens, go back as the tool result; if the rerank fails, the fused order is used." src="images/knowledge-base-dark.png" width="800">
+
 `make tilt` ingests the fictional Acme Outfitters docs in `data/sample/` (the `ingest` Job; re-run it from Tilt). To add your own documents (Markdown, text, HTML, PDF, Word):
 
 ```bash
@@ -35,6 +37,8 @@ The `web_search` tool uses DuckDuckGo through the [`ddgs`](https://pypi.org/proj
 Behind a TLS-inspecting proxy (such as Cloudflare Gateway or Zscaler), Python uses the OS certificate store via `truststore`, so outbound HTTPS works without extra setup.
 
 ## Conversations and memory
+
+<img alt="Short-term and long-term memory. In the API pods: the Summarization step, after a reply once the thread passes 10k tokens, folds older turns into the thread's summary in Postgres checkpoints (short-term memory, per thread) and sends a summary push to _enqueue_or_run. The remember tool and the Remember this button send remember pushes there too. _enqueue_or_run sends each push to the memory-pushes.fifo queue in ElasticMQ (grouped by user, with a dedupe id); after a third failed try it runs the push in the pod instead. LongTermMemory runs a top-10 search of the Postgres memory store (long-term memory, per user, with a vector index and TTL) on each turn's message and adds new memories to the thread's state. In the worker pod: the consumer loop long-polls the queue and acks each push once it succeeds (5 receives without an ack move a message to the dead-letter queue), and hands each user's jobs in order to MemoryWriter.run, which asks the model gateway to extract facts and decide changes, then adds, updates or deletes facts in the memory store. The idle-thread scan reads threads idle 30 minutes or more from the checkpoints and enqueues idle jobs, and the TTL sweeper deletes expired facts." src="images/memory-dark.png" width="800">
 
 Every conversation is a thread, saved to Postgres after each graph step by LangGraph's `AsyncPostgresSaver`. Restarting the API, closing the tab or opening the chat in another browser picks the thread up where it left off. The chat UI lists your threads in the sidebar and keeps the current one in the URL (`?thread=...`).
 
@@ -76,6 +80,8 @@ Short-term memory is the current thread. Long-term memory is what the bot knows 
 The sidebar's "What I remember about you" panel lists the memories, and can forget one or all of them (`GET /me/memory`, `DELETE /me/memory/{id}`, `DELETE /me/memory`). Set `MEMORY_ENABLED=false` to turn it all off. Details in [the Phase 6 doc](phase-6-long-term-memory.md).
 
 ## What the model sees on each turn
+
+<img alt="The agent's middleware chain for one turn, in four lanes. Before hooks: the user message (PII already redacted by the API), LongTermMemory recall (before_agent), PIIMiddleware ×4 on tool results, Summarization (only at a turn's start, usually a no-op), ModelCallLimit (6 calls a run, then end) and context editing (keeps the latest 3 tool results past 6,000 tokens). wrap_model_call, outermost first: system_prompt (adds the recalled memories), ModelFallback (gpt-4.1 on failure), ModelRetry (1 retry, outages only), ModelBreaker (per model, in Redis), ModelCallMiddleware and UserModel (the user's own endpoint, if they gave one), then the chat model, gpt-5.4 via the gateway. after_model: HumanInTheLoop (a sensitive search waits, interrupting to Paused for approval: approve, edit or reject, then POST /resume), SpendTokens (adds to the day's budget), ModelCallLimit (counts the call) and PIIMiddleware ×4 on the reply, then the Tool calls? check. With tool calls: ToolCallMetrics, ToolRetry (1 retry after a pause, for KB and web_search) and the tool node, then back to the next model call. Without: the turn ends, and after_agent summarization may send a memory push." src="images/agent-middleware-dark.png" width="800">
 
 Every time the agent calls the model (once per turn, plus once more per round of tool calls within it), it sends:
 

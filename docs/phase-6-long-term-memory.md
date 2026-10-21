@@ -52,6 +52,8 @@ LangGraph keeps per-thread state in the checkpointer and anything shared between
 
 `src/chatbot/memory/long_term/writer.py` (`MemoryWriter`), `tools/memory.py`.
 
+<img alt="Short-term and long-term memory as they are now (since Phase 9, pushes go through a queue and the worker). In the API pods: Summarization, after a reply past 10k tokens, folds older turns into the thread's summary in Postgres checkpoints (short-term memory) and sends a summary push; the remember tool and the Remember this button send remember pushes; _enqueue_or_run sends each to the memory-pushes.fifo queue, or after a third failed try runs it in the pod. LongTermMemory runs a top-10 search of the Postgres memory store (long-term memory, with a vector index and TTL) each turn and adds new memories to the thread's state. In the worker: the consumer loop long-polls the queue, acks each push once it succeeds (5 receives without an ack move it to the dead-letter queue) and hands each user's jobs in order to MemoryWriter.run, which asks the model to extract facts and decide changes, then adds, updates or deletes facts in the memory store. The idle-thread scan reads threads idle 30 minutes or more and enqueues idle jobs; the TTL sweeper deletes expired facts." src="images/memory-dark.png" width="800">
+
 ```mermaid
 sequenceDiagram
     autonumber

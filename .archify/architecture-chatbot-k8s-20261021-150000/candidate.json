@@ -3,7 +3,7 @@
   "diagram_type": "architecture",
   "meta": {
     "title": "Agentic AI Chatbot on Kubernetes",
-    "output": ".archify/architecture-chatbot-k8s-20261019-231500/chatbot-k8s.html",
+    "output": ".archify/architecture-chatbot-k8s-20261021-150000/chatbot-k8s.html",
     "quality_profile": "showcase",
     "locale": "en"
   },
@@ -14,7 +14,7 @@
       "label": "Langfuse",
       "sublabel": "traces · sessions · scores",
       "pos": [
-        614,
+        620,
         40
       ],
       "size": [
@@ -29,11 +29,11 @@
       "label": "Model gateway",
       "sublabel": "gpt-5.4 · fallback gpt-4.1 · embeddings",
       "pos": [
-        1160,
+        1178,
         40
       ],
       "size": [
-        190,
+        235,
         84
       ],
       "tag": "OpenAI-compatible"
@@ -44,7 +44,7 @@
       "label": "DuckDuckGo",
       "sublabel": "web results",
       "pos": [
-        1440,
+        1490,
         40
       ],
       "size": [
@@ -59,7 +59,7 @@
       "label": "Eval suites",
       "sublabel": "golden sets · judge gpt-4.1",
       "pos": [
-        320,
+        330,
         40
       ],
       "size": [
@@ -74,8 +74,8 @@
       "label": "ui",
       "sublabel": "Streamlit · login · approvals",
       "pos": [
-        320,
-        200
+        330,
+        210
       ],
       "size": [
         190,
@@ -89,11 +89,11 @@
       "label": "Redis",
       "sublabel": "limits · breakers · search cache",
       "pos": [
-        880,
-        200
+        907,
+        210
       ],
       "size": [
-        190,
+        197,
         84
       ],
       "tag": "no volume · fails open"
@@ -104,8 +104,8 @@
       "label": "web_search",
       "sublabel": "sensitive query → approval",
       "pos": [
-        1440,
-        200
+        1490,
+        210
       ],
       "size": [
         190,
@@ -120,7 +120,7 @@
       "sublabel": "chat · API · Grafana",
       "pos": [
         40,
-        360
+        380
       ],
       "size": [
         190,
@@ -134,8 +134,8 @@
       "label": "Envoy Gateway",
       "sublabel": "Gateway API · 5 HTTPRoutes",
       "pos": [
-        320,
-        360
+        330,
+        380
       ],
       "size": [
         190,
@@ -149,8 +149,8 @@
       "label": "FastAPI app ×2",
       "sublabel": "routes · SSE · PII · drain",
       "pos": [
-        600,
-        360
+        620,
+        380
       ],
       "size": [
         190,
@@ -164,8 +164,8 @@
       "label": "Auth + limits",
       "sublabel": "JWT · rate limits · budget",
       "pos": [
-        880,
-        360
+        910,
+        380
       ],
       "size": [
         190,
@@ -179,8 +179,8 @@
       "label": "Agent loop",
       "sublabel": "create_agent · middleware",
       "pos": [
-        1160,
-        360
+        1200,
+        380
       ],
       "size": [
         190,
@@ -194,8 +194,8 @@
       "label": "remember",
       "sublabel": "enqueues a remember push",
       "pos": [
-        1440,
-        360
+        1200,
+        550
       ],
       "size": [
         190,
@@ -209,8 +209,8 @@
       "label": "ElasticMQ (SQS)",
       "sublabel": "memory-pushes.fifo + DLQ",
       "pos": [
-        1160,
-        520
+        1200,
+        720
       ],
       "size": [
         190,
@@ -224,8 +224,8 @@
       "label": "search_knowledge_base",
       "sublabel": "vector + FTS · RRF · rerank",
       "pos": [
-        1440,
-        520
+        1490,
+        380
       ],
       "size": [
         190,
@@ -239,8 +239,8 @@
       "label": "kube-prometheus-stack",
       "sublabel": "Prometheus · Grafana · Alerts",
       "pos": [
-        320,
-        680
+        330,
+        890
       ],
       "size": [
         190,
@@ -254,8 +254,8 @@
       "label": "migrate · retention",
       "sublabel": "Job · nightly CronJob",
       "pos": [
-        600,
-        680
+        620,
+        720
       ],
       "size": [
         190,
@@ -269,8 +269,8 @@
       "label": "worker",
       "sublabel": "MemoryWriter · idle scan · TTL",
       "pos": [
-        1160,
-        680
+        1200,
+        890
       ],
       "size": [
         190,
@@ -284,8 +284,8 @@
       "label": "Postgres: chunks",
       "sublabel": "HNSW + tsvector",
       "pos": [
-        1440,
-        680
+        1490,
+        550
       ],
       "size": [
         190,
@@ -299,11 +299,11 @@
       "label": "Postgres (CloudNativePG)",
       "sublabel": "users · threads + leases · checkpoints",
       "pos": [
-        880,
-        680
+        890,
+        550
       ],
       "size": [
-        190,
+        230,
         84
       ],
       "tag": "memory store · pgvector"
@@ -314,8 +314,8 @@
       "label": "ingest Job",
       "sublabel": "load · chunk · embed changed",
       "pos": [
-        1440,
-        840
+        1490,
+        720
       ],
       "size": [
         190,
@@ -329,8 +329,8 @@
       "label": "MinIO backups",
       "sublabel": "WAL archive · nightly base",
       "pos": [
-        880,
-        840
+        910,
+        720
       ],
       "size": [
         190,
@@ -362,7 +362,7 @@
         "pg",
         "minio"
       ],
-      "pad": 24
+      "pad": 48
     }
   ],
   "connections": [
@@ -393,24 +393,21 @@
     {
       "from": "agent",
       "to": "remember",
-      "variant": "dashed"
+      "variant": "dashed",
+      "label": "tool call"
     },
     {
       "from": "agent",
       "to": "web",
       "label": "web search",
       "variant": "security",
-      "fromSide": "right",
-      "toSide": "left",
-      "route": "orthogonal-h"
+      "fromSide": "top",
+      "toSide": "left"
     },
     {
       "from": "agent",
       "to": "kb",
-      "label": "KB search",
-      "fromSide": "right",
-      "toSide": "left",
-      "route": "orthogonal-h"
+      "label": "KB search"
     },
     {
       "from": "gateway",
@@ -443,9 +440,7 @@
       "from": "prom",
       "to": "worker",
       "label": "scrape",
-      "variant": "dashed",
-      "fromSide": "bottom",
-      "toSide": "bottom"
+      "variant": "dashed"
     },
     {
       "from": "auth",
@@ -490,19 +485,29 @@
     {
       "from": "agent",
       "to": "queue",
-      "label": "memory pushes",
+      "label": "summary push",
+      "variant": "dashed",
+      "fromSide": "right",
+      "toSide": "right"
+    },
+    {
+      "from": "remember",
+      "to": "queue",
+      "label": "remember push",
       "variant": "dashed"
     },
     {
-      "from": "queue",
-      "to": "worker",
-      "label": "long poll",
+      "from": "worker",
+      "to": "queue",
+      "label": "idle jobs · long poll · ack",
       "variant": "emphasis"
     },
     {
       "from": "worker",
       "to": "pg",
-      "label": "memories"
+      "label": "memories",
+      "fromSide": "left",
+      "toSide": "right"
     },
     {
       "from": "jobs",
@@ -514,9 +519,7 @@
       "from": "app",
       "to": "langfuse",
       "label": "run traces",
-      "variant": "dashed",
-      "fromSide": "top",
-      "toSide": "bottom"
+      "variant": "dashed"
     },
     {
       "from": "evals",

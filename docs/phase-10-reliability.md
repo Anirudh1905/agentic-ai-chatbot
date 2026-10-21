@@ -24,6 +24,8 @@
 
 ## Model calls
 
+<img alt="The agent's middleware chain for one turn, as it is now: ModelFallback, ModelRetry and ModelBreaker, from this phase, sit outermost in the wrap_model_call stack: the before hooks (LongTermMemory recall, PII on tool results, Summarization, ModelCallLimit, context editing), the wrap_model_call stack outermost first (system_prompt, ModelFallback, ModelRetry, ModelBreaker, ModelCallMiddleware, UserModel), the chat model, the after_model hooks (HumanInTheLoop, which can pause for approval, SpendTokens, ModelCallLimit, PII on the reply), then either the tool calls (ToolCallMetrics, ToolRetry, the tool node) and back to the next model call, or the end of the turn, where after_agent summarization may send a memory push." src="images/agent-middleware-dark.png" width="800">
+
 ```mermaid
 flowchart LR
     Call["agent's model call"] --> FB["ModelFallbackMiddleware"]

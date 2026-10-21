@@ -31,7 +31,7 @@ Tiltfile            # what make tilt runs, in order, and the port-forwards
 Makefile            # every command below
 .github/workflows/  # ci.yml: the checks, the eval gate, and the kind deploy and smoke test
 pyproject.toml, uv.lock, alembic.ini
-.archify/           # the architecture diagram's source (docs/images/architecture-dark.png)
+.archify/           # the diagrams' sources (candidate.json) and pages, for docs/images/{architecture,memory,knowledge-base,agent-middleware}-dark.png
 tests/              # unit/, integration/ (need the cluster running), evals/ (golden sets, judge, report), load/, outage/;
                     # fakes.py (the fake models and stores) and apiclient.py (the API in-process) are shared
 data/sample/        # the fictional Acme Outfitters docs
