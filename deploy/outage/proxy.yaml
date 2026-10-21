@@ -1,4 +1,4 @@
-# The outage proxy (Phase 9, deploy/outage-test.sh applies it and removes it after): a model
+# The outage proxy (Phase 12, deploy/outage-test.sh applies it and removes it after): a model
 # gateway that fails gpt-5.4 and passes everything else to the real one. Not part of the app.
 ---
 apiVersion: apps/v1

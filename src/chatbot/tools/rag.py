@@ -110,7 +110,7 @@ def format_hits(query: str, hits: list[SearchHit]) -> str:
     return f'<kb_results query="{escape(query)}">\n{results}\n</kb_results>'
 
 
-# Said in the results when the embeddings are down (Phase 9), so the model can tell the user.
+# Said in the results when the embeddings are down (Phase 10), so the model can tell the user.
 KEYWORD_ONLY = (
     "Note: semantic search is unavailable right now, so these results come from keyword "
     "search only and may miss documents that use other words. Mention it if they don't answer "

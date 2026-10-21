@@ -2,12 +2,12 @@
 
 Usage: python -m chatbot.migrate
 
-1. Alembic (`migrations/`): chunks, threads, users.
+1. Alembic (`migrations/`): chunks, threads, users, the thread lease.
 2. The checkpointer's and the store's own tables, which LangGraph versions itself
    (`setup()`), including the memories' vector index.
 
 Each step is idempotent, so running it again is harmless. In Kubernetes it's the migrate Job,
-which the API and the worker wait for; locally `make migrate` and Tilt run it. No process
+which Tilt runs before the API and the worker; `make migrate` runs it by hand. No process
 creates tables at start (Phase 9).
 """
 

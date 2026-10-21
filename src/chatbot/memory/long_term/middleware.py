@@ -51,7 +51,7 @@ class LongTermMemory(AgentMiddleware[MemoryState, RunContext]):
         try:
             memories = await recall(runtime.store, user_id, said[-1].text, self.limit)
         except Exception as e:
-            # Recall searches by embedding. In an outage of the embeddings (Phase 9) the turn
+            # Recall searches by embedding. In an outage of the embeddings (Phase 10) the turn
             # goes ahead with the memories this thread already has.
             if not (isinstance(e, BreakerOpen) or is_outage(e)):
                 raise

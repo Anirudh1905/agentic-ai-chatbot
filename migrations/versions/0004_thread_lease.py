@@ -1,4 +1,4 @@
-"""The per-thread run lease (Phase 9): one run at a time per thread, across every API pod.
+"""The per-thread run lease (Phase 10): one run at a time per thread, across every API pod.
 
 `run_id` is the run holding the lease, `run_until` when it expires unless renewed
 (api/leases.py). Both are NULL while no run is going.

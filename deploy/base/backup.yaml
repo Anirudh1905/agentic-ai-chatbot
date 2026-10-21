@@ -1,4 +1,4 @@
-# Postgres backups (Phase 9): continuous WAL archiving and nightly base backups, through
+# Postgres backups (Phase 10): continuous WAL archiving and nightly base backups, through
 # CloudNativePG's Barman Cloud plugin (installed by `make cluster`), to an S3 bucket. Locally the
 # bucket is on MinIO, in the cluster; in production only the ObjectStore's endpoint and
 # credentials change. Restore to a point in time: deploy/restore.sh.

@@ -1,8 +1,8 @@
 # Runbook
 
-What to do when something goes wrong with the deployed chatbot (Phase 9). Each entry: how it shows, what to check, what to do. Commands are for the local kind cluster: `k` is `kubectl --context kind-chatbot -n chatbot`, and the gateway is `http://localhost:8088`. The alerts are in `deploy/base/monitoring.yaml`; they show on the Grafana "Chatbot" dashboard, in Prometheus (`/prometheus/alerts`) and Alertmanager (`/alertmanager`). Nothing pages.
+What to do when something goes wrong with the deployed chatbot (Phase 12). Each entry: how it shows, what to check, what to do. Commands are for the local kind cluster: `k` is `kubectl --context kind-chatbot -n chatbot`, and the gateway is `http://localhost:8088`. The alerts are in `deploy/base/monitoring.yaml`; they show on the Grafana "Chatbot" dashboard, in Prometheus (`/prometheus/alerts`) and Alertmanager (`/alertmanager`). Nothing pages.
 
-[Overview](../README.md) · [Phase 9](phase-9-reliability-deployment.md)
+[Overview](../README.md) · [Phase 12](phase-12-load-outage-tests.md)
 
 | Incident | First sign |
 | --- | --- |
@@ -19,7 +19,7 @@ What to do when something goes wrong with the deployed chatbot (Phase 9). Each e
 
 **How it shows:** `ChatbotBreakerOpen` with `dependency="gpt-5.4"` (after a minute open), often after `ChatbotModelErrors` or `ChatbotSlowModel`. Users mostly don't notice: answers come from the fallback model.
 
-**What the app does on its own** ([Model calls](phase-9-reliability-deployment.md#model-calls)): each failed call is retried once, then goes to `gpt-4.1`. After 5 outages in 60 s the breaker opens and calls go straight to `gpt-4.1` for 30 s; then one call probes, and its success closes the breaker. A reply that failed partway is redrawn (`reset`). `make outage-test` rehearses all of it.
+**What the app does on its own** ([Model calls](phase-10-reliability.md#model-calls)): each failed call is retried once, then goes to `gpt-4.1`. After 5 outages in 60 s the breaker opens and calls go straight to `gpt-4.1` for 30 s; then one call probes, and its success closes the breaker. A reply that failed partway is redrawn (`reset`). `make outage-test` rehearses all of it.
 
 **Check:**
 
@@ -31,7 +31,7 @@ What to do when something goes wrong with the deployed chatbot (Phase 9). Each e
 
 - **Only the primary is down:** nothing; watch it recover (the breaker closes by itself). Tell users answers may differ in style for a while.
 - **It's down for long:** switch the primary for a while, so calls stop waiting on its retries: add `MODEL=gpt-4.1` to the `app-config` literals in `deploy/local/kustomization.yaml` (Tilt applies it and rolls the pods). Remove it after.
-- **Everything is down** (the gateway, or both models): nothing in the app can fix it. Chats fail with an error; users can resend or resume later, since checkpoints keep each thread. Users with their own key (`credentials` at login) aren't affected: their calls never go through ours.
+- **Everything is down** (the gateway, or both models): nothing in the app can fix it. Chats fail with an error; users can resend or resume later, since checkpoints keep each thread. Users who logged in with their own key (`openai_api_key` at login) aren't affected: their calls never go through ours.
 - **429s:** the gateway's quota. Lower the load: `DAILY_TOKEN_BUDGET`, `RATE_LIMIT_PER_USER`.
 
 ## Embeddings or web search are down
@@ -40,7 +40,7 @@ What to do when something goes wrong with the deployed chatbot (Phase 9). Each e
 
 **What the app does:** without embeddings, knowledge base search runs on full text only and the answer says so; memory recall goes on with what the thread already has. Without web search, the tool tells the model it's unavailable, and the model answers from the knowledge base or says it can't check.
 
-**Do:** nothing to restore by hand; the breaker probes every 30 s. For web search, check whether DuckDuckGo is rate-limiting this IP (`No results found.` in the API logs): the web search cache (`WEB_SEARCH_CACHE_SECONDS`) takes repeats off it. Don't run `make ingest` while the embeddings are down; it fails at once.
+**Do:** nothing to restore by hand; after 30 s the next call probes, and its success closes the breaker. For web search, check whether DuckDuckGo is rate-limiting this IP (`No results found.` in the API logs): the web search cache (`WEB_SEARCH_CACHE_SECONDS`) takes repeats off it. Don't run `make ingest` while the embeddings are down; it fails at once.
 
 ## A run is stuck waiting for approval
 
@@ -49,7 +49,7 @@ What to do when something goes wrong with the deployed chatbot (Phase 9). Each e
 **Check:**
 
 - **A 409 that doesn't clear:** a run's lease lasts 60 s after its last renewal, so a crashed run frees its thread within a minute. A 409 for longer means a run is genuinely still going: look for it in `k logs deploy/api`.
-- **A run paused for approval** holds no lease, so it isn't what's blocking; it waits for the user's decision forever. Threads whose latest checkpoint is waiting:
+- **A run paused for approval** holds no lease, so it isn't behind a 409 "still answering"; its own 409 says "waiting for approval", and it waits for the user's decision forever. Threads whose latest checkpoint is waiting:
 
   ```bash
   k exec postgres-1 -c postgres -- psql -U postgres -d chatbot -c "
@@ -66,7 +66,7 @@ What to do when something goes wrong with the deployed chatbot (Phase 9). Each e
 
 **Do:**
 
-- **The user's own decision is best:** they approve, edit or reject in the UI, or `POST /threads/{id}/resume` with `decisions`. A paused thread doesn't block new chats.
+- **The user's own decision is best:** they approve, edit or reject in the UI, or `POST /threads/{id}/resume` with `decisions`. Until then, new messages on that thread get 409 "waiting for approval"; the user's other threads and new chats work.
 - **On the user's behalf** (they asked, or the query must not run): reject it. `POST /threads/{id}/resume` with `{"decisions": [{"type": "reject", "message": "Cancelled by support"}]}` and a token for that user, minted in an API pod:
 
   ```bash
@@ -85,7 +85,7 @@ What to do when something goes wrong with the deployed chatbot (Phase 9). Each e
 **Contain, first:**
 
 1. **Find the run.** In Langfuse, traces carry the thread as their session and a hashed user id (`hashed_user` in `observability/tracing.py`, an HMAC with `JWT_SECRET`). From the alert's time and type, look for traces with a redaction placeholder (`[REDACTED_EMAIL]` and the like) in the reply.
-2. **Remove what was stored.** The thread: `DELETE /threads/{id}` (with the user's token, minted as above); its memories: `DELETE /me/memory` or `DELETE /me/memory/{id}`; everything: `DELETE /me`. These delete the checkpoints too.
+2. **Remove what was stored.** The thread: `DELETE /threads/{id}` (with the user's token, minted as above); its memories: `DELETE /me/memory` or `DELETE /me/memory/{id}`; everything: `DELETE /me`. The thread and account deletes remove the checkpoints too; the memory deletes only remove store items.
 3. **Remove it from the traces:** delete the trace in Langfuse (its UI, or the public API). Metrics and logs hold no message text.
 4. **If the data reached a third party** (it was in a web search query, sent before approval): note the time and query; the sensitive-terms approval (`HITL_SENSITIVE_TERMS`) is what should have stopped it.
 
@@ -104,7 +104,7 @@ What to do when something goes wrong with the deployed chatbot (Phase 9). Each e
 **Do:**
 
 - **The worker is down:** `k rollout restart deploy/worker`. Pushes wait in the queue meanwhile and nothing is lost.
-- **Dead-lettered pushes:** read why in the worker's logs (usually the memory model failing). Once fixed, move them back: each message holds the whole push, so sending its body back to `memory-pushes.fifo` replays it (ElasticMQ on `localhost:9324`, `aws sqs receive-message` / `send-message` with `--endpoint-url`).
+- **Dead-lettered pushes:** read why in the worker's logs (usually the memory model failing). Once fixed, move them back: each message holds the whole push, so sending its body back to `memory-pushes.fifo` replays it (ElasticMQ on `localhost:9324`, `aws sqs receive-message` / `send-message` with `--endpoint-url`; a FIFO queue also needs `--message-group-id`, the user's id, and `--message-deduplication-id`).
 
 ## Postgres backups fail
 
@@ -112,17 +112,17 @@ What to do when something goes wrong with the deployed chatbot (Phase 9). Each e
 
 **Check:** MinIO is up (`k get pods -l app=minio`); the archiver's errors (`k logs postgres-1 -c plugin-barman-cloud`); the backups (`k get backups.postgresql.cnpg.io`).
 
-**Do:** fix MinIO or its credentials (`backup-store` Secret), then take a base backup at once: `k apply` a `Backup` for cluster `postgres` with `method: plugin` (as in `deploy/base/backup.yaml`). To restore: `make restore TARGET="<time>"` into a second cluster, check its counts, and switch over by hand ([Backups](phase-9-reliability-deployment.md#backups)). `make restore-test` proves restores work.
+**Do:** fix MinIO or its credentials (`backup-store` Secret), then take a base backup at once: `k apply` a `Backup` for cluster `postgres` with `method: plugin` (as in `deploy/base/backup.yaml`). To restore: `make restore TARGET="<time>"` into a second cluster, check its counts, and switch over by hand ([Backups](phase-10-reliability.md#backups)). `make restore-test` proves restores work.
 
 ## Slow answers, or the node runs out of memory
 
 **How it shows:** `ChatbotSlowFirstToken`; on the kind node, probes timing out everywhere, `OOMKilled` pods, Grafana answering "upstream request timeout".
 
-**Check:** the dashboard's model call latency against time to first token. If model calls are fast and first tokens slow, it's the knowledge base search: the reranker runs on the API pods' CPU, one rerank at a time per pod, and was the limit in the [load test](phase-9-reliability-deployment.md#load-test). Memory: `docker stats`, and `k describe pod` for `OOMKilled`.
+**Check:** the dashboard's model call latency against time to first token. If model calls are fast and first tokens slow, it's the knowledge base search: the reranker runs on the API pods' CPU, one rerank at a time per pod, and was the limit in the [load test](phase-12-load-outage-tests.md#load-test). Memory: `docker stats`, and `k describe pod` for `OOMKilled`.
 
 **Do:**
 
-- **Too much load for the node:** fewer users, or a bigger Docker VM. On this laptop the measured capacity is 10 concurrent users on 8 CPUs and 24 GB, and 5 on 6 CPUs and 16 GB.
+- **Too much load for the node:** fewer users, or a bigger Docker VM. On this laptop the measured capacity is 10 concurrent users on 8 CPUs and 24 GB (2026-10-21), and 5 on 6 CPUs and 16 GB (2026-10-20).
 - **Reranking is the bottleneck:** turn it off (add `RERANKER_MODEL=` to the `app-config` literals): searches use the fused order, slightly worse at top-1 (96% against 100%), much faster under load.
 - **Out of memory:** stop other containers sharing the Docker VM, or give the VM more memory. The API pods' 3 Gi limit makes one of them, not Postgres, the pod that's killed.
 
@@ -135,5 +135,5 @@ What to do when something goes wrong with the deployed chatbot (Phase 9). Each e
 1. Check `docker info` answers. After a Rancher Desktop restart, `/var/run/docker.sock` can point at Docker Desktop's socket instead of Rancher's: `export DOCKER_HOST=unix://$HOME/.rd/docker.sock`, or fix the socket in Rancher Desktop's settings.
 2. `make cluster`: it raises the VM kernel's inotify limits, which a restart resets.
 3. Delete the pods in `CrashLoopBackOff` (`kubectl --context kind-chatbot get pods -A`), so they start again now rather than after their back-off.
-4. In Tilt, re-run any resource left in error (`tilt trigger postgres`), so the ones waiting on it roll out.
+4. Resources left in error in Tilt (applied while the cluster was down): stop Tilt (Ctrl-C) and run `tilt up` again, which applies everything without deleting anything. **Don't `tilt trigger` config, postgres, minio, elasticmq or reranker-volume, and don't run `tilt down`:** a trigger deletes every object in the resource first, and config holds the namespace, so they take the database, the backups, the queue or the model with them. If the new Postgres Cluster has no pod after a few minutes, restart the operator: `kubectl --context kind-chatbot -n cnpg-system rollout restart deploy/cnpg-cloudnative-pg`.
 5. `deploy/smoke.sh` to check.

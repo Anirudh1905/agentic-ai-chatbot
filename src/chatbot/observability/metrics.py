@@ -34,8 +34,11 @@ ACTIVE_STREAMS = Gauge(
 )
 RUN_ERRORS = Counter(
     "chatbot_run_errors_total",
-    "Agent runs that ended in an error (a stream's error event, or a 500)",
-    ["kind"],  # "user_model": the user's own key was refused; "internal": anything else
+    "Agent runs that ended in an error: a stream's error event, or the user's own key refused",
+    # "user_model": the user's own key was refused (a stream's error event, or a 400);
+    # "internal": a stream's error event for anything else. A 500 on a JSON run shows only in
+    # chatbot_http_requests_total.
+    ["kind"],
 )
 
 MODEL_CALL_SECONDS = Histogram(
@@ -53,7 +56,7 @@ MODEL_TOKENS = Counter(
 # Apart from MODEL_TOKENS, so its sums stay input plus output.
 MODEL_CACHED_TOKENS = Counter(
     "chatbot_model_cached_tokens_total",
-    "Input tokens of the agent's model calls served from the endpoint's prompt cache (Phase 9)",
+    "Input tokens of the agent's model calls served from the endpoint's prompt cache (Phase 11)",
     ["model"],
 )
 
@@ -64,7 +67,7 @@ TOOL_CALLS = Counter(
 )
 WEB_SEARCH_CACHE = Counter(
     "chatbot_web_search_cache_total",
-    "Web searches looked up in the cache (Phase 9); result is hit or miss",
+    "Web searches looked up in the cache (Phase 11); result is hit or miss",
     ["result"],
 )
 APPROVAL_PAUSES = Counter(
@@ -117,7 +120,7 @@ QUEUE_JOB_AGE = Histogram(
     buckets=(0.5, 1, 5, 15, 60, 300, 900, 3600),
 )
 
-# Circuit breakers (Phase 9, reliability/breaker.py). The state is shared in Redis; each
+# Circuit breakers (Phase 10, reliability/breaker.py). The state is shared in Redis; each
 # process reports what it last saw, so the dashboard takes the max. (Calls to the fallback
 # model show in the model call metrics, under its name.)
 BREAKER_OPEN = Gauge(

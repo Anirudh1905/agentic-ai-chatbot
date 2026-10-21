@@ -54,7 +54,8 @@ class RequestMiddleware:
                 REQUESTS.labels(scope["method"], route, str(status)).inc()
                 REQUEST_SECONDS.labels(scope["method"], route).observe(elapsed)
             level = logging.DEBUG if path in QUIET_PATHS else logging.INFO
-            # Set by the auth dependency once the token checks out (api/dependencies.py).
+            # Set by `limited_user` once the token checks out (api/security.py); "-" without a
+            # user, and for /auth/me, which doesn't take that dependency.
             user = scope.get("state", {}).get("user_id", "-")
             logger.log(
                 level,

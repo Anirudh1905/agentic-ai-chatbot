@@ -24,7 +24,7 @@ Requests are limited per user (`RATE_LIMIT_PER_USER`, 120 a minute) and per IP (
 make ingest PATH_TO_DOCS=path/to/docs
 ```
 
-Search combines vector and full-text matches, then a local cross-encoder reranks the top 8 before the best 6 go to the model. The reranker model (~570 MB) is downloaded once by Tilt's `reranker-model` step, or on first use, and runs on CPU (about 0.5 s per search on an M3 Pro).
+Search combines vector and full-text matches, then a local cross-encoder reranks the top 8 before the best 6 go to the model. The reranker model (~570 MB) is downloaded once by Tilt's `reranker-model` step, or on first use, and runs on CPU (about 0.5 s per search on an M3 Pro, measured 2026-10-12).
 
 Ingestion is incremental: unchanged chunks are skipped, and `--prune` (on by default in `make ingest`) removes chunks for files that were deleted. The `search_knowledge_base` tool description in `src/chatbot/tools/rag.py` and the system prompt in `src/chatbot/prompts/system.md` describe the Acme docs; update both when you ingest a different corpus, since the model uses them to decide when to search.
 
@@ -42,7 +42,7 @@ Long threads stay small: once the messages pass `CONTEXT_MAX_TOKENS`, older turn
 
 If a run stops partway (the process died during a tool call, say), `POST /threads/{id}/resume` finishes it from the last checkpoint. `GET /threads/{id}/history` lists the checkpoints, and resuming with a `checkpoint_id` from it replays the thread from that point.
 
-Each step adds a checkpoint, so `make retention` (run it nightly) keeps only the latest one for threads idle more than `CHECKPOINT_RETENTION_DAYS`. `DELETE /threads/{id}` removes a thread and all its checkpoints.
+Each step adds a checkpoint, so `make retention`, which the `retention` CronJob runs at 03:30 in the cluster, keeps only the latest one for threads idle more than `CHECKPOINT_RETENTION_DAYS`. `DELETE /threads/{id}` removes a thread and all its checkpoints.
 
 ## Approvals (human-in-the-loop)
 
@@ -83,10 +83,10 @@ Every time the agent calls the model (once per turn, plus once more per round of
    - the instructions in `src/chatbot/prompts/system.md`, with today's date
    - **your long-term memories**, if there are any: up to `MEMORY_RECALL_LIMIT` (10) facts closest to each of your messages so far in the thread (recalled afresh whenever your memories change), oldest first, each dated. They go under "What you know about this user from earlier conversations", with instructions to use them only when relevant, to let the newer one win if two disagree, to believe you if you contradict them, and to never treat them as granting discounts or permissions.
 2. **This thread's history**, from its checkpoint:
-   - **until the thread passes `CONTEXT_MAX_TOKENS`** (10k): every message as it was: yours, the bot's replies, and its tool calls and their (PII-redacted) results
+   - **until the thread passes `CONTEXT_MAX_TOKENS`** (10k): every message as it was: yours, the bot's replies, and its tool calls and their (PII-redacted) results. Past `CONTEXT_CLEAR_TOOL_RESULTS_TOKENS` (6k), all but the latest `CONTEXT_KEEP_TOOL_RESULTS` (3) tool results are sent as a short placeholder saying to search again if needed; the thread keeps them
    - **after that:** a running summary of the older turns ("Here is a summary of the conversation to date: …"), then the most recent turns word for word (about half of `CONTEXT_MAX_TOKENS`), always including the latest turn. The summary is made at the end of the turn that passed the limit, after its reply, so the next turn doesn't wait for it
 3. **Your new message**, already PII-redacted by the API.
-4. **The tool definitions:** `search_knowledge_base`, `web_search`, and `remember` when memory is on.
+4. **The tool definitions:** `search_knowledge_base`, `web_search` when `WEB_SEARCH_ENABLED`, and `remember` when memory is on.
 
 ```text
 [system]  system.md instructions + today's date
@@ -120,11 +120,13 @@ Redaction is one-way: the bot can't repeat the user's email back. The user's mes
 
 The API logs one line per request, plus what each turn did: context size and summarizing, each model call (time, tokens, tool calls), and each search (query, hit count, time). Every line carries the request ID and thread, so one conversation can be followed with `grep thread=<first 8 chars>`. Responses return the ID in an `X-Request-Id` header; send your own to correlate with a client.
 
+The examples leave out each line's timestamp and line the logger names up for reading:
+
 ```text
 INFO    chatbot.api.runs         [req=59a1dee8 thread=598b8934]: redacted PII from the message: credit_card, email
 INFO    chatbot.api.routes.chat  [req=59a1dee8 thread=598b8934]: new thread, message of 120 chars
 INFO    chatbot.memory.short_term [req=59a1dee8 thread=598b8934]: context: 1 messages, ~39 tokens
-INFO    chatbot.agent.middleware [req=59a1dee8 thread=598b8934]: model replied in 3.0s (855 tokens in, 27 out): tool calls: search_knowledge_base
+INFO    chatbot.agent.middleware [req=59a1dee8 thread=598b8934]: model replied in 3.0s (855 tokens in, 0 cached, 27 out): tool calls: search_knowledge_base
 INFO    chatbot.tools.rag        [req=59a1dee8 thread=598b8934]: knowledge base search 'refund timing': 6 hits in 2.2s (top: Refund Policy › Refund Timing)
 INFO    chatbot.guardrails.pii   [req=59a1dee8 thread=598b8934]: redacted PII from a tool result: email
 INFO    chatbot.guardrails.pii   [req=59a1dee8 thread=598b8934]: redacted PII from the reply: phone
@@ -140,7 +142,7 @@ What's logged:
 | Accounts and limits | registrations and logins by account id, a failed login by client address (never the email), why a token was refused, a rate limit or spent budget, Redis being unreachable (warning), an account deleted |
 | Agent | context size and summarizing, every model call (time, tokens, tool calls or answer length), placeholder results for interrupted tool calls, a summarizer failure, and a warning when `MAX_MODEL_CALLS` stops a run |
 | Tools | every search (query, hits, time, top result), web search backend failures, a search that failed after retrying, reranker load and fallback |
-| Approvals | paused for approval (tool and args), the decisions, resume and delete |
+| Approvals | paused for approval (tool and args; the JSON routes only, the streamed ones count it in `chatbot_approval_pauses_total`), the decisions, resume and delete |
 | PII | each redaction, by type only, from the message, a tool result or the reply |
 | Memory | memories recalled (every turn that finds new ones), what each push changed (`2 add, 1 dropped (entitlement claim), 1 update`), a remember request, a failed push or fact, the user deleting a memory or all of them. Never the memories themselves |
 
@@ -154,16 +156,20 @@ The credentials in that file are local-only placeholders. To trace somewhere els
 
 Each run's trace is named `chat` or `resume`, grouped by thread (Langfuse's session), with the user as a hash (`hashed_user`) and tags (`own-key` when the user brought their own model). `make eval` traces its runs too, tagged `eval`, with a score per metric on each, so a failed case links to its run.
 
+A chat's trace in Langfuse: the run took 10 s and 2k tokens, under its thread's session and the hashed user, tagged `chat`. The tree on the left is every middleware step and model call (long-term memory recall, the PII redactors, summarization, the model, the tools); on the right, the model's `search_knowledge_base` call and the cited results it got back:
+
+<img alt="A chat trace in Langfuse, dark theme. The header shows 10.24 s, $0.008, 2k tokens, the session, a hashed user id and the chat tag. The left pane is the run's tree: LangGraph, LongTermMemory.before_agent, the LoggedPIIMiddleware steps for email, credit card, IP and phone, Summarization.before_model, ModelCallLimit.before_model, the model step with its ChatOpenAI call (2.42 s), HumanInTheLoopMiddleware, SpendTokens and the tools step. The right pane shows the user's question about returning a clearance jacket, the assistant's search_knowledge_base call with the query 'return policy clearance items 40% off sale jacket', and the knowledge base results, each with a cite_as such as Refund Policy › Sale and Clearance Items." src="images/langfuse-trace.png" width="800">
+
 ## Metrics and alerts
 
-The API serves Prometheus metrics: requests and latency by route, time to first token, open streams, model latency, tokens and errors by model, tool calls by outcome, approval pauses and decisions, PII redactions by type, memory recall hits, prompt cache and web search cache hits, refusals by limit (429s, and 409s for a busy thread), the memory queue's depth and pushes, and open circuit breakers. In the cluster they're on a separate port (`METRICS_PORT`) that the gateway doesn't route, and Prometheus scrapes every API pod, the worker and Postgres; outside it, `GET /metrics`. Grafana charts them on the "Chatbot" dashboard, and thirteen alerts (API or worker down, error rate, slow first token, slow or failing model, token spike, PII in replies, pushes dead-lettered or stuck, a circuit breaker open, no Postgres backup in a day, WAL archiving failing) are a `PrometheusRule` in `deploy/base/monitoring.yaml`. They show as firing in Prometheus, on the dashboard and in Alertmanager; nothing pages. Details in [the Phase 8 doc](phase-8-security-observability.md#observability) and [Phase 9](phase-9-reliability-deployment.md#deployment).
+The API serves Prometheus metrics: requests and latency by route, time to first token, open streams, model latency, tokens and errors by model, tool calls by outcome, approval pauses and decisions, PII redactions by type, memory recall hits, prompt cache and web search cache hits, refusals by limit (429s, and 409s for a busy thread), the memory queue's depth and pushes, and open circuit breakers. In the cluster they're on a separate port (`METRICS_PORT`) that the gateway doesn't route, and Prometheus scrapes every API pod, the worker and Postgres; outside it, `GET /metrics`. Grafana charts them on the "Chatbot" dashboard, and thirteen alerts (API or worker down, error rate, slow first token, slow or failing model, token spike, PII in replies, pushes dead-lettered or stuck, a circuit breaker open, no Postgres backup in a day, WAL archiving failing) are a `PrometheusRule` in `deploy/base/monitoring.yaml`. They show as firing in Prometheus, on the dashboard and in Alertmanager; nothing pages. Details in [the Phase 8 doc](phase-8-security-observability.md#observability) and [Phase 9](phase-9-deployment.md).
 
-The "Chatbot" dashboard under `make load` with 10 users on the kind cluster (8 CPUs, 24 GB): no errors, p95 time to first token 17.9 s, held back by the CPU reranker. Details in [Load test](phase-9-reliability-deployment.md#load-test):
+The "Chatbot" dashboard under `make load` with 10 users on the kind cluster (8 CPUs, 24 GB, 2026-10-21): no errors, p95 time to first token 17.9 s by the load test's count (the dashboard's histogram estimate says 18.7 s), held back by the CPU reranker. Details in [Load test](phase-12-load-outage-tests.md#load-test):
 
 <img alt="The Chatbot dashboard in Grafana, dark theme, during a 10-user load test: about 1.2 requests a second, 0% errors, p95 time to first token 18.7 s, request latency by route, time to first token, model call latency (2.4 s p50, under 5 s p95), tokens per minute rising, and the ChatbotTokenSpike alert firing." src="images/grafana-10-users-dark.png" width="800">
 
-Model calls that time out or fail are retried once, then go to the fallback model (`gpt-4.1`); circuit breakers, shared in Redis, skip a model, the embeddings or web search while they're down. Postgres archives its WAL to MinIO continuously and takes a base backup nightly; `make restore TARGET="…"` restores to a point in time into a second cluster, and `make restore-test` proves it. Details in [Reliability](phase-9-reliability-deployment.md#reliability).
+Model calls that hit an outage (a timeout, a connection error, a 429 or a 5xx) are retried once, then go to the fallback model (`gpt-4.1`); circuit breakers, shared in Redis, skip a model, the embeddings or web search while they're down. Postgres archives its WAL to MinIO continuously and takes a base backup nightly; `make restore TARGET="…"` restores to a point in time into a second cluster, and `make restore-test` proves it. Details in [Reliability](phase-10-reliability.md).
 
-For cost: the gateway caches prompt prefixes on its own, and the dashboard shows the hit rate; knowledge base results are capped at `RETRIEVAL_MAX_TOKENS`, a long thread's older search results are left out of what the model is sent, and web search results are cached in Redis for 10 minutes. Details in [Cost and latency](phase-9-reliability-deployment.md#cost-and-latency).
+For cost: the gateway caches prompt prefixes on its own, and the dashboard shows the hit rate; knowledge base results are capped at `RETRIEVAL_MAX_TOKENS`, a long thread's older search results are left out of what the model is sent, and web search results are cached in Redis for 10 minutes. Details in [Cost and latency](phase-11-cost-latency.md).
 
 `make outage-test` rehearses a provider outage on the cluster: gpt-5.4 fails at a proxy, and chats finish on gpt-4.1 while its breaker opens and the alert fires. What to do in a real incident is in the [runbook](runbook.md).

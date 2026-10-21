@@ -17,16 +17,15 @@ tilt:
 langfuse:
 	docker compose -f ops/langfuse/docker-compose.yml up -d
 
-# The local Kubernetes cluster (kind) and the services it runs on: Envoy Gateway,
-# CloudNativePG, kube-prometheus-stack. Run once; safe to run again.
+# The local Kubernetes cluster (kind) and the services it runs on: Envoy Gateway, cert-manager,
+# CloudNativePG with the Barman Cloud plugin, kube-prometheus-stack. Run once; safe to run again.
 cluster:
 	./deploy/cluster.sh
 
 cluster-delete:
 	kind delete cluster --name chatbot
 
-# deploy/local/secrets.env (gitignored) from .env: the keys the cluster's Secret holds.
-# Postgres backups (Phase 9): restore into a second cluster, postgres-restore (TARGET: a time,
+# Postgres backups (Phase 10): restore into a second cluster, postgres-restore (TARGET: a time,
 # e.g. TARGET="2026-10-20 09:30:00+00"; the latest without), and the point-in-time restore test.
 restore:
 	./deploy/restore.sh "$(TARGET)"
@@ -34,6 +33,8 @@ restore:
 restore-test:
 	./deploy/restore-test.sh
 
+# From .env and this machine (all gitignored): deploy/local/secrets.env, the keys the cluster's
+# Secret holds; ca-bundle.pem, the trust store; and once, backup-store.env, the backups' keys.
 secrets:
 	./deploy/local/make-secrets.sh
 

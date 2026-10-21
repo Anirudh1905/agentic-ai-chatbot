@@ -31,7 +31,7 @@ class CrossEncoderReranker:
         self.cache_dir = cache_dir
         self._model: TextCrossEncoder | None = None
         self._lock = threading.Lock()
-        # One rerank at a time (Phase 9): each ONNX run already uses every core, and runs side by
+        # One rerank at a time (Phase 12): each ONNX run already uses every core, and runs side by
         # side only multiply its working memory. Ten users at once took an API pod past 2 GB and
         # the kind node out of memory.
         self._running = asyncio.Lock()

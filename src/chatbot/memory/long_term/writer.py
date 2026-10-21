@@ -23,6 +23,7 @@ from langgraph.store.postgres.aio import AsyncPostgresStore
 from psycopg_pool import AsyncConnectionPool
 from pydantic import BaseModel
 
+from chatbot.accounts.users import UserStore
 from chatbot.config import RunContext
 from chatbot.jobs import JobQueue, MemoryPush
 from chatbot.memory.long_term.facts import Changes, Fact, Facts, apply_changes, rejected
@@ -92,8 +93,10 @@ class MemoryWriter:
         concurrency: int = 2,
         queue: JobQueue | None = None,
         fallback: BaseChatModel | None = None,
+        users: UserStore | None = None,
     ) -> None:
-        """`fallback` (FALLBACK_MODEL) answers when `model` fails (Phase 9)."""
+        """`fallback` (FALLBACK_MODEL) answers when `model` fails (Phase 10). With `users`, a
+        push for an account that's gone writes nothing (one queued before DELETE /me)."""
         self.extract = structured(model, Facts, fallback)
         self.decide = structured(model, Changes, fallback)
         self._locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
@@ -103,6 +106,7 @@ class MemoryWriter:
         self._slots = asyncio.Semaphore(concurrency)
         self._loop: asyncio.Task[None] | None = None
         self.queue = queue
+        self.users = users
 
     def schedule(self, runtime: Runtime[RunContext], messages: Sequence[AnyMessage]) -> None:
         """Push the turns a summary is folding away (the thread passed CONTEXT_MAX_TOKENS), in
@@ -261,6 +265,8 @@ class MemoryWriter:
         """Push a thread's turns that haven't been pushed yet, and move its cursor past them.
         False if it failed (the cursor stays, so the next trigger retries)."""
         async with self._slots, self._user_lock(store, user_id):
+            if await self._deleted(user_id):
+                return True
             # Read the cursor inside the lock: another process may have just pushed.
             cursor = await store.aget(cursor_namespace(user_id), thread_id)
             new = after_cursor(messages, cursor)
@@ -282,10 +288,21 @@ class MemoryWriter:
         self, store: BaseStore, user_id: str, conversation: str, what: str
     ) -> bool:
         async with self._slots, self._user_lock(store, user_id):
+            if await self._deleted(user_id):
+                return True
             if (done := await self._write(store, user_id, conversation)) is None:
                 return False
             logger.info("pushed %s to long-term memory: %s", what, done)
             return True
+
+    async def _deleted(self, user_id: str) -> bool:
+        """Whether the user's account is gone. Checked inside their lock, which DELETE /me holds
+        until the account is deleted, so a push that waited for it writes nothing back. True
+        means done: there's nothing to retry."""
+        if self.users is None or await self.users.get(user_id) is not None:
+            return False
+        logger.info("long-term memory push skipped: user %s was deleted", user_id)
+        return True
 
     def _background(self, work: Awaitable[None]) -> None:
         task = asyncio.ensure_future(work)

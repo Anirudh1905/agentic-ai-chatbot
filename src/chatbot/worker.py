@@ -27,6 +27,7 @@ from langchain_core.messages import AnyMessage
 from langgraph.store.base import BaseStore
 from prometheus_client import start_http_server
 
+from chatbot.accounts.users import PostgresUserStore
 from chatbot.agent.builder import build_llm
 from chatbot.config import get_settings
 from chatbot.jobs import JobQueue, Received, SqsJobQueue
@@ -124,6 +125,7 @@ async def serve() -> None:
         else None,
         concurrency=settings.memory_write_concurrency,
         queue=queue,  # the idle scan enqueues; the worker runs what it receives
+        users=PostgresUserStore(pool),
     )
     await store.start_ttl_sweeper()
     writer.start(

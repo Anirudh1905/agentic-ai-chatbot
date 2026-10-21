@@ -43,7 +43,7 @@ class ThreadStore(Protocol):
     async def delete(self, thread_id: UUID) -> None: ...
 
     async def lease(self, thread_id: UUID, user_id: str, run_id: UUID, seconds: float) -> bool:
-        """Take the thread's run lease for `run_id` (Phase 9, api/leases.py). False if another
+        """Take the thread's run lease for `run_id` (Phase 10, api/leases.py). False if another
         run holds one that hasn't expired, or the thread isn't the user's."""
         ...
 

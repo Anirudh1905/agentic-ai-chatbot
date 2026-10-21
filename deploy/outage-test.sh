@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# make outage-test (Phase 9): proves a provider outage degrades to the fallback model, not
+# make outage-test (Phase 12): proves a provider outage degrades to the fallback model, not
 # errors, on the deployed stack. Puts a proxy (deploy/outage/) between the API and the model
 # gateway that answers 503 for every gpt-5.4 chat call, then checks that chats still finish,
 # gpt-5.4's circuit breaker opens, gpt-4.1 answers, and ChatbotBreakerOpen fires. Then takes the

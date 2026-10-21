@@ -3,7 +3,8 @@ from functools import cache
 from importlib.resources import files
 
 # Tags that mark where untrusted text (documents, web pages, memories) starts and ends in what
-# the model reads. The system prompt tells it never to follow instructions inside them.
+# the model reads. The system prompt tells it never to follow instructions in search results;
+# memories are framed as what the user said, never as permissions.
 DATA_TAGS = ("kb_results", "web_results", "result", "user_memories")
 _DATA_TAG = re.compile(rf"<(/?)({'|'.join(DATA_TAGS)})\b", re.IGNORECASE)
 

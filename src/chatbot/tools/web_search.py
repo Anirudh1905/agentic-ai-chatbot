@@ -77,7 +77,7 @@ async def search(query: str, settings: Settings) -> list[dict[str, Any]]:
 
 
 class SearchCache:
-    """Web search results in Redis for WEB_SEARCH_CACHE_SECONDS (Phase 9), by query (case and
+    """Web search results in Redis for WEB_SEARCH_CACHE_SECONDS (Phase 11), by query (case and
     spacing aside) and result count. A cache, not a dependency: while Redis is down, searches
     just aren't cached."""
 

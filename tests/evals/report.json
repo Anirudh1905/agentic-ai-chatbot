@@ -1,6 +1,6 @@
 {
- "fingerprint": "a84c75b9ef7f79e132a705d339e90b79d2e43ec980283415046b4d7cdf0bba93",
- "created_at": "2026-10-20T19:09:32+00:00",
+ "fingerprint": "1a1d698c606c06a0e7e6ba1d865f450f44d68e230164e78c6afea360c3779d19",
+ "created_at": "2026-10-21T06:44:11+00:00",
  "models": {
   "model": "gpt-5.4",
   "reasoning_effort": "low",
@@ -21,21 +21,21 @@
   },
   "routing": {
    "score": 1.0,
-   "n": 43,
+   "n": 44,
    "gates": true,
    "agreement": null,
    "note": ""
   },
   "faithfulness": {
-   "score": 0.7692307692307693,
-   "n": 39,
+   "score": 0.75,
+   "n": 40,
    "gates": true,
    "agreement": 0.9137931034482759,
    "note": ""
   },
   "citations": {
-   "score": 0.7692307692307693,
-   "n": 39,
+   "score": 0.875,
+   "n": 40,
    "gates": true,
    "agreement": 0.9827586206896551,
    "note": ""
@@ -69,7 +69,7 @@
    "note": ""
   }
  },
- "errors": 3,
+ "errors": 0,
  "cases": {
   "retrieval": {
    "Can I cancel an order I placed an hour ago?": {
@@ -395,9 +395,9 @@
     "reason": "wanted ['web_search'], got ['web_search']"
    },
    "bitcoin price": {
-    "passed": null,
-    "score": null,
-    "reason": "MissingTestCaseParamsError: 'actual_output' cannot be empty for the 'Faithfulness' metric"
+    "passed": true,
+    "score": 1.0,
+    "reason": "wanted ['web_search'], got ['web_search']"
    },
    "express shipping": {
     "passed": true,
@@ -457,14 +457,14 @@
     "reason": "all supported"
    },
    "Can I return an opened fuel canister?": {
+    "passed": false,
+    "score": 0.5,
+    "reason": "'Opened fuel canisters are non-returnable.': The retrieval context specifies 'opened fuel canisters' as a type of item in the policy, but does not explicitly state that they are non-returnable. The return policy mentions opened fuel canisters as a listed item, but does not clarify their returnability."
+   },
+   "Can you send bear spray to Hawaii?": {
     "passed": true,
     "score": 1.0,
     "reason": "all supported"
-   },
-   "Can you send bear spray to Hawaii?": {
-    "passed": false,
-    "score": 0.75,
-    "reason": "'[Shipping Policy › Restricted Items] is the source cited for this information.': The specific source '[Shipping Policy › Restricted Items]' is not mentioned in the retrieval context, so there is insufficient evidence in the context to verify this claim."
    },
    "Do Trail Club members get a longer return window?": {
     "passed": true,
@@ -487,9 +487,9 @@
     "reason": "all supported"
    },
    "How does REI's return policy compare to Acme's?": {
-    "passed": false,
-    "score": 0.7692307692307693,
-    "reason": "'At REI, used gear may be accepted if in fair condition, and some used gear bought online has a 30-day return window.': The context says used gear bought online from REI can be returned within 30 days, but does not clarify that used gear in general 'may be accepted if in fair condition.' Thus, the statement is only partially supported.; 'No reliable web snippet confirmed REI’s current final-sale t"
+    "passed": true,
+    "score": 1.0,
+    "reason": "all supported"
    },
    "How long is paid parental leave?": {
     "passed": true,
@@ -502,9 +502,9 @@
     "reason": "all supported"
    },
    "How long until my refund shows up on my card?": {
-    "passed": true,
-    "score": 1.0,
-    "reason": "all supported"
+    "passed": false,
+    "score": 0.6666666666666666,
+    "reason": "'In total, it is typically about 8 to 12 business days after we receive the return for the refund to appear on your card.': The retrieval context specifies that refunds are issued within 5 business days after receiving and inspecting the return, and banks may take an additional 3 to 7 business days to process the credit. However, there is no explicit statement that the total is 'typically' 8 to 12"
    },
    "How many days a week can corporate staff work from home?": {
     "passed": true,
@@ -512,9 +512,9 @@
     "reason": "all supported"
    },
    "How many days do I have to return something?": {
-    "passed": true,
-    "score": 1.0,
-    "reason": "all supported"
+    "passed": false,
+    "score": 0.8333333333333334,
+    "reason": "'The AI can help figure out which window applies to your specific item.': The retrieval context does not mention AI assistance or specify that an AI can help determine the applicable return window, so this claim is not directly supported by the context."
    },
    "How many vacation days do employees get?": {
     "passed": true,
@@ -537,14 +537,14 @@
     "reason": "all supported"
    },
    "I live in Germany. What are my rights for returning an online order?": {
-    "passed": false,
-    "score": 0.875,
-    "reason": "'According to Acme, the 14-day EU right of withdrawal for online orders is in addition to Acme’s standard 30-day return window.': The context does not explicitly state whether the 14-day EU right of withdrawal is 'in addition to' Acme’s standard 30-day return window, or how the two policies interact. Both are described, but their interplay is not clarified."
+    "passed": true,
+    "score": 1.0,
+    "reason": "all supported"
    },
    "I used my tent on a camping trip and don't like it. Can I get my money back?": {
     "passed": false,
-    "score": 0.8,
-    "reason": "'Assistance is offered to help figure out whether the tent issue sounds like a defect.': The retrieval context does not explicitly state that assistance is offered to help determine if an issue qualifies as a defect."
+    "score": 0.75,
+    "reason": "'Acme tents have a lifetime warranty if something is actually wrong with the tent.': The context says Acme tents have a lifetime warranty but does not explicitly say the warranty only applies if something is 'actually wrong'. The phrase 'if something is actually wrong' may imply specific criteria that are not stated in the policy."
    },
    "If I order at 3pm, when will it ship?": {
     "passed": true,
@@ -563,13 +563,13 @@
    },
    "My package says delivered but it's not here. What should I do?": {
     "passed": false,
-    "score": 0.5,
-    "reason": "'It is recommended to check around all doors, side entrances, mailrooms, lockers, or package areas; with neighbors or building staff; and the tracking details for delivery notes during that time.': The context does not mention recommendations about checking around doors, entrances, with neighbors, mailrooms, etc., therefore this claim is not directly supported but not contradicted.; 'Help can be p"
+    "score": 0.6,
+    "reason": "'Acme has a shipping policy for lost or damaged packages.': The context describes actions for lost or damaged orders but does not explicitly mention there is a separate written shipping policy; it only details procedures. Thus, this claim is not directly contradicted but not fully backed.; 'Assistance can be provided to draft a message to support.': The context does not mention anything about prov"
    },
    "The zipper on my pack wore out. Will you fix it for free?": {
-    "passed": false,
-    "score": 0.8,
-    "reason": "'Assistance can be provided to figure out whether a zipper issue sounds like wear and tear or a defect.': The context does not state that Acme provides assistance to determine whether a zipper issue is wear and tear or a defect."
+    "passed": true,
+    "score": 1.0,
+    "reason": "all supported"
    },
    "What are Gear Days?": {
     "passed": true,
@@ -584,12 +584,12 @@
    "What is the current price of a Patagonia Nano Puff jacket?": {
     "passed": false,
     "score": 0.25,
-    "reason": "'The search snippet did not show a single current price for the Patagonia Nano Puff Jacket, as the official Patagonia results do not include the dollar amount in the snippet.': The retrieval context does not mention anything about search snippets or whether the official Patagonia results display the price, so this claim is not clearly supported or contradicted.; \"A recent sale mention indicated th"
+    "reason": "'The AI could not confirm the current price from the search snippet alone because the official Patagonia product pages shown do not include the price in the snippet.': The retrieval context gives specific prices ($239.00 retail, $160 sale) but does not confirm whether the price is shown in search snippets or on official Patagonia product pages. There is insufficient evidence in context to verify o"
    },
    "What's the latest news about REI?": {
     "passed": false,
-    "score": 0.0,
-    "reason": "'REI’s official newsroom is the best current source for company updates and press releases.': The context confirms REI Newsroom is the official source for press releases and updates, but does not explicitly state it is the 'best' source. This is opinion, not contradicted, but not supported either.; 'REI’s official newsroom recently included promotional announcements such as Fourth of July deals wi"
+    "score": 0.4,
+    "reason": "'A PR Newswire release states that REI’s 2026 Anniversary Sale ran from May 15–25 and included deals on more than 6,000 products.': The context indicates REI's Anniversary Sale, not the 2026 one, took place May 15–25 (no year specified for 2026); additionally, there is no mention that this information comes from PR Newswire, only from the REI Newsroom context.; 'A separate media report states that"
    },
    "What's the minimum order for free shipping?": {
     "passed": true,
@@ -602,9 +602,9 @@
     "reason": "all supported"
    },
    "bitcoin price": {
-    "passed": null,
-    "score": null,
-    "reason": "MissingTestCaseParamsError: 'actual_output' cannot be empty for the 'Faithfulness' metric"
+    "passed": false,
+    "score": 0.25,
+    "reason": "'The AI output references CoinMarketCap as the source for the Bitcoin price.': The retrieval context does not mention CoinMarketCap as a source for Bitcoin price; it only mentions Binance.; 'For a live-updating view of Bitcoin price, the AI suggests checking CoinMarketCap, Binance, or Yahoo Finance.': The context references Binance for the Bitcoin price but does not mention CoinMarketCap or Yahoo "
    },
    "express shipping": {
     "passed": true,
@@ -613,13 +613,13 @@
    },
    "latest iphone": {
     "passed": false,
-    "score": 0.0,
-    "reason": "'The latest iPhone line appears to be the iPhone 18 family.': The retrieval context confirms an iPhone 18 Pro event for September 9th, 2026, but does not explicitly state the full iPhone 18 family is the latest line.; \"Apple’s iPhone page snippet says 'Four iPhone 18 …'.\": There is no information in the context confirming that Apple's iPhone page snippet says 'Four iPhone 18 …'.; 'Apple announced "
+    "score": 0.25,
+    "reason": "'Apple’s current iPhone lineup page reflects the newest generation, mentioning the A20 Pro chip.': The retrieval context says the 18 Pro and Pro Max use the A20 Pro chip, but it does not confirm that Apple's iPhone lineup page specifically mentions the A20 Pro chip. There is not enough information to fully support the claim.; \"The provided links point to Apple's newsroom and iPhone pages.\": The re"
    },
    "president of USA": {
-    "passed": true,
-    "score": 1.0,
-    "reason": "all supported"
+    "passed": false,
+    "score": 0.6666666666666666,
+    "reason": "'The White House website features a page for President Donald J. Trump.': The retrieval context does not mention whether the White House website features a page for President Donald J. Trump."
    },
    "prime minister of UK": {
     "passed": true,
@@ -654,9 +654,9 @@
     "reason": "1 ok"
    },
    "Can I return a jacket I bought on clearance at 40% off?": {
-    "passed": false,
-    "score": 0.6666666666666666,
-    "reason": "'To start a return/exchange, use the Orders page or email returns@acme-outfitters.example with your order number.': 'To start a return or exchange, use the Orders page or email returns@acme-outfitters.example with your order number.': The retrieval context only mentions returns, not exchanges. The claim also includes exchanges, which is not stated as supported by the context."
+    "passed": true,
+    "score": 1.0,
+    "reason": "2 ok"
    },
    "Can I return an opened fuel canister?": {
     "passed": true,
@@ -664,9 +664,9 @@
     "reason": "2 ok"
    },
    "Can you send bear spray to Hawaii?": {
-    "passed": false,
-    "score": 0.0,
-    "reason": "'No. Bear spray cannot be shipped to Hawaii. Acme classifies bear spray as a restricted item that ships by ground only, and restricted items cannot ship to Alaska, Hawaii, or PO boxes.': 'Restricted items cannot ship to Alaska, Hawaii, or PO boxes.': The retrieval context only states that fuel canisters, bear spray, and lithium batteries over 100Wh cannot ship to Alaska, Hawaii, or PO boxes. It do"
+    "passed": true,
+    "score": 1.0,
+    "reason": "2 ok"
    },
    "Do Trail Club members get a longer return window?": {
     "passed": true,
@@ -676,7 +676,7 @@
    "Do you refund the shipping cost when I return something?": {
     "passed": true,
     "score": 1.0,
-    "reason": "4 ok"
+    "reason": "3 ok"
    },
    "Do you ship to Australia, and how much does it cost?": {
     "passed": true,
@@ -686,12 +686,12 @@
    "How do I file a warranty claim without a receipt?": {
     "passed": true,
     "score": 1.0,
-    "reason": "3 ok"
+    "reason": "4 ok"
    },
    "How does REI's return policy compare to Acme's?": {
-    "passed": false,
-    "score": 0.8888888888888888,
-    "reason": "'REI standard window:** web results indicate **REI Co-op members get 1 year for most items**, while **non-members get 90 days**.' cites ['https://thereturnguide.com/blogs/retail-store-returns/rei/'], which no search returned"
+    "passed": true,
+    "score": 1.0,
+    "reason": "8 ok"
    },
    "How long is paid parental leave?": {
     "passed": true,
@@ -701,12 +701,12 @@
    "How long is the warranty on Acme backpacks?": {
     "passed": true,
     "score": 1.0,
-    "reason": "2 ok"
+    "reason": "3 ok"
    },
    "How long until my refund shows up on my card?": {
     "passed": false,
     "score": 0.5,
-    "reason": "'So in total, it’s typically up to about 8–12 business days after we receive the return.': 'It’s typically up to about 8–12 business days after we receive the return.': The retrieval context specifies that refunds are issued within 5 business days after the return is received and inspected, and that banks may take an additional 3–7 business days to show the credit. This adds up to a maximum of 12 "
+    "reason": "'So in total, it’s typically about 8 to 12 business days after we receive the return.': 'It’s typically about 8 to 12 business days after we receive the return.': The context states refunds are issued within 5 business days after the return is received and inspected, and a bank may take an additional 3 to 7 business days to show the credit. While the total could add up to 8 to 12 business days, th"
    },
    "How many days a week can corporate staff work from home?": {
     "passed": true,
@@ -716,7 +716,7 @@
    "How many days do I have to return something?": {
     "passed": true,
     "score": 1.0,
-    "reason": "4 ok"
+    "reason": "5 ok"
    },
    "How many vacation days do employees get?": {
     "passed": true,
@@ -731,7 +731,7 @@
    "How much is express shipping?": {
     "passed": true,
     "score": 1.0,
-    "reason": "2 ok"
+    "reason": "1 ok"
    },
    "How should I wash my down sleeping bag?": {
     "passed": true,
@@ -741,7 +741,7 @@
    "I live in Germany. What are my rights for returning an online order?": {
     "passed": true,
     "score": 1.0,
-    "reason": "4 ok"
+    "reason": "6 ok"
    },
    "I used my tent on a camping trip and don't like it. Can I get my money back?": {
     "passed": true,
@@ -761,7 +761,7 @@
    "Is my Acme headlamp under warranty after 18 months?": {
     "passed": true,
     "score": 1.0,
-    "reason": "3 ok"
+    "reason": "4 ok"
    },
    "My package says delivered but it's not here. What should I do?": {
     "passed": true,
@@ -786,12 +786,12 @@
    "What is the current price of a Patagonia Nano Puff jacket?": {
     "passed": false,
     "score": 0.6666666666666666,
-    "reason": "'I did find a recent sale mention saying the jacket was **$160 on sale** at one point, but that’s not necessarily the regular current price today.': 'A recent sale mention stated that the jacket was $160 on sale at one point, but that is not necessarily the regular current price today.': The context states that the sale price for the Patagonia Nano Puff jacket is $160 but does not clarify if this "
+    "reason": "'One retailer snippet lists the men’s version at **$239.00**, but that may not match Patagonia’s current official price or all variants/colors': 'One retailer snippet lists the men’s version at $239.00, but that may not match Patagonia’s current official price or all variants/colors.': The context confirms that the men's Forge Grey, size Small, version is priced at $239.00 but does not provide inf"
    },
    "What's the latest news about REI?": {
     "passed": false,
     "score": 0.5,
-    "reason": "'REI’s official newsroom is the best current source for company updates and press releases. Their recent items include promotional announcements like Fourth of July deals with up to 50% off clearance, sale, and outlet items.': 'REI’s official newsroom is the best current source for company updates and press releases.': The retrieval context does not discuss REI’s official newsroom being the best s"
+    "reason": "'REI’s official newsroom is the best source for current company announcements and press releases.': 'REI’s official newsroom is the best source for current company announcements and press releases.': The context confirms that the REI Newsroom is the official site for press releases and provides statements, but it does not support or evaluate the superlative claim that it is the 'best' source for t"
    },
    "What's the minimum order for free shipping?": {
     "passed": true,
@@ -801,12 +801,12 @@
    "Who won the most recent Tour de France?": {
     "passed": false,
     "score": 0.0,
-    "reason": "'Tadej Pogačar won the most recent Tour de France, the 2026 edition.': 'Tadej Pogačar won the most recent Tour de France, the 2026 edition.': The context only states that Tadej Pogacar was in first place in Stage 21 of the 2026 rankings, but does not explicitly confirm he won the Tour de France. Stage 21 rankings typically determine the final winner, but the context doesn't explicitly state he won"
+    "reason": "'Tadej Pogačar won the most recent Tour de France, the 2026 edition.': 'Tadej Pogačar won the most recent Tour de France, the 2026 edition.': The context lists Tadej Pogacar as first in stage 21 rankings for 2026, which strongly suggests he won the Tour de France, but it does not explicitly state that he is the overall winner. Therefore, the claim is not directly contradicted but also not fully co"
    },
    "bitcoin price": {
-    "passed": null,
-    "score": null,
-    "reason": "MissingTestCaseParamsError: 'actual_output' cannot be empty for the 'Faithfulness' metric"
+    "passed": true,
+    "score": 1.0,
+    "reason": "4 ok"
    },
    "express shipping": {
     "passed": true,
@@ -815,8 +815,8 @@
    },
    "latest iphone": {
     "passed": false,
-    "score": 0.3333333333333333,
-    "reason": "'. Apple also announced iPhone 18 Pro and iPhone 18 Pro Max on Sept. 9, 2026': 'Apple also announced iPhone 18 Pro and iPhone 18 Pro Max on Sept. 9, 2026.': The retrieval context does not mention the announcement of iPhone 18 Pro or iPhone 18 Pro Max or any event on Sept. 9, 2026. There is no information to support or contradict the claim.; ', and separately announced the foldable iPhone Duo the s"
+    "score": 0.0,
+    "reason": "'The latest iPhone models appear to be the iPhone 18 Pro and iPhone 18 Pro Max, announced by Apple on Sept. 9, 2026.': 'The latest iPhone models appear to be the iPhone 18 Pro and iPhone 18 Pro Max, announced by Apple on Sept. 9, 2026.': The retrieval context confirms that the latest models are the iPhone 18 Pro and iPhone 18 Pro Max, but it does not mention the announcement date (Sept. 9, 2026) o"
    },
    "president of USA": {
     "passed": true,
@@ -824,9 +824,9 @@
     "reason": "1 ok"
    },
    "prime minister of UK": {
-    "passed": false,
-    "score": 0.0,
-    "reason": "'The current UK Prime Minister is Andy Burnham, who took office on 20 July 2026.': 'The current UK Prime Minister is Andy Burnham, who took office on 20 July 2026.': The context states that Andy Burnham became Prime Minister on 20 July 2026, but it does not indicate that he is the current UK Prime Minister. Without confirmation that he is still in office, the claim goes beyond the retrieved facts."
+    "passed": true,
+    "score": 1.0,
+    "reason": "1 ok"
    },
    "refund time": {
     "passed": true,
@@ -843,152 +843,152 @@
    "Can I cancel an order I placed an hour ago?": {
     "passed": true,
     "score": 1.0,
-    "reason": "The actual output correctly states that cancellations are only allowed within 30 minutes, and after that orders are being packed and must be returned instead, matching the expected yes/no conclusion. It adds instructions for how to return and mentions regional legal rights, neither of which contradicts the required facts and provides some helpful context. There are no contradictions present. All c"
+    "reason": "The actual output correctly explains that orders cannot be canceled an hour after being placed, mentions the 30-minute cancellation window, and describes the need to return the order instead. There is no contradictory information. It also offers EU-specific withdrawal rights, which are not penalized as they do not conflict. Minor extra details about return labels and process are present but not pe"
    },
    "Can I carry over unused PTO into next year?": {
     "passed": true,
     "score": 1.0,
-    "reason": "The actual output aligns fully with the expected output by stating the yes answer, the maximum of 5 PTO days that can be carried over, the time limit of March 31 for their use, and the consequence that they expire after that. There is no contradiction or missing fact, and the offer to summarize further is extra but does not penalize the answer."
+    "reason": "The actual output correctly answers the input question by stating that up to 5 unused PTO days can carry over into the next year and that they must be used by March 31 or they expire, matching all the key facts in the expected output. There are no contradictions or missing facts, only the addition of a non-contradictory citation and an offer to help further, which the evaluation instructs not to p"
    },
    "Can I return a jacket I bought on clearance at 40% off?": {
     "passed": true,
     "score": 1.0,
-    "reason": "The actual output covers all key facts from the expected output: a jacket at 40% off is final sale (30%+ items), cannot be refunded, and can only be exchanged for size within 14 days if stock is available. It correctly states these facts with similar emphasis and adds procedure details and EU exception (extra but not penalized per instructions). No contradictions or key omissions relevant to the q"
+    "reason": "The response accurately states that jackets bought at 40% off are final sale and cannot be returned for a refund, which aligns with the expected output's key rule (30% off or more = final sale, no refund). It also correctly allows size exchanges within 14 days, matching the expected exchange policy. The answer provides an additional EU-specific exception (online purchases within EU can be returned"
    },
    "Can I return an opened fuel canister?": {
     "passed": true,
     "score": 1.0,
-    "reason": "The actual output correctly answers the question with a clear 'No' and specifies that opened fuel canisters are non-returnable, aligning with the expected output. It does not contradict the expected facts, and extra information about unopened items is not penalized. The mention of 'stove fuel' is missing, but since the question only asked about fuel canisters, this omission does not significantly "
+    "reason": "The actual output correctly gives a clear 'no' answer, states that opened fuel canisters are non-returnable, and references the refund policy for support. It omits mentioning stove fuel but this detail is context, as the question only asks about fuel canisters. No contradictory information is present. Additional information about unopened items does not conflict with expectations."
    },
    "Can you send bear spray to Hawaii?": {
     "passed": true,
-    "score": 0.9,
-    "reason": "The actual output accurately answers the yes/no question (no, bear spray can't be shipped to Hawaii), and provides the key facts expected: bear spray ships by ground only, and restricted items can't be shipped to Hawaii, Alaska, or PO boxes. It does not contradict any facts in the expected output; however, it omits the minor clarification that bear spray can't use Express shipping, which is a smal"
+    "score": 1.0,
+    "reason": "The actual output provides the core facts from the expected output: it gives a clear 'No' answer, states that bear spray cannot be shipped to Hawaii, mentions that it is classified as a restricted item, and explains that it only ships by ground, which does not serve Hawaii. It further adds that shipping to Alaska and PO boxes is also not allowed, matching the expected output's details. The only mi"
    },
    "Do Trail Club members get a longer return window?": {
     "passed": true,
     "score": 1.0,
-    "reason": "The actual output matches the expected output on all key facts: it confirms that Trail Club members get a longer return window, specifies the 60-day period for full-price items in place of the standard 30 days, and gives a clear yes/no answer. The extra conditions about unused items with tags and original packaging do not contradict any expected facts and are permissible additional details. The br"
+    "reason": "The actual output provides the main facts required: Trail Club members get a longer (60-day) return window on full-price items, compared to the standard 30 days. It also states the yes/no conclusion ('Yes'). Additional details about unused condition and tags do not contradict the expected output. The only minor difference is that the expected output says 'all full-price items' while actual output "
    },
    "Do you refund the shipping cost when I return something?": {
     "passed": true,
     "score": 1.0,
-    "reason": "The actual output covers all key facts from the expected output: generally, shipping costs are not refunded, with exceptions for defective/wrong items and for EU customers using statutory withdrawal rights. It also mentions the deduction when using Acme’s return label, which is additional but not contradictory. The statements align in substance and no facts are contradicted or misleading. The form"
+    "reason": "The actual output covers all the facts from the expected output: it clearly states that original shipping charges are not usually refunded, notes exceptions for defective/wrong items and EU customers using the 14-day withdrawal right, and includes the additional detail about return label cost and in-store returns, which does not contradict the expected answer. No contradictions or important omissi"
    },
    "Do you ship to Australia, and how much does it cost?": {
     "passed": true,
     "score": 1.0,
-    "reason": "The actual output addresses all key facts from the expected output: confirmation of shipping to Australia, flat shipping cost of $24.95, delivery timeframe of 7–14 business days, and responsibility for import duties and taxes paid by the customer upon delivery. The wording is different but equivalent, and there are no contradictions. The mention of the shipping policy link is extra but not penaliz"
+    "reason": "The response answers yes to shipping to Australia, gives the $24.95 flat rate, states the 7 to 14 business days delivery time, and explains that the customer pays import duties and taxes on delivery—covering all key facts from the expected output. There is no contradiction, and the minor extra information (reference to 'Shipping Policy' and rephrasing) doesn't detract from accuracy."
    },
    "How do I file a warranty claim without a receipt?": {
     "passed": true,
-    "score": 1.0,
-    "reason": "The actual output addresses the main facts: you file through Acme’s warranty page, include a photo, and if you don’t have a receipt, Acme can look up purchases made with a Trail Club account. It also mentions you need an order number or receipt otherwise, aligning with the expected output. It adds details about approvals, coverage exclusions, and lack of alternative proof info, but these do not co"
+    "score": 0.9,
+    "reason": "The actual output includes the required core facts: to file a claim, use the warranty form and include a defect photo; if no receipt, Acme can look up purchases with an Acme Trail Club account; otherwise, order number/receipt is needed. The wording covers all necessary points from the expected output in substance. There are extra details about time limits, coverage, and exclusions, which are not r"
    },
    "How long is paid parental leave?": {
     "passed": true,
     "score": 1.0,
-    "reason": "The actual output includes all the expected facts: the duration (16 weeks), that it is fully paid, eligibility (six months of service), applicability (following birth, adoption, or foster placement), and conditions (can be taken all at once or in blocks of two weeks within 12 months). No contradicting statements were present. Extra details (applicability for adoption/foster) are contextually accur"
+    "reason": "The actual output includes all key facts from the expected output: 16 weeks of fully paid leave, eligibility for employees with at least six months of service, applicability after birth/adoption/foster, the option to use leave in blocks of at least two weeks or all at once, and within a 12-month period. It adds context (the types of events triggering eligibility) but does not contradict the expect"
    },
    "How long is the warranty on Acme backpacks?": {
     "passed": true,
-    "score": 0.9,
-    "reason": "The actual output correctly states the key fact from the expected output—that Acme backpacks have a lifetime warranty. It also accurately notes exclusions, which are extra details not penalized since they don't contradict the expected output. The main shortcoming is that the actual output does not explicitly mention 'against defects in materials and workmanship,' but it does not contradict this, a"
+    "score": 1.0,
+    "reason": "The actual output clearly states that Acme backpacks have a lifetime warranty, explicitly noting it covers defects in materials and workmanship, which matches the expected output. Additional details about exclusions are provided but do not contradict the required facts. All key details about the warranty duration and coverage are present and correct."
    },
    "How long until my refund shows up on my card?": {
     "passed": true,
     "score": 1.0,
-    "reason": "The actual output accurately reports both key facts from the expected output: (1) that the company issues refunds within 5 business days of receiving and inspecting the return and (2) that the bank may take 3–7 business days to post the credit. The final summary sentence gives a correct total range and does not contradict any facts. The answer is clear, complete, and contains no errors or contradi"
+    "reason": "The actual output includes the main facts from the expected output: issuing the refund within 5 business days after receiving and inspecting the return, and an additional 3-7 business days for the bank to process the credit. It also provides a total estimated range (8-12 business days), which is a reasonable and accurate summary. There are no contradictions or missing essential facts. Minor extra "
    },
    "How many days a week can corporate staff work from home?": {
     "passed": true,
     "score": 1.0,
-    "reason": "The actual output correctly states the limit of three days per week for remote work and mentions the required manager approval, as in the expected output. The mention of store and distribution center roles being on-site is additional context and does not contradict the expected facts. There are no contradictions or missing key facts relevant to the main question."
+    "reason": "The actual output includes all key facts from the expected output: the number of remote days per week (three), that this applies to corporate office employees, and that manager approval is required. It also clarifies that store and distribution center roles are on-site, which is extra context but does not contradict the expected answer. The wording is slightly different but communicates the same f"
    },
    "How many days do I have to return something?": {
     "passed": true,
-    "score": 0.9,
-    "reason": "The response includes the required facts: a general 30-day return window for most items, conditions about the item being unused and properly packaged, and the Acme Trail Club 60-day exception. It also adds two new details (the EU statutory right and final sale exclusions), but these are not contradictory to the expected output—they're extra context. All core details to answer the question are incl"
+    "score": 1.0,
+    "reason": "The actual output provides all key facts from the expected output: the standard 30-day return window, the conditions (unused, tags attached, original packaging), and the 60-day window for Acme Trail Club members on full-price items. It also includes extra context-specific exceptions (like EU statutory right and final sale conditions), which are acceptable according to instructions. No expected fac"
    },
    "How many vacation days do employees get?": {
     "passed": true,
     "score": 1.0,
-    "reason": "The answer includes all key facts from the expected output: full-time employees get 20 vacation days per year, and part-time employees accrue PTO proportionally. It also adds extra details about accrual, carryover, expiration, and Gear Days, none of which contradict the required facts. There are no incorrect statements, and all required facts are clearly stated."
+    "reason": "The response correctly states that full-time employees get 20 days of PTO per year and that part-time employees accrue PTO in proportion to their hours, fully matching the key facts in the expected output. It adds more detail about accrual and carryover, plus mentions 2 'Gear Days' separately, but these additions neither contradict nor omit any required fact from the expected output. No contradict"
    },
    "How much does a return shipping label cost?": {
     "passed": true,
     "score": 1.0,
-    "reason": "The actual output covers all key facts from the expected output: it states the cost of a return shipping label ($6.95), specifies that it's deducted from the refund, and mentions that in-store returns are free. The reference to the Refund Policy and guidance on how to start a return is an extra detail but not penalized. There are no contradictions or missing critical facts, and essential condition"
+    "reason": "The actual output correctly states that a return shipping label costs $6.95 and that this amount is deducted from the refund. It also notes that returns made in-store are free. These directly align with the expected output's key facts. The mention of a refund policy in brackets is extra but does not contradict the facts. No required fact is omitted or contradicted."
    },
    "How much is express shipping?": {
     "passed": true,
     "score": 1.0,
-    "reason": "The actual output correctly states the express shipping cost of $19.00 and 1–2 business days for delivery in the U.S., matching the key facts in the expected output. It also mentions restricted items, which is extra detail but does not contradict the expected answer. No facts from the expected output are missing or contradicted."
+    "reason": "The actual output correctly states the express shipping cost of $19.00 and specifies the delivery timeframe of 1–2 business days in the U.S., matching the expected output. The details provided are accurate; no facts are missing or contradicted. The inclusion of a citation and slightly different wording does not detract from the completeness or correctness of the answer."
    },
    "How should I wash my down sleeping bag?": {
     "passed": true,
     "score": 1.0,
-    "reason": "The actual output correctly states all the key facts from the expected output: wash in a front-loading washer on a gentle cycle with a down-specific detergent, avoid top-loaders with agitators, tumble dry on low with 2–3 tennis balls, and drying can take 3–4 hours. It does not contradict any fact. The only addition is advice on storage, which is not penalized. All required facts are present and ac"
+    "reason": "The actual output accurately states all key facts from the expected output: the type of washer (front-loading, and avoiding top-loading with agitator), gentle cycle, use of down-specific detergent, tumble drying on low heat with 2–3 clean tennis balls, and that drying can take 3–4 hours. It adds extra advice about storage, but this does not contradict the expected facts nor does it detract from th"
    },
    "I live in Germany. What are my rights for returning an online order?": {
     "passed": true,
     "score": 1.0,
-    "reason": "The actual output correctly includes the key facts: (1) statutory 14-day right of withdrawal in Germany/EU for online orders, (2) a standard 30-day return window, (3) full refund of the item and original standard shipping charge if canceled within 14 days, and (4) the fact that sale items are covered within the 14-day period. None of these facts are contradicted, and while the answer contains some"
+    "reason": "The actual output correctly states the statutory 14-day right of withdrawal for online orders in Germany and specifies that Acme refunds both the item and original standard shipping charge, even for sale items, which matches the expected output. It also mentions the 30-day return window, aligning with the expected output's 'on top of the standard 30-day return window.' No contradicting statements "
    },
    "I used my tent on a camping trip and don't like it. Can I get my money back?": {
     "passed": true,
-    "score": 1.0,
-    "reason": "The actual output clearly states that if the tent was used outdoors and is not defective, it cannot be refunded, matching the expected output's yes/no conclusion and return condition. It also mentions that if defective, it can be returned within 30 days, matching the time limit fact. There are no contradictions. Extra details about the return process and offer to help are not penalized. All key fa"
+    "score": 0.9,
+    "reason": "The actual output covers all key facts from the expected output: it explains that used gear (used outdoors) can only be returned within 30 days if defective, and that gear that is not defective is not eligible for a refund. It also gives additional clarification on the standard return policy for unused items and mentions the lifetime warranty, which is extra but does not contradict the core facts."
    },
    "If I order at 3pm, when will it ship?": {
     "passed": true,
     "score": 1.0,
-    "reason": "The actual output correctly states that orders placed before 1 p.m. Mountain Time ship the same day, and those placed later ship the next business day. It applies this to the input, stating that a 3 p.m. order will ship the next business day, which matches the expected conclusion. The only minor omission is the explicit assumption regarding the time zone (Mountain Time), but the policy is still cl"
+    "reason": "The actual output correctly identifies that orders placed at 3 p.m. (after the 1 p.m. Mountain Time cutoff) will ship the next business day, matching the expected answer's central facts and yes/no conclusion. It restates the cutoff and condition accurately and doesn't contradict the expected output. The difference is only the inclusion of a citation, which is not penalized. No key facts are omitte"
    },
    "Is it OK to store my tent while it's still damp?": {
     "passed": true,
     "score": 1.0,
-    "reason": "The actual output matches all key facts from the expected output: it says not to store the tent while damp, emphasizes drying it completely first, and states that storing it damp for more than 24 hours can cause mildew and damage the waterproof coating. The output does not contradict the expected answer and provides some extra helpful care details which do not conflict with the requirements. No re"
+    "reason": "The actual output correctly answers \"no\" to the input question and includes the key facts: the tent should be dried completely before storing, and storing it damp for more than 24 hours can cause mildew and damage the waterproof coating. The additional detail about setting it up at home and advice about storage method are extra, but do not contradict the expected facts. All key information from th"
    },
    "Is my Acme headlamp under warranty after 18 months?": {
     "passed": true,
     "score": 1.0,
-    "reason": "The actual output correctly states that Acme headlamps have a 2-year warranty, answers yes to coverage at 18 months, specifies the coverage details (defects in materials and workmanship), and adds information about how to make a claim and what is not covered. All required facts from the expected output are included with no contradictions. While there is additional helpful context, no required fact"
+    "reason": "The actual output includes all key facts: answers yes, specifies Acme headlamps have a 2-year warranty, confirms 18 months is within the coverage, and notes coverage is for defects in materials and workmanship. It also states details about what is not covered and gives claim instructions, which are acceptable extra details. There are no contradictory statements or omissions that change the answer."
    },
    "My package says delivered but it's not here. What should I do?": {
     "passed": true,
     "score": 1.0,
-    "reason": "The response includes all facts from the expected output: waiting 48 hours, contacting support at the provided email, and that Acme reships lost or damaged orders free after the carrier confirms the claim. It expands with extra suggestions about what to check while waiting, but these don’t contradict the requirements. There are no missing or incorrect statements. The answer is highly aligned with "
+    "reason": "The actual output includes all key facts from the expected output: instructing to wait 48 hours, to contact support@acme-outfitters.example if the package isn't found, and stating that Acme reships lost or damaged orders free of charge once the carrier confirms the claim. Additional details do not contradict the expected output and the main conclusion is preserved. No facts are missing or contradi"
    },
    "The zipper on my pack wore out. Will you fix it for free?": {
     "passed": true,
     "score": 1.0,
-    "reason": "The actual output correctly states that a zipper worn out from normal use is not fixed for free, but instead repaired for a $15 flat fee, matching the essential facts (yes/no conclusion and the fee amount) from the expected output. It does not contradict the expected output and additionally clarifies the distinction if the issue was due to a defect at no penalty. The extra information given does n"
+    "reason": "The actual output correctly states that worn zippers are not repaired for free and are serviced for a flat $15 fee, matching the key facts of the expected output. It also explains if the cause is a defect, it might be covered under warranty, adding reasonable context and clarifying the no answer. There is no contradiction, and all required facts are present in substance. Extra details about initia"
    },
    "What are Gear Days?": {
     "passed": true,
     "score": 1.0,
-    "reason": "The actual output includes all required facts: two paid days per year, for each employee, purpose is outdoor testing of Acme products, they do not count against PTO, and must be scheduled two weeks in advance. No contradictions are present, and extra context or citations do not change the accuracy. All facts are clearly stated, fulfilling the evaluation steps completely."
+    "reason": "The actual output accurately includes all key facts from the expected output: employees get two paid Gear Days per year, they are to be spent outdoors testing Acme products, do not count against PTO, and must be scheduled two weeks in advance. The actual output also briefly introduces the benefit as 'an employee benefit,' which is an extra detail but does not contradict any facts. All required inf"
    },
    "What discount do employees get on other brands?": {
     "passed": true,
     "score": 1.0,
-    "reason": "The actual output correctly states the main fact required—the percentage discount on other brands (20%). It does not include optional contextual details such as the Acme-branded discount rate, household member eligibility, or conditions regarding combinability, but these are not required for this specific question. There are no contradictions. However, the output could be improved by specifying th"
+    "reason": "The response correctly states the primary fact required by the question: employees get 20% off other brands. It does not mention the extra contextual details about Acme-branded products, eligible users, or restrictions, but these are not needed to answer the specific question asked. There are no contradictions. The response is accurate and focused, though it lacks nuance about the context. No sign"
    },
    "What's the minimum order for free shipping?": {
     "passed": true,
     "score": 0.9,
-    "reason": "The actual output correctly states that free standard shipping is available for orders over $75 in the U.S., matching the required minimum order amount for free shipping as in the expected output. The output does not mention that orders under $75 have a $7.95 shipping fee, but this missing information doesn't contradict or change the main answer to the question, which was specifically about the mi"
+    "reason": "The actual output correctly states that free standard shipping starts on orders over $75 in the U.S., matching the key fact from the expected output. It does not contradict the expected output and directly answers the input question about the minimum order for free shipping. It omits the otherwise $7.95 shipping cost, but this omission is minor since the question didn't ask for additional cost det"
    },
    "express shipping": {
     "passed": true,
     "score": 1.0,
-    "reason": "The response accurately provides the cost ($19.00), time frame (1-2 business days in the U.S.), and exclusion of certain items (fuel canisters, bear spray, and large lithium batteries). It also includes the condition for shipping same day if ordered before 1 p.m. MT, which is an extra detail but does not contradict or omit any required facts. There are no contradictory statements. All key facts fr"
+    "reason": "The actual output contains all the key facts from the expected output: Express shipping costs $19.00, takes 1–2 business days, and only applies within the U.S. It clearly states that fuel canisters, bear spray, and large lithium batteries (over 100 Wh) cannot use express shipping. Additionally, it provides relevant time cutoff details about when orders are shipped; these are extra details, which a"
    },
    "refund time": {
     "passed": true,
     "score": 1.0,
-    "reason": "The actual output states both key facts: refunds are issued within 5 business days after receipt and inspection, and banks may take 3–7 business days to post the credit. It does not contradict the expected answer and includes all required timing details for a refund. The only difference is a minor rewording and the mention of Acme, which does not change the substance, so a perfect score is warrant"
+    "reason": "The actual output includes all key facts from the expected output: refunds are issued within 5 business days after receipt and inspection of the return, and the bank may take another 3–7 business days for the credit to post. The wording and small wording changes (mentioning Acme by name, difference between 'after Acme receives and inspects' vs. 'after the return is received and inspected') do not "
    }
   },
   "pii_recall": {

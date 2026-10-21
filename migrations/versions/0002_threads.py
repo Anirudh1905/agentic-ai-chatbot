@@ -1,7 +1,8 @@
 """Thread metadata: who owns each conversation.
 
 The conversation state itself lives in the LangGraph checkpoint tables, which
-AsyncPostgresSaver.setup() creates and migrates on API startup.
+AsyncPostgresSaver.setup() creates and migrates. Since Phase 9 that's `python -m chatbot.migrate`,
+before the API starts, not the API itself.
 
 Revision ID: 0002
 Revises: 0001

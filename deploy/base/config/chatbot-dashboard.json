@@ -924,7 +924,7 @@
           "mode": "multi"
         }
       },
-      "description": "Share of the agent's input tokens the model endpoint served from its prompt cache (Phase 9). The gateway caches prompt prefixes of 1,024 tokens or more on its own."
+      "description": "Share of the agent's input tokens the model endpoint served from its prompt cache (Phase 11). The gateway caches prompt prefixes of 1,024 tokens or more on its own."
     },
     {
       "id": 22,
@@ -966,7 +966,7 @@
           "mode": "multi"
         }
       },
-      "description": "Web searches answered from the Redis cache (WEB_SEARCH_CACHE_SECONDS, Phase 9)."
+      "description": "Web searches answered from the Redis cache (WEB_SEARCH_CACHE_SECONDS, Phase 11)."
     }
   ],
   "editable": true

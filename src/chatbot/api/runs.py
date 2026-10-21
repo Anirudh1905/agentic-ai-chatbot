@@ -28,7 +28,7 @@ def run_config(
     checkpoint_id: str | None = None,
 ) -> RunnableConfig:
     """The run's config. Who the run is for goes separately, as its context (RunContext); its
-    metadata tells the trace (observability.trace_metadata)."""
+    metadata tells the trace (`trace_metadata`, observability/tracing.py)."""
     configurable: dict[str, Any] = {"thread_id": str(thread_id)}
     if checkpoint_id:
         configurable["checkpoint_id"] = checkpoint_id

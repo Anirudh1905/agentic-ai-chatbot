@@ -24,7 +24,7 @@ spec:
       # create a throwaway one each).
       postInitTemplateSQL:
         - CREATE EXTENSION IF NOT EXISTS vector
-  # Backups (Phase 9, backup.yaml): every WAL segment goes to the ObjectStore as it fills, or
+  # Backups (Phase 10, backup.yaml): every WAL segment goes to the ObjectStore as it fills, or
   # after at most 5 minutes, so a restore loses at most the last 5 minutes.
   plugins:
     - name: barman-cloud.cloudnative-pg.io
@@ -37,7 +37,8 @@ spec:
   resources:
     requests: {cpu: 100m, memory: 256Mi}
 ---
-# Rate-limit windows and token counts (Phase 8). Disposable by design, so no volume.
+# Rate-limit windows and token counts (Phase 8), circuit breakers (Phase 10) and the web
+# search cache (Phase 11). Disposable by design, so no volume.
 apiVersion: apps/v1
 kind: Deployment
 metadata:

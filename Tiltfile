@@ -20,6 +20,20 @@ watch_file('deploy/local/ca-bundle.pem')
 manifests = kustomize('deploy/local')
 k8s_yaml(manifests)
 
+# A namespace being deleted (`tilt down`, or deleted by hand) takes minutes: the operators clear
+# their finalizers first. Anything applied meanwhile is refused, Tilt gives up after a minute and
+# doesn't retry, so wait it out here, before anything is applied. At most 10 minutes: a namespace
+# stuck on a finalizer would otherwise hang every Tiltfile load.
+local(
+    'for i in $(seq 120); do ' +
+    '[ -z "$(kubectl --context kind-chatbot get namespace chatbot ' +
+    '-o jsonpath={.metadata.deletionTimestamp} 2>/dev/null)" ] && exit 0; ' +
+    'echo "namespace chatbot is still being deleted; waiting"; sleep 5; done; ' +
+    'echo "namespace chatbot was still being deleted after 10 minutes: check its finalizers" >&2; ' +
+    'exit 1',
+    quiet=True,
+)
+
 
 def generated(kind, name):
     """A generated ConfigMap's or Secret's object selector (its name ends in a hash of its content)."""
@@ -36,14 +50,21 @@ k8s_resource(
     labels=['app'],
 )
 
-# Data services, first.
+# Data services, first. Everything waits for config: it creates the namespace the rest goes in.
+#
+# Don't `tilt trigger` (or press the update button on) config, postgres, minio, elasticmq or
+# reranker-volume: a trigger is a force update, which deletes every object in the resource before
+# applying it again. config holds the namespace, so triggering it deletes everything; the others'
+# volumes are the database, the backups, the queue and the model. To re-apply without deleting
+# anything, stop Tilt and run `tilt up` again (not `tilt down`, which deletes it all).
 k8s_kind('Cluster', api_version='postgresql.cnpg.io/v1', pod_readiness='wait')
-k8s_resource('postgres', objects=['postgres-dev:secret', 'postgres-host:service'], labels=['data'])
+k8s_resource('postgres', objects=['postgres-dev:secret', 'postgres-host:service'], labels=['data'],
+             resource_deps=['config'])
 # localhost:5433, through a NodePort and a socat container (deploy/local/postgres-host.sh).
 local_resource('postgres-host', cmd='./deploy/local/postgres-host.sh', resource_deps=['postgres'], labels=['data'])
-k8s_resource('redis', labels=['data'], port_forwards=['6380:6379'])
+k8s_resource('redis', labels=['data'], resource_deps=['config'], port_forwards=['6380:6379'])
 k8s_resource('elasticmq', objects=[generated('ConfigMap', 'elasticmq-config')], labels=['data'],
-             port_forwards=['9324:9324'])
+             resource_deps=['config'], port_forwards=['9324:9324'])
 k8s_resource('pgweb', labels=['data'], resource_deps=['migrate'], port_forwards=['8081:8081'],
              links=[link('http://localhost:8081', 'pgweb')])
 
@@ -55,6 +76,7 @@ k8s_resource(
     objects=['minio:persistentvolumeclaim', 'backup-store:secret', 'backups:objectstore',
              'postgres-nightly:scheduledbackup'],
     labels=['data'],
+    resource_deps=['config'],
     port_forwards=['9001:9001'],
     links=[link('http://localhost:9001', 'MinIO console')],
 )
@@ -64,10 +86,12 @@ k8s_resource('migrate', labels=['jobs'], resource_deps=['postgres'])
 k8s_resource('backup-bucket', labels=['jobs'], resource_deps=['minio'])
 # The model's volume is a resource of its own: rerunning a Job deletes and recreates its
 # resource's objects, and the volume would go with it (stuck Terminating while the API mounts it).
-k8s_resource(new_name='reranker-volume', objects=['reranker-model:persistentvolumeclaim'], labels=['jobs'])
+k8s_resource(new_name='reranker-volume', objects=['reranker-model:persistentvolumeclaim'], labels=['jobs'],
+             resource_deps=['config'])
 k8s_resource('reranker-model', labels=['jobs'], resource_deps=['reranker-volume'])
 k8s_resource('ingest', labels=['jobs'], resource_deps=['migrate'])
-k8s_resource('retention', labels=['jobs'], trigger_mode=TRIGGER_MODE_MANUAL, auto_init=False)
+k8s_resource('retention', labels=['jobs'], resource_deps=['config'], trigger_mode=TRIGGER_MODE_MANUAL,
+             auto_init=False)
 
 # The app.
 k8s_resource(
@@ -83,6 +107,7 @@ k8s_resource(
     new_name='gateway',
     objects=['chatbot:gateway', 'envoy:gatewayclass', 'kind-nodeport:envoyproxy', 'api:httproute', 'ui:httproute'],
     labels=['app'],
+    resource_deps=['config'],
 )
 
 # Our side of monitoring: scrape targets, alert rules, the dashboard and the routes. Prometheus,
@@ -92,6 +117,7 @@ k8s_resource(
     objects=['api:servicemonitor', 'worker:servicemonitor', 'postgres:podmonitor', 'chatbot:prometheusrule', generated('ConfigMap', 'chatbot-dashboard'),
              'grafana:httproute', 'prometheus:httproute', 'alertmanager:httproute'],
     labels=['monitoring'],
+    resource_deps=['config'],
     links=[link('http://localhost:8088/grafana/d/chatbot', 'Grafana'), link('http://localhost:8088/prometheus/alerts', 'Alerts'),
            link('http://localhost:8088/alertmanager', 'Alertmanager')],
 )

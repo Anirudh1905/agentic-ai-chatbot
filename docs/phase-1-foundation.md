@@ -11,7 +11,7 @@
 | Agent | LangChain's `create_agent` (a LangGraph graph) with no tools, so just a model call with a system prompt | [Agent](#agent) |
 | API | FastAPI with `POST /chat` (JSON) and `POST /chat/stream` (SSE), and `GET /healthz` | [API and streaming](#api-and-streaming) |
 | Config | Typed settings from env vars (`pydantic-settings`) | [Config and model choice](#config-and-model-choice) |
-| Observability | A Langfuse trace for every model call; a request ID and thread on every log line | [Tracing and logging](#tracing-and-logging) |
+| Observability | A Langfuse trace for every run, with its model calls; a request ID and thread on every log line | [Tracing and logging](#tracing-and-logging) |
 | Tooling | `uv`, ruff, mypy, pytest, CI; Docker Compose with Postgres + pgvector (unused until Phase 2; Phase 9 moves it to Kubernetes); a Streamlit UI; a Tiltfile | [Local stack and tooling](#local-stack-and-tooling) |
 
 ```mermaid
@@ -40,7 +40,7 @@ def build_llm(settings: Settings) -> ChatOpenAI:
     return ChatOpenAI(
         model=settings.model,
         base_url=settings.openai_base_url or None,
-        reasoning_effort=settings.reasoning_effort,
+        reasoning_effort=settings.reasoning_effort if is_reasoning(settings.model) else None,
         streaming=True,
         stream_usage=True,          # token counts on streamed responses, for logs and traces
     )
@@ -90,26 +90,26 @@ sequenceDiagram
 | `GET /healthz` | Liveness |
 
 - `stream_run` runs the graph with `astream_events(..., version="v2")` and forwards `on_chat_model_stream` chunks from the `model` node only, as `token` events. Only that node's tokens are the reply, so the summarizer (Phase 3) never leaks into it.
-- **The SSE event types were defined up front** (`StreamEvent` in `api/schemas.py`: `token`, `tool_start`, `tool_end`, `interrupt`, `done`, `error`). Once tools and interrupts arrived, the stream carried more than tokens without changing the contract. Phase 9 added one more, `reset`: a model call failed partway through the reply and a retry or the fallback model starts it over.
+- **The SSE event types were defined up front** (`StreamEvent` in `api/schemas.py`: `token`, `tool_start`, `tool_end`, `interrupt`, `done`, `error`). Once tools and interrupts arrived, the stream carried more than tokens without changing the contract. Phase 10 added one more, `reset`: a model call failed partway through the reply and a retry or the fallback model starts it over.
 - Since Phase 5, tokens pass through `StreamRedactor` (`guardrails/pii.py`) first, which redacts PII and holds back the last 128 characters, so short replies arrive in one piece.
 
 ## Config and model choice
 
 `src/chatbot/config.py` (`Settings`, from env vars or `.env`; see [Settings](#settings)).
 
-- `MODEL` was `gpt-5-mini` until Phase 4. `gpt-5.4` routed short questions to the right tool more reliably and was faster through the gateway (1.5 s vs 2.4 s median), at about ten times the token price.
+- `MODEL` was `gpt-5-mini` until Phase 4. `gpt-5.4` routed short questions to the right tool more reliably and was faster through the gateway (1.5 s vs 2.4 s median on a routing probe, 2026-10-13), at about ten times the token price.
 - `REASONING_EFFORT` below `low` made both models answer questions like "president of USA" from stale memory instead of searching.
 
 ## Tracing and logging
 
 `src/chatbot/observability/tracing.py`, `observability/logs.py` and `api/middleware.py`.
 
-- Every run gets a Langfuse callback handler (`build_callbacks`), so each model call is a trace with its token counts. Langfuse runs self-hosted (`ops/langfuse/docker-compose.yml`).
+- Every run gets a Langfuse callback handler (`build_callbacks`), so each run is a trace, with its model calls and their token counts inside it (since Phase 8 named `chat` or `resume`). Langfuse runs self-hosted (`ops/langfuse/docker-compose.yml`).
 - Every log line carries the request ID and thread, and each model call logs its time and token counts. HTTP client and access logs only show with `LOG_LEVEL=DEBUG`.
 
 ## Local stack and tooling
 
-- In Phase 1, `tilt up` ran Postgres (Docker Compose), the self-hosted Langfuse stack, migrations, the API and the Streamlit UI, plus pgweb (<http://localhost:8081>) for browsing the database. Since Phase 9, `make tilt` deploys everything but Langfuse to a local Kubernetes cluster (kind), with the UI at <http://localhost:8088>; see [Phase 9](phase-9-reliability-deployment.md#dev-workflow). Without Kubernetes: start Postgres and Redis yourself, then `make migrate`, `make dev` and `make ui` (`make up` now starts only Langfuse).
+- In Phase 1, `tilt up` ran Postgres (Docker Compose), the self-hosted Langfuse stack, migrations, the API and the Streamlit UI, plus pgweb (<http://localhost:8081>) for browsing the database. Since Phase 9, `make tilt` deploys everything but Langfuse to a local Kubernetes cluster (kind), with the UI at <http://localhost:8088>; see [Phase 9](phase-9-deployment.md#dev-workflow). Without Kubernetes: start Postgres and Redis yourself, then `make migrate`, `make dev` and `make ui` (`make up` now starts only Langfuse).
 - `make lint`, `make typecheck` and `make test` (or `make check` for all three); CI runs the same (`.github/workflows/ci.yml`).
 - The Streamlit UI (`ui/app.py`) talks to `/chat/stream`.
 
@@ -136,7 +136,7 @@ sequenceDiagram
 | `src/chatbot/config.py` | `Settings` |
 | `src/chatbot/agent/builder.py`, `agent/middleware.py` | `build_llm`, `build_graph`; the `system_prompt` middleware |
 | `src/chatbot/prompts/system.md` | The system prompt |
-| `src/chatbot/api/main.py`, `api/routes/chat.py`, `api/routes/health.py` | The app and the three endpoints |
+| `src/chatbot/api/main.py`, `api/routes/chat.py`, `api/routes/health.py` | The app and the three Phase 1 endpoints (since Phases 8 and 9, `health.py` also serves `/metrics` and `/readyz`) |
 | `src/chatbot/api/streaming.py`, `api/schemas.py` | `stream_run`; the request, response and SSE event types |
 | `src/chatbot/observability/tracing.py`, `observability/logs.py`, `api/middleware.py` | Langfuse callbacks; log format with request ID and thread |
 | `docker-compose.yml`, `ops/langfuse/docker-compose.yml` | `pgvector/pgvector:pg16`, pgweb; the self-hosted Langfuse stack (Phase 9 removes the root `docker-compose.yml`: Postgres and pgweb run in `deploy/`) |

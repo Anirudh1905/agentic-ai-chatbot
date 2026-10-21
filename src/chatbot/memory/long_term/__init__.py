@@ -13,8 +13,9 @@ store at `("memories", user_id)`, with a vector index on their content.
 A thread's turns are pushed into long-term memory four ways:
 - **Token breach:** when the thread passes CONTEXT_MAX_TOKENS, the summarization step hands
   the turns it's folding away to `MemoryWriter.schedule`.
-- **TTL:** when a thread has been idle for MEMORY_THREAD_TTL_MINUTES, a loop in the API
-  (`MemoryWriter.start`) pushes its turns that haven't been pushed yet.
+- **TTL:** when a thread has been idle for MEMORY_THREAD_TTL_MINUTES, a background loop
+  (`MemoryWriter.start`: in the worker, or in the API with BACKGROUND_JOBS) pushes its turns
+  that haven't been pushed yet, or with a queue enqueues them.
 - **Manually:** the user presses "Remember this" on a message, or asks the agent, which calls
   its `remember` tool (`tools/memory.py`); both go to `MemoryWriter.remember`.
 
@@ -30,7 +31,7 @@ first two never push the same turns twice. Each push:
   3. For each fact, the closest existing memories of that user (any topic) are found by
      vector search, and the model decides what changes: add the fact, update the memories it
      corrects, delete the ones it makes obsolete (one fact can make several obsolete).
-  One push per user at a time, across API processes too (a Postgres advisory lock), and at
+  One push per user at a time, across processes too (a Postgres advisory lock), and at
   most MEMORY_WRITE_CONCURRENCY at once per process, since each holds a pooled connection.
 - **Read** every turn: `LongTermMemory` searches them with the latest message and adds the
   closest ones the thread hasn't recalled yet to its state, where the system prompt picks

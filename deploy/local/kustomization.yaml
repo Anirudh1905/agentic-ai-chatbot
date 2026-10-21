@@ -16,7 +16,7 @@ patches:
         path: /spec/infrastructure
         value:
           parametersRef: {group: gateway.envoyproxy.io, kind: EnvoyProxy, name: kind-nodeport}
-  # A login for the host, through Tilt's port-forward (localhost:5433): the tests create throwaway
+  # A login for the host, on localhost:5433 (postgres-host.sh): the tests create throwaway
   # databases with it, and make eval / make ingest use the app's tables as a member of their owner.
   - target: {kind: Cluster, name: postgres}
     patch: |-

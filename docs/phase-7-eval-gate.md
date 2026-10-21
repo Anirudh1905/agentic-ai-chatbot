@@ -4,7 +4,7 @@
 
 [← Phase 6](phase-6-long-term-memory.md) · [Overview](../README.md) · [Next: Phase 8 →](phase-8-security-observability.md)
 
-**Status: built.** Phases 7 to 9 make the chatbot a production-ready demo: built the way production would be, run locally or on one host, with no real users or on-call. This phase measures quality; [Phase 8](phase-8-security-observability.md) adds login, limits and observability; [Phase 9](phase-9-reliability-deployment.md) reliability, cost and deployment.
+**Status: built.** Phases 7 to 12 make the chatbot a production-ready demo: built the way production would be, run locally or on one host, with no real users or on-call. This phase measures quality; [Phase 8](phase-8-security-observability.md) adds login, limits and observability; [Phase 9](phase-9-deployment.md) deploys it, [Phase 10](phase-10-reliability.md) makes it reliable, [Phase 11](phase-11-cost-latency.md) caps its cost and latency, and [Phase 12](phase-12-load-outage-tests.md) load- and outage-tests it.
 
 | Area | What's built | Section |
 | --- | --- | --- |
@@ -64,12 +64,12 @@ flowchart TB
     Guard -->|no| Faith
     Routing & Guard & Cite & Correct --> Outcome[pass / fail / error,<br/>score and reason per metric]
     Outcome --> Reg{passed on main,<br/>fails now?}
-    Reg -->|yes| Twice[run agent and judge twice more;<br/>fails only if 2 of 3 fail]
+    Reg -->|yes| Twice[run agent and judge twice more:<br/>fails only if 2 of 3 fail]
     Reg -->|no| Report[(report.json)]
     Twice --> Report
 ```
 
-- **One agent run per golden question** (`agent_runs.py`), scored by routing, faithfulness, citations and correctness. Web answers change over time, so they get faithfulness and citations but no reference answer.
+- **One agent run per golden question** (`agent_runs.py`), scored by routing, faithfulness, citations and correctness. Web answers change over time, so they get faithfulness and citations but no reference answer. Since Phase 10 the agent is built with the production retries and `ModelFallbackMiddleware`, so an answer whose gpt-5.4 call failed comes from `FALLBACK_MODEL` (gpt-4.1); the report's `models` block doesn't record it ([Phase 10](phase-10-reliability.md)).
 - **DeepEval 4.3.1**, used programmatically (each metric's `a_measure`), never logged in to its hosted service, telemetry off. Retrieval keeps our own exact-label scoring: it beats DeepEval's judged `ContextualRecallMetric` when the right section is known.
 - **What a citation covers** (`citations.py`). The system prompt asks for `[cite_as]` after each claim from a knowledge base result, and the `cite_as` markdown link for a web result. A citation covers the text since the previous citation on the same line: "Yes. Orders can be canceled within 30 minutes. [Order Changes]" vouches for both sentences, as a reader would take it. Splitting into sentences instead broke on "1 p.m.", "Donald J. Trump" and titles like "REI Return Policy [Latest 2026 Guide]", and let a wrong first sentence go unchecked.
 - **Two DeepEval defaults changed:**
@@ -99,13 +99,13 @@ Reference answers, calibration labels, and the PII and approval labels were **wr
 | Faithfulness | 91% (53/58) | yes |
 | Correctness | 90% (45/50) | yes |
 
-The correctness disagreements are between "partly" and "wrong", which doesn't change pass or fail. The faithfulness disagreements all go one way: see [Known issues](#known-issues).
+Four of the five correctness disagreements are between "partly" and "wrong", which doesn't change pass or fail. The fifth (`wrong-fact-0`) is "partly" against the judge's "correct": the judge passed an answer with a wrong exchange window (30 days instead of 14). The faithfulness disagreements all go one way: see [Known issues](#known-issues).
 
 ## Noise
 
 `tests/evals/scoring.py` and `report.py`. Answers vary between runs, and so does the judge ([measured](#measurements)).
 
-- **Tolerance:** a metric blocks when it drops below `main` by more than max(2 points, one case); with 30 cases one case is 3.3 points. The judged metrics (faithfulness, citations, correctness) get three cases: one claim the results don't state word for word fails a whole faithfulness case, and four runs of the same answers scored 65%, 72.5%, 72.5% and 77.5% on its 40 cases (Phases 8 and 9). The code-only suites (PII, approval policy) don't vary, so any drop there blocks.
+- **Tolerance:** a metric blocks when it drops below `main` by more than max(2 points, one case); with 30 cases one case is 3.3 points. The judged metrics (faithfulness, citations, correctness) get three cases: one claim the results don't state word for word fails a whole faithfulness case, and four runs of the same answers scored 65%, 72.5%, 72.5% and 77.5% on its 40 cases (Phases 8 and 9, 2026-10-19 to 2026-10-20, through the gateway). The code-only suites (PII, approval policy) don't vary, so any drop there blocks.
 - **Re-runs:** a case that passed on `main` and fails now is run twice more, agent and judge; it fails only if 2 of 3 runs fail. A whole-metric drop within normal variation isn't a regression by itself; the re-runs of each case that flipped are what tell noise from a real change.
 - **Errors:** a question whose agent run or judging still fails after 3 tries is an error, listed but counted as neither a pass nor a fail.
 - Every failing case is listed with the judge's reason, so a reviewer can check it.
@@ -161,15 +161,15 @@ Every other setting that affects answers must be at its default during `make eva
 
 ### Measurements
 
-- **Latest scores** (the committed `report.json`, Phase 9): retrieval 100%, routing 100%, faithfulness 77.5%, citations 90%, correctness 100%, PII 95% recall and 92% of look-alikes left alone, approval policy 100%.
-- **Run-to-run variance:** two runs of the same code an hour apart scored faithfulness 65% and 72%, citations 85% and 72% (correctness 100% both times).
-- **Errors:** without retries, 9 of 44 questions errored on the first run.
-- **Time and cost:** one `make eval` is 44 agent runs and about 130 judge measurements, at most 3 model calls at once: about 15 minutes with retries, a few dollars. Calibration adds 58 answers.
+- **Latest scores** (the committed `report.json`, run 2026-10-21): retrieval 100%, routing 100%, faithfulness 75% (30 of 40), citations 88% (35 of 40), correctness 100%, PII 95% recall and 92% of look-alikes left alone, approval policy 100%.
+- **Run-to-run variance:** two runs of the same code an hour apart (2026-10-17) scored faithfulness 65% and 72%, citations 85% and 72% (correctness 100% both times).
+- **Errors:** without retries, 9 of 44 questions errored on the first run (2026-10-17).
+- **Time and cost:** one `make eval` is 44 agent runs and about 130 judge measurements, with at most 3 agent runs and 3 judge calls at once (6 model calls, plus summaries): about 15 minutes with retries, a few dollars (2026-10-17). Calibration adds 58 answers.
 
 ### Known issues
 
 - **The judge is too strict on faithfulness.** All 5 of its faithfulness disagreements fail an answer labelled faithful: "Opened fuel canisters are non-returnable" next to a chunk listing exactly that, 5 plus 3–7 days added up to 8–12, an offer to help counted as a claim. It failed 5 of 34 good answers and passed none of the 24 bad ones. So the faithfulness score understates how faithful the answers are. `main` and the PR are scored by the same judge, so a drop still means something. A custom DeepEval template (paraphrase and arithmetic from the context are supported; offers aren't claims) is the next step.
-- **Faithfulness and citations are noisy** run to run ([measured](#measurements)), so a whole-metric drop of a few points can block a PR on its own: Phase 8's first re-run blocked on faithfulness 69% against `main`'s 72% ([Phase 8](phase-8-security-observability.md#effect-on-the-evals)).
+- **Faithfulness and citations are noisy** run to run ([measured](#measurements)), which is why the judged metrics may drop three cases ([Noise](#noise)). Before that rule, Phase 8's first re-run blocked on faithfulness 69% against `main`'s 72%, one case past the old tolerance ([Phase 8](phase-8-security-observability.md#effect-on-the-evals)).
 - **PII:** IPv6 addresses aren't redacted (`2001:db8::1` passes through), and a version number like "1.2.3.4" is redacted as an IP. Both are in the baseline, so they don't block; a new miss would.
 - **Unsourced advice:** for a missing package the bot adds "check with neighbours or building staff", which no document says.
 
