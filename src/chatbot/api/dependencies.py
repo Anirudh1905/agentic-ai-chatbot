@@ -85,6 +85,7 @@ class Resources:
                     else None,
                     concurrency=settings.memory_write_concurrency,
                     queue=self.queue,
+                    users=PostgresUserStore(self.pool),
                 )
             self.graph = build_graph(
                 settings,

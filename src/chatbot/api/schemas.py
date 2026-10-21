@@ -27,7 +27,7 @@ class ChatResponse(BaseModel):
 class StreamEvent(StrEnum):
     """SSE event types. INTERRUPT means the run paused for approval (DONE follows). RESET means
     a model call failed partway through the reply and another (a retry, or the fallback model)
-    starts it over: drop the tokens shown so far (Phase 9)."""
+    starts it over: drop the tokens shown so far (Phase 10)."""
 
     TOKEN = "token"
     TOOL_START = "tool_start"

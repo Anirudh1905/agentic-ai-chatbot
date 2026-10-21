@@ -168,8 +168,9 @@ def new_thread() -> None:
 def stream_events(path: str, body: dict[str, Any]) -> Iterator[tuple[str, dict[str, Any]]]:
     with api() as client, connect_sse(client, "POST", path, json=body) as source:
         if source.response.status_code != 200:
-            # Refused before the run started: rate limited (429), the chat still answering
-            # an earlier message (409), or not signed in (401).
+            # Refused before the run started: rate limited (429), the chat still answering or
+            # waiting for approval (409), or someone else's thread (404). A 401 never gets
+            # here: log_out_on_401 has already logged the user out.
             source.response.read()
             detail = source.response.json().get("detail", source.response.text)
             raise StreamError(detail, refused=True)

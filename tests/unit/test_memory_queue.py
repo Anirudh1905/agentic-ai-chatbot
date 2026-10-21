@@ -3,18 +3,24 @@ and a push is never dropped: one the worker can't finish stays unacked, and one 
 enqueue runs in-process instead. The fake memory model turns each "fact: key=value" line into a
 memory (fakes.FactMemoryModel)."""
 
+import asyncio
 import uuid
 from collections.abc import Sequence
 from datetime import timedelta
 from typing import Any
 
-from fakes import FactMemoryModel, InMemoryThreadStore
+from fakes import FactMemoryModel, InMemoryThreadStore, InMemoryUserStore
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage
 from langgraph.store.memory import InMemoryStore
 from prometheus_client import REGISTRY
 
 from chatbot.jobs import InMemoryJobQueue, MemoryPush
-from chatbot.memory.long_term import MemoryWriter, namespace, wait_for_memory_writes
+from chatbot.memory.long_term import (
+    MemoryWriter,
+    cursor_namespace,
+    namespace,
+    wait_for_memory_writes,
+)
 from chatbot.worker import Worker
 
 TURNS: list[AnyMessage] = [HumanMessage("fact: colour=pink", id="h1"), AIMessage("Noted.", id="a1")]
@@ -126,3 +132,44 @@ async def test_without_a_queue_pushes_run_in_process_as_before() -> None:
     MemoryWriter(FactMemoryModel()).enqueue_summary(store, "alice", "t1", TURNS)
     await wait_for_memory_writes()
     assert memories(store) == ["fact: colour=pink"]
+
+
+async def test_a_push_queued_before_the_account_was_deleted_writes_nothing() -> None:
+    queue, store, users = InMemoryJobQueue(), InMemoryStore(), InMemoryUserStore()
+    users.add("alice")
+    api = MemoryWriter(FactMemoryModel(), queue=queue)
+    api.enqueue_summary(store, "alice", "t1", TURNS)
+    api.remember(store, "alice", "fact: city=Pune", None)
+    await wait_for_memory_writes()
+    await users.delete("alice")  # DELETE /me ran while the pushes waited on the queue
+
+    worker = Worker(queue, MemoryWriter(FactMemoryModel(), users=users), store, no_messages)
+    assert await worker.run_once(wait_seconds=0) == 2
+
+    assert memories(store) == []
+    queue.expire_in_flight()
+    assert await queue.receive() == []  # acked: there's nothing to retry
+
+
+async def test_an_idle_push_after_the_account_was_deleted_leaves_no_cursor() -> None:
+    store, users = InMemoryStore(), InMemoryUserStore()
+    writer = MemoryWriter(FactMemoryModel(), users=users)  # alice has no account
+
+    assert await writer.push(store, "alice", "t1", TURNS)
+
+    assert memories(store) == []
+    assert store.search(cursor_namespace("alice")) == []
+
+
+async def test_a_push_waiting_on_the_users_lock_sees_the_account_deleted() -> None:
+    store, users = InMemoryStore(), InMemoryUserStore()
+    users.add("alice")
+    writer = MemoryWriter(FactMemoryModel(), users=users)
+
+    async with writer.user_lock(store, "alice"):  # what DELETE /me holds
+        writer.remember(store, "alice", "fact: city=Pune", None)
+        await asyncio.sleep(0)  # the push starts and waits for the lock
+        await users.delete("alice")
+    await wait_for_memory_writes()
+
+    assert memories(store) == []

@@ -16,7 +16,7 @@ spec:
     metadata:
       labels: {app: api}
     spec:
-      # preStop waits up to 55 s for open streams, then uvicorn gets SIGTERM.
+      # preStop waits 5 s, then up to 55 s more for open streams; then uvicorn gets SIGTERM.
       terminationGracePeriodSeconds: 75
       containers:
         - name: api
@@ -57,7 +57,7 @@ spec:
             - {name: secrets, mountPath: /run/secrets, readOnly: true}
             - {name: models, mountPath: /models, readOnly: true}
           resources:
-            # About 1.7 GB with the reranker loaded, measured under load (Phase 9). The limit makes
+            # About 1.7 GB with the reranker loaded, measured under load (Phase 12). The limit makes
             # a pod that grows past it the one that's killed, not whatever the node's kernel picks.
             requests: {cpu: 200m, memory: 2Gi}
             limits: {memory: 3Gi}

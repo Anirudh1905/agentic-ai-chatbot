@@ -1,4 +1,4 @@
-"""A model gateway with an outage (Phase 9, make outage-test): chat completions for the models in
+"""A model gateway with an outage (Phase 12, make outage-test): chat completions for the models in
 FAIL_MODELS answer 503 at once; every other request (other models, embeddings) goes through to
 the real gateway, streamed. Runs in the cluster from the app image, which has Starlette, httpx
 and uvicorn; the upstream URL is the app's own secret.

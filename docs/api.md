@@ -9,7 +9,7 @@ The endpoints, the checks every request passes, and each endpoint's flow. The in
 | Endpoint | Purpose |
 | --- | --- |
 | `POST /chat` | Full reply, its sources and the `thread_id` as JSON, or `pending` tool calls if it paused for approval. Omit `thread_id` to start a new thread. 409 while the thread waits for approval |
-| `POST /chat/stream` | Server-Sent Events: `tool_start` / `tool_end` (with sources) and `token`, then `done` with the `thread_id` (or `error`). An `interrupt` event before `done` means the run is waiting for approval |
+| `POST /chat/stream` | Server-Sent Events: `tool_start` / `tool_end` (with sources) and `token`, then `done` with the `thread_id` and `pending` (or `error`). An `interrupt` event before `done` means the run is waiting for approval; a `reset` means a model call failed partway and the reply starts over, so drop the tokens shown so far |
 | `POST /threads` | Create an empty thread |
 | `GET /threads` | The caller's threads, most recent first |
 | `GET /threads/{id}/messages` | The thread's messages (with each reply's sources), the summary, and `pending` if it's waiting for approval |
@@ -26,25 +26,29 @@ The endpoints, the checks every request passes, and each endpoint's flow. The in
 | `POST /auth/login` | Log in (form `username` = email, `password`, optionally `openai_api_key` / `openai_base_url`, checked); returns a bearer token |
 | `GET /auth/me` | The signed-in account |
 | `GET /healthz` | Liveness |
-| `GET /readyz` | Readiness: 503 when the database doesn't answer |
+| `GET /readyz` | Readiness: 503 until the process's resources are up (the reranker included) and while the database doesn't answer |
 | `GET /metrics` | Prometheus metrics (404 when `METRICS_PORT` moves them to their own port, as in the cluster) |
 
-All endpoints except `/healthz`, `/readyz`, `/metrics`, `/auth/register` and `/auth/login` need a bearer token (401 without a valid one), and answer 429 with `Retry-After` over a rate limit. The ones that start a model run (`/chat`, `/chat/stream`, `.../resume`, `.../resume/stream`) also answer 429 once the user's daily token budget is spent.
+All endpoints but the health ones (`/healthz`, `/readyz`, `/metrics`) answer 429 with `Retry-After` over a rate limit; `/auth/register` and `/auth/login` have a tighter per-IP limit of their own. All but those and the health ones need a bearer token (401 without a valid one). The ones that start a model run (`/chat`, `/chat/stream`, `.../resume`, `.../resume/stream`) also answer 429 once the user's daily token budget is spent, 409 with `Retry-After: 5` while the thread is already answering, and 400 if the user's own model key is refused (the stream routes send an `error` event instead).
 
 
 ## The checks on every request
 
-Every request passes the same checks before its route runs; the routes that start a model run add the token budget:
+Every request except the health probes and `/metrics` passes these checks before its route runs (FastAPI dependencies, in this order); the routes that start a model run add the token budget:
 
 ```mermaid
 flowchart LR
-    Req["request"] --> IP{"per-IP limit<br/>(Redis)"}
+    Req["request"] --> Health{"/healthz · /readyz<br/>/metrics?"}
+    Health -->|yes| Route["the route"]
+    Health -->|no| IP{"per-IP limit<br/>(Redis)"}
     IP -->|over| R429["429 + Retry-After"]
-    IP --> Public{"/healthz · /readyz · /metrics<br/>/auth/register · /auth/login?"}
-    Public -->|yes| Route["the route"]
-    Public -->|no| JWT{"bearer JWT valid,<br/>account exists? (Postgres)"}
+    IP --> Auth{"/auth/register<br/>/auth/login?"}
+    Auth -->|yes| Login{"register and log-in<br/>attempts per IP (Redis)"}
+    Login -->|over| R429
+    Login --> Route
+    Auth -->|no| JWT{"bearer JWT valid,<br/>account exists? (Postgres)"}
     JWT -->|no| R401["401"]
-    JWT --> User{"per-user limit<br/>(Redis)"}
+    JWT --> User{"per-user limit (Redis)<br/>all but GET /auth/me"}
     User -->|over| R429
     User --> Run{"starts a model run?<br/>/chat · /resume"}
     Run -->|no| Route
@@ -71,8 +75,9 @@ sequenceDiagram
     participant W as Queue + worker
     U->>UI: a message (browser → Envoy Gateway → ui pod)
     UI->>API: POST /chat/stream, Bearer JWT
-    API->>R: per-IP and per-user limits, token budget
+    API->>R: per-IP limit
     API->>PG: the account behind the token
+    API->>R: per-user limit, token budget left
     API->>API: redact PII in the message
     API->>PG: claim the thread (404 if someone else's), take its lease (409 if busy)
     API->>A: run it, streamed back as Server-Sent Events
@@ -86,13 +91,13 @@ sequenceDiagram
     else
         A-->>UI: tool_start
         A->>T: search_knowledge_base (embed, hybrid search, rerank) or web_search (Redis cache, else DuckDuckGo)
-        T-->>A: results, PII-redacted
+        T-->>A: results (PII redacted before the model reads them)
         A-->>UI: tool_end with the sources
         A->>M: the results
         M-->>A: the reply, token by token
         A-->>UI: token events (PII redacted as they stream)
     end
-    A->>R: the run's tokens against the daily budget
+    A->>R: each model call's tokens against the daily budget
     A->>PG: a checkpoint after every step
     opt the thread passed CONTEXT_MAX_TOKENS
         A->>M: summarize the older turns (gpt-4.1-mini), after the reply
@@ -125,7 +130,8 @@ sequenceDiagram
     API->>R: register and log-in attempts per IP
     opt their own key
         API->>M: GET /models, then a 16-token chat call
-        M-->>API: works, or 400 "Incorrect OpenAI base URL or API key"
+        M-->>API: works, or fails
+        API-->>C: 400 "Incorrect OpenAI base URL or API key" if it failed
     end
     API->>PG: check the password
     API-->>C: a signed JWT (JWT_TTL_MINUTES), or 401
@@ -154,14 +160,13 @@ sequenceDiagram
     participant A as Agent
     C->>API: POST /threads/{id}/resume {decisions?, checkpoint_id?}
     API->>PG: own the thread (404), take its lease (409 if busy)
-    API->>PG: its state: the latest checkpoint, or checkpoint_id's
+    API->>PG: its state: the latest checkpoint, or checkpoint_id's (404 if there's none)
+    Note over API,A: with checkpoint_id, the new steps fork from it and become the thread's latest state
     alt waiting for approval
-        API->>API: one decision per pending call (422 otherwise), redact edits and reasons
+        API->>API: one decision per pending call (409 if none, 422 if the count is wrong), redact edits and reasons
         API->>A: Command(resume=decisions): approve runs the call, edit runs the edited one, reject tells the model
     else stopped partway (a crash, a disconnect)
-        API->>A: continue from the checkpoint
-    else checkpoint_id
-        API->>A: replay from it: a fork that becomes the thread's latest state
+        API->>A: continue from the checkpoint (409 if decisions were sent)
     else finished
         API-->>C: 409 "Nothing to resume"
     end
@@ -181,7 +186,7 @@ sequenceDiagram
     participant PG as Postgres
     C->>API: POST /threads {title?}
     API->>PG: insert a thread for the user
-    API-->>C: 201 {id, title, created_at}
+    API-->>C: 201 {id, title, created_at, updated_at}
     C->>API: GET /threads?limit=
     API->>PG: the user's threads, most recent first
     C->>API: GET /threads/{id}/messages
@@ -202,12 +207,12 @@ sequenceDiagram
     participant C as Client
     participant API as API
     participant PG as Postgres
-    participant Q as SQS queue
+    participant Q as SQS queue (else in-process)
     participant W as Worker
     participant M as Memory model
     C->>API: POST /threads/{id}/messages/3/remember
-    API->>PG: own the thread, read its messages
-    API->>API: 404 no such message, 422 not a reply, 409 memory off
+    API->>PG: own the thread (404), 409 if memory is off, then read its messages
+    API->>API: 404 no such message, 422 not a reply
     API->>Q: a remember push: the reply and the question before it
     API-->>C: 202
     Q->>W: the push (one user's in order)
@@ -248,6 +253,7 @@ sequenceDiagram
     C->>API: DELETE /me
     API->>API: wait for a memory push in progress for the user, and hold new ones
     API->>PG: each thread's checkpoints and the thread, the memories and cursors, then the account
+    Note over API: a push that waited for the lock, or on the queue, finds no account and writes nothing
     API-->>C: 204: the token stops working
 ```
 
@@ -264,8 +270,9 @@ sequenceDiagram
     K->>API: GET /healthz (liveness)
     API-->>K: 200 while the process runs
     K->>API: GET /readyz (readiness)
+    API->>API: load the resources once (pool, store, reranker)
     API->>PG: SELECT 1
-    API-->>K: 200, or 503: the pod leaves the Service until Postgres answers
+    API-->>K: 200, or 503: the pod stays out of the Service until both are done
     K->>API: GET :9100/metrics (METRICS_PORT, /metrics on the app port is 404 then)
     API-->>K: Prometheus metrics
 ```

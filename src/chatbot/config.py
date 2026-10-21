@@ -8,9 +8,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ReasoningEffort = Literal["none", "minimal", "low", "medium", "high"]
 
-# Secrets can also come from files here, one per setting, named like it (`jwt_secret`,
-# `openai_api_key`): Docker and Kubernetes secrets are mounted this way. The environment wins
-# over the files, and the files over `.env`.
+# Secrets can also come from files here, one per setting, named like it in any case (`JWT_SECRET`,
+# `OPENAI_API_KEY`): Docker and Kubernetes secrets are mounted this way. The environment wins
+# over `.env`, and `.env` over the files.
 SECRETS_DIR = Path("/run/secrets")
 # HS256 is only as strong as its key: at least 32 bytes (RFC 7518, section 3.2).
 MIN_JWT_SECRET_CHARS = 32
@@ -34,6 +34,8 @@ class Settings(BaseSettings):
     # models answered terse questions like "president of USA" from stale memory instead of
     # searching (gpt-5-mini at "minimal": 9/16 on a routing probe; gpt-5.4 at "none": 15/16).
     reasoning_effort: ReasoningEffort | None = "low"
+    # Caps every chat-model call (replies, the fallback, summaries, memory pushes); on gpt-5.x
+    # it counts reasoning tokens too.
     max_tokens: int | None = None
     # Per model call (the reply, a summary, a memory push). The gateway sometimes stalls gpt-5
     # calls until the timeout; this fails them sooner so the retry can go through (one summary
@@ -41,12 +43,13 @@ class Settings(BaseSettings):
     request_timeout: float = 30.0
 
     # When a call to MODEL fails, it goes to this one instead, on the same endpoint
-    # (ModelFallbackMiddleware, Phase 9). Memory pushes fall back to it too. Empty turns
+    # (ModelFallbackMiddleware, Phase 10). Memory pushes fall back to it too. Empty turns
     # fallbacks off.
     fallback_model: str = "gpt-4.1"
     # Retries of a model call that failed with an outage (timeouts, connection errors, 429s,
     # 5xx), before the fallback (ModelRetryMiddleware). One: a stalled call takes
-    # REQUEST_TIMEOUT each time, and the fallback answers sooner than a third try.
+    # REQUEST_TIMEOUT each time, and the fallback answers sooner than a third try. Also the
+    # embeddings client's own retries (storage/embeddings.py), which have no fallback.
     model_max_retries: int = 1
     # Circuit breakers (reliability/breaker.py), per model, the embeddings and web search,
     # shared in Redis by every API pod and the worker: this many failures within the window
@@ -55,7 +58,7 @@ class Settings(BaseSettings):
     breaker_window_seconds: int = 60
     breaker_cooldown_seconds: int = 30
 
-    # One run at a time per thread (Phase 9, api/leases.py): a run's lease on its thread lasts
+    # One run at a time per thread (Phase 10, api/leases.py): a run's lease on its thread lasts
     # this long and is renewed every third of it, so a pod that dies frees its threads this
     # long after.
     thread_lease_seconds: float = 60.0
@@ -76,7 +79,7 @@ class Settings(BaseSettings):
     # model's window: every turn resends the history. Each summary also updates the user's
     # long-term memory.
     context_max_tokens: int = 10_000
-    # Before that, old search results go (Phase 9, LangChain's ContextEditingMiddleware): past
+    # Before that, old search results go (Phase 11, LangChain's ContextEditingMiddleware): past
     # this many tokens, each model call sees all but the latest CONTEXT_KEEP_TOOL_RESULTS tool
     # results as a placeholder. Every call resends them, and old ones are rarely still needed.
     # The thread keeps them; only what the model is sent changes. 0 turns it off.
@@ -97,7 +100,7 @@ class Settings(BaseSettings):
     # Candidates fetched from each of vector and full-text search before fusion.
     retrieval_candidates: int = 30
     retrieval_top_k: int = 6
-    # Cap on one search's results (Phase 9), in estimated tokens: the best-ranked chunks that
+    # Cap on one search's results (Phase 11), in estimated tokens: the best-ranked chunks that
     # fit, at least one. Six chunks of up to CHUNK_SIZE_TOKENS would be about 3,600.
     retrieval_max_tokens: int = 2_500
     # Cross-encoder that reorders the fused results (fastembed model name). Empty disables it.
@@ -111,7 +114,7 @@ class Settings(BaseSettings):
     web_search_enabled: bool = True
     web_search_max_results: int = 5
     web_search_timeout: float = 15.0
-    # Results of a query are kept in Redis this long (Phase 9), shared by every API pod: the
+    # Results of a query are kept in Redis this long (Phase 11), shared by every API pod: the
     # same question asked again gets them at once, and keyless search is rate-limited. Only
     # searches that returned results. 0, or no REDIS_URL, turns it off.
     web_search_cache_seconds: int = 600
@@ -124,8 +127,9 @@ class Settings(BaseSettings):
     pii_allowed_email_domains: list[str] = ["acme-outfitters.example"]
 
     # Long-term memory (memory/long_term/): a thread's turns are pushed into small per-user
-    # memories at its token breach, when it's been idle for MEMORY_THREAD_TTL_MINUTES, or when
-    # the user presses "Remember this"; every turn recalls the closest memories.
+    # memories at its token breach, when it's been idle for MEMORY_THREAD_TTL_MINUTES, when the
+    # user presses "Remember this", or when they ask the bot to (the `remember` tool); every
+    # turn recalls the closest memories.
     memory_enabled: bool = True
     # A thread's turns not yet pushed are pushed once it's been idle this long.
     memory_thread_ttl_minutes: float = 30
@@ -190,8 +194,8 @@ class Settings(BaseSettings):
     # `limits` library's notation. 0 for DAILY_TOKEN_BUDGET turns the budget off.
     rate_limits_enabled: bool = True
     redis_url: str | None = None
-    # Against abuse, not cost (the token budget is for cost): the UI makes about three reads per
-    # page run (threads, messages, memories), so these leave room for normal use.
+    # Against abuse, not cost (the token budget is for cost): the UI makes two reads per page run
+    # (threads, memories), plus the messages when a chat opens, so these leave room for normal use.
     rate_limit_per_user: str = "120/minute"
     rate_limit_per_ip: str = "300/minute"
     # Register and log-in attempts per IP: tighter, against password guessing.

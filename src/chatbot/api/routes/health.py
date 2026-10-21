@@ -1,6 +1,6 @@
 """Endpoints for the platform, not users: liveness, readiness and Prometheus metrics. None is
-authenticated or limited; keep /metrics off the public internet (Phase 9: the Ingress refuses
-it, and Prometheus scrapes the pods directly)."""
+authenticated or limited; keep /metrics off the public internet (Phase 9: in the cluster it's on
+its own port, METRICS_PORT, which the gateway doesn't route; Prometheus scrapes the pods)."""
 
 from typing import Annotated
 

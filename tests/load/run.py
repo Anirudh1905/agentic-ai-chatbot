@@ -1,4 +1,4 @@
-"""`make load`: a load test of the deployed app, through the gateway (Phase 9).
+"""`make load`: a load test of the deployed app, through the gateway (Phase 12).
 
 USERS virtual users, each with its own account, start RAMP_SECONDS apart: registering and
 logging in are two of the 10 attempts a minute allowed per IP, and every user here comes from

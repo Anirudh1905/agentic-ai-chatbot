@@ -42,8 +42,8 @@ MIN_AGREEMENT = 0.9
 TOLERANCE = 0.02
 EXACT = {"pii_recall", "pii_no_false_positives", "approval_policy"}
 # The judged metrics vary more: one claim the results don't state word for word fails a whole
-# faithfulness case. Four runs of the same answers (Phase 8 and 9) scored 65%, 72.5%, 72.5% and
-# 77.5% on its 40 cases, so they get this many cases.
+# faithfulness case. Four runs of the same answers (Phases 8 and 9, 2026-10-19 to 20) scored
+# 65%, 72.5%, 72.5% and 77.5% on its 40 cases, so they get this many cases.
 JUDGED = ("faithfulness", "citations", "correctness")
 JUDGED_TOLERANCE_CASES = 3
 GROUND_TRUTH_BY = "Claude (model-written labels and reference answers, not human-labelled)"

@@ -1,5 +1,6 @@
-"""Agent middleware around the model call: the system prompt, model-call logging and the call
-limit. Memory middleware lives in `chatbot.memory` (short_term.py, long_term/)."""
+"""Agent middleware: the system prompt, model-call logging and metrics, the call limit, each
+model's circuit breaker, tool-call metrics, and running a user's calls on their own endpoint.
+Memory middleware lives in `chatbot.memory` (short_term.py, long_term/)."""
 
 import logging
 import time

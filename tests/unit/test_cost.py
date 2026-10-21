@@ -1,4 +1,4 @@
-"""Cost and latency (Phase 9): what the model is sent, and the web search cache."""
+"""Cost and latency (Phase 11): what the model is sent, and the web search cache."""
 
 from typing import Any
 

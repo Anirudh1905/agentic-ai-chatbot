@@ -294,9 +294,9 @@ async def resume_thread_stream(
 async def delete_thread(
     thread_id: UUID, threads: Threads, checkpointer: Checkpointer, store: Store, user_id: UserId
 ) -> Response:
-    """Hard delete: every checkpoint of the thread, then its metadata. Long-term memories
-    already pushed from it stay (DELETE /me/memory clears them). 409 while a run on it is going:
-    the run would write checkpoints back after the delete."""
+    """Hard delete: every checkpoint of the thread, its memory cursor, then its metadata.
+    Long-term memories already pushed from it stay (DELETE /me/memory clears them). 409 while a
+    run on it is going: the run would write checkpoints back after the delete."""
     await owned_thread(thread_id, user_id, threads)
     async with await take_lease(threads, thread_id, user_id):
         # Checkpoints first: if this fails the thread is still listed and the delete can be

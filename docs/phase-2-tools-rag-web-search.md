@@ -89,8 +89,8 @@ async def search_knowledge_base(query: str) -> tuple[str, list[dict]]:
 ```
 
 - **Hybrid retrieval:** the top `RETRIEVAL_CANDIDATES` (30) by vector similarity and by full-text, merged with Reciprocal Rank Fusion (k = 60). `plainto_tsquery` ANDs every word, which misses most natural questions, so its `&` is swapped for `|` ("any of these words"), ranked by `ts_rank_cd`.
-- **Reranker:** a local cross-encoder (`BAAI/bge-reranker-v2-m3-int8` via fastembed/ONNX) rescores the top 8 fused results and the best 6 go to the model (since Phase 9, only as many as fit in `RETRIEVAL_MAX_TOKENS`, 2,500, and at least one). If it fails, the fused order is used. It was chosen by measurement ([Measurements](#measurements)): cross-encoder latency grows quickly with the candidate count, so keep `RERANK_CANDIDATES` small.
-- **What it returns:** the content for the model is the hits wrapped in `<kb_results>`, each a `<result cite_as="...">`; the artifact (each hit's `type` (`kb`), `chunk_id`, `doc_id`, `title`, `heading`, `page`, `content`, `score` and `cite_as`) goes to the API as `sources`. Since Phase 9, if the embeddings are down the search runs on full text only and says so in the results.
+- **Reranker:** a local cross-encoder (`BAAI/bge-reranker-v2-m3-int8` via fastembed/ONNX) rescores the top 8 fused results and the best 6 go to the model (since Phase 11, only as many as fit in `RETRIEVAL_MAX_TOKENS`, 2,500, and at least one). If it fails, the fused order is used. It was chosen by measurement ([Measurements](#measurements)): cross-encoder latency grows quickly with the candidate count, so keep `RERANK_CANDIDATES` small.
+- **What it returns:** the content for the model is the hits wrapped in `<kb_results>`, each a `<result cite_as="...">`; the artifact (each hit's `type` (`kb`), `chunk_id`, `doc_id`, `title`, `heading`, `page`, `content`, `score` and `cite_as`) goes to the API as `sources`. Since Phase 10, if the embeddings are down the search runs on full text only and says so in the results.
 
 ## Web search
 
@@ -103,9 +103,9 @@ async def web_search(query: str) -> tuple[str, list[dict]]:
     companies, public facts, or anything that changes over time."""
 ```
 
-- DuckDuckGo through `ddgs` (no key) is fast (about 2 s) but sometimes returns nothing, so the tool falls back to `ddgs`'s `auto` backend, which queries several engines. Ad links (`/aclick?`) are dropped.
+- DuckDuckGo through `ddgs` (no key) is fast (about 2 s, 2026-10-12) but sometimes returns nothing, so the tool falls back to `ddgs`'s `auto` backend, which queries several engines. Ad links (`/aclick?`) are dropped.
 - Results go to the model in `<web_results>`, each with a markdown-link `cite_as`; the sources carry `type` (`web`), `title`, `url` and `cite_as`. `WEB_SEARCH_MAX_RESULTS` (5) results, each backend call with a `WEB_SEARCH_TIMEOUT` (15 s); `WEB_SEARCH_ENABLED=false` removes the tool.
-- If every backend fails (keyless search is rate-limited), the tool raises, and the retry below takes over. (Phase 9 adds a circuit breaker and a Redis cache of results, `WEB_SEARCH_CACHE_SECONDS`.)
+- If every backend fails (keyless search is rate-limited), the tool raises, and the retry below takes over. Since Phase 10 a circuit breaker counts those failures; while it's open the tool answers "Web search is unavailable right now" at once, without trying or raising. Since Phase 11 results are cached in Redis for `WEB_SEARCH_CACHE_SECONDS` ([Phase 11](phase-11-cost-latency.md#web-search-cache)).
 - DuckDuckGo's snippets are short (about 150 characters); Tavily or Brave give richer content if answer quality needs it. `langchain-community`'s DuckDuckGo tool has no fallback, ad filtering or citation artifacts, so this wrapper stays.
 
 ## The agent loop
@@ -119,6 +119,8 @@ agent = create_agent(model, tools=[search_knowledge_base, web_search], middlewar
     ToolRetryMiddleware(max_retries=1, tools=["search_knowledge_base", "web_search"], ...),
 ])
 ```
+
+Since Phase 6, `build_graph` adds a third tool, `remember`, when `MEMORY_ENABLED` is on. It isn't in `RETRYABLE` (`tools/registry.py`), so it's never retried: it writes, and the searches only read.
 
 ```mermaid
 sequenceDiagram
@@ -144,9 +146,9 @@ sequenceDiagram
 - `create_agent` binds the tools to the model, runs the tool node for any tool calls, and loops back until the model answers. The model can also issue both tool calls in one turn; the tool node runs them in parallel.
 - **Model-call limit:** `ModelCallLimit` (LangChain's `ModelCallLimitMiddleware`, plus a warning in the log when it fires; `MAX_MODEL_CALLS`, default 6) stops a confused model from looping forever. It ends the run with a short message instead of raising.
 - **Recursion limit:** LangGraph's `recursion_limit` is set in every run's config too, but only as a backstop (`RECURSION_LIMIT` in `agent/builder.py`, 200): each round is many graph steps, one per middleware hook.
-- **Failures:** both tools raise on failure. `ToolRetryMiddleware` (`tool_retry` in `tools/registry.py`) retries once after 1.5 s, then returns an error result that names only the exception type ("This search failed (TimeoutError). Tell the user it's unavailable right now..."), so the model can still answer. It covers only these two read-only tools: retrying a tool with side effects could do the action twice.
+- **Failures:** both tools raise on failure (since Phase 10, except when their dependency is known to be down: see above). `ToolRetryMiddleware` (`tool_retry` in `tools/registry.py`) retries once after 1.5 s, then returns an error result that names only the exception type ("This search failed (TimeoutError). Tell the user it's unavailable right now..."), so the model can still answer. It covers only these two read-only tools: retrying a tool with side effects could do the action twice.
 - **Streaming:** tool calls reach the client as `tool_start` (name, input) and `tool_end` (name, sources) SSE events.
-- **Cost:** each tool round trip resends the whole conversation. Prompt caching on the system prompt and tool definitions helps a lot.
+- **Cost:** each tool round trip resends the whole conversation. Prompt caching on the system prompt and tool definitions helps a lot. Since Phase 11: the gateway caches prompt prefixes on its own, and the code keeps the prefix stable ([Phase 11](phase-11-cost-latency.md#prompt-caching)).
 
 ## Routing and citations
 
@@ -196,8 +198,8 @@ sequenceDiagram
 
 The golden set, `tests/evals/golden.jsonl` (44 questions, including short ones like "president of USA" and "express shipping"), runs with `make eval` (or the `evals` button in Tilt). This phase scored retrieval recall@k (labelled question-to-chunk pairs) and tool routing (the expected tools per question). Phase 7 made it a gate on every PR and added judged faithfulness, citations and correctness, with reference answers for the knowledge base questions; see [the Phase 7 doc](phase-7-eval-gate.md).
 
-- **Routing:** 44/44 with `gpt-5.4`. **Recall:** recall@6 100%, recall@1 100%.
-- **Reranker** (golden set, M3 Pro CPU):
+- **Routing:** 44/44 with `gpt-5.4` (2026-10-13). **Recall:** recall@6 100%, recall@1 100%.
+- **Reranker** (golden set, M3 Pro CPU, 2026-10-12):
 
   | Setup | recall@1 | MRR | Added latency (p50) |
   | --- | ---: | ---: | ---: |

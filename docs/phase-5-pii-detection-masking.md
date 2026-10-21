@@ -4,7 +4,7 @@
 
 [← Phase 4](phase-4-human-in-the-loop.md) · [Overview](../README.md) · [Next: Phase 6 →](phase-6-long-term-memory.md)
 
-**Status: built, the lean version.** One-way redaction with LangChain's built-in detectors (`RedactionRule`, `PIIMiddleware`): `jane@x.com` becomes `[REDACTED_EMAIL]`. The original plan (Presidio and spaCy, a reversible encrypted vault, a stream buffer for unmasking, a labelled PII eval set) was cut; see [Not built](#not-built).
+**Status: built, the lean version.** One-way redaction with LangChain's built-in detectors (`RedactionRule`, `PIIMiddleware`): `jane@x.com` becomes `[REDACTED_EMAIL]`. The original plan (Presidio and spaCy, a reversible encrypted vault, a stream buffer for unmasking, a labelled PII eval set) was cut; see [Not built](#not-built). The eval set came later, in Phase 7.
 
 | Area                     | What's built                                                                                     | Section                                                            |
 | ------------------------ | ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------ |
@@ -93,7 +93,7 @@ class StreamRedactor                              # feed(token) / flush()
 `StreamRedactor` in `guardrails/pii.py`, used by `api/streaming.py`. The middleware rewrites the reply only after the model has finished, so the tokens the user watches need redacting on the way out too.
 
 - It holds back the last 128 characters, so a value split across tokens ("jane@ex", "ample.com") is seen whole before anything is released, and it never releases part of a match. Replies shorter than that arrive in one piece at the end of the model call.
-- Since Phase 9, a model call that fails partway (and is retried, or goes to the fallback model) gets a fresh `StreamRedactor`, so nothing held back from the failed reply is released.
+- Since Phase 10, a model call that fails partway (and is retried, or goes to the fallback model) gets a fresh `StreamRedactor`, so nothing held back from the failed reply is released.
 
 **Why not `PIIMiddleware`'s own stream transformer.** LangGraph only runs it through `astream_events(version="v3")`, which is marked experimental. We tried it:
 
@@ -114,6 +114,7 @@ So streaming stays on v2. Worth revisiting when v3 is stable.
 | Traces                                | Langfuse                                      | Covered for the user's input                                                                                                            |
 | Replies                               | Model repeats PII from documents or web pages | Covered: stored and streamed replies are redacted, except Acme's allowed contact emails                                                 |
 | Summaries, long-term memory (Phase 6) | Stored permanently                            | Covered: written from the redacted thread                                                                                               |
+| Web search cache (Phase 11)           | Raw results in Redis                          | Not covered: the tool caches results before `PIIMiddleware` redacts them, for `WEB_SEARCH_CACHE_SECONDS` (600 s). See [known gaps](#known-gaps) |
 
 ## Effects on other phases
 
@@ -165,7 +166,7 @@ So streaming stays on v2. Worth revisiting when v3 is stable.
 
 ### Known gaps
 
-1. **Raw tool results in one checkpoint.** The tools node writes each result before the next `before_model` hook redacts it, so a third party's PII from a web page or document is stored raw in that step's checkpoint (later checkpoints hold the redacted version). This is third-party data, not what the user typed. Redacting inside the tool call (a `wrap_tool_call` middleware, or in the tools themselves) would close it.
+1. **Raw tool results in one checkpoint.** The tools node writes each result before the next `before_model` hook redacts it, so a third party's PII from a web page or document is stored raw in that step's checkpoint (later checkpoints hold the redacted version). This is third-party data, not what the user typed. Redacting inside the tool call (a `wrap_tool_call` middleware, or in the tools themselves) would close it. Since Phase 11 the same raw results also sit in the Redis web search cache for `WEB_SEARCH_CACHE_SECONDS`; redacting inside the tool would close that too.
 2. **Sources.** The `sources` artifact on each tool result (shown as citations) isn't redacted. Knowledge base sources are Acme's own documents; web sources are page titles and URLs.
 3. **Detection coverage.** Names, addresses and free-form IDs aren't detected, and are stored as plain text in the checkpoints. LangGraph's `EncryptedSerializer.from_pycryptodome_aes()` would encrypt everything the checkpointer writes; turning it on needs a key from a secrets manager. Not enabled.
 4. **No detector is perfect.** Treat redaction as defense in depth, not a guarantee. Keep encryption at rest and access controls on every store.
@@ -180,7 +181,7 @@ From the original plan, plus the fixes for the gaps above:
 - **Presidio + spaCy** as a custom detector for names, locations and IDs. `RedactionRule` accepts any detector callable.
 - **Redact tool results inside the tool call** (gap 1) and **at-rest encryption** of checkpoints with `EncryptedSerializer` (gap 3).
 - **v3 streaming**, to replace `StreamRedactor` with `PIIMiddleware`'s own stream transformer, once v3 is stable and keeps tool calls.
-- **A labelled PII eval set** (synthetic data plus tricky cases: names that are words, international phone formats, PII in pasted JSON).
+- **A labelled PII eval set** (synthetic data plus tricky cases: names that are words, international phone formats, PII in pasted JSON). Since Phase 7 there is one: `tests/evals/pii_cases.jsonl` (30 cases, scored by `tests/evals/suites/pii.py`), and any drop blocks a PR.
 
 ## Exit criteria
 
@@ -188,4 +189,4 @@ From the original plan, plus the fixes for the gaps above:
 - [X] Web search never receives detected PII without explicit human approval (queries are written from redacted text; reviewer edits are redacted; order numbers pause for approval)
 - [ ] The user sees their own details unmasked in replies. Not wanted in the lean version: redaction is one-way
 - [ ] Deleting a thread deletes its vault entries. No vault in the lean version
-- [ ] Detection metrics meet targets. No labelled PII eval set yet
+- [ ] Detection metrics meet targets. No target was set; since Phase 7 the labelled set measures 95% recall and 92% of look-alikes left alone (the committed report, run 2026-10-20), and gates every PR ([Phase 7](phase-7-eval-gate.md))

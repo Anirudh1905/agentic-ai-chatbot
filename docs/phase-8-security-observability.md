@@ -2,7 +2,7 @@
 
 **Goal:** Know who is calling and keep them within limits, and see what every run did: who asked, what it cost, how long it took, and when something is going wrong.
 
-[← Phase 7](phase-7-eval-gate.md) · [Overview](../README.md) · [Next: Phase 9 →](phase-9-reliability-deployment.md)
+[← Phase 7](phase-7-eval-gate.md) · [Overview](../README.md) · [Next: Phase 9 →](phase-9-deployment.md)
 
 **Status: built.** Like Phase 7, this is for a production-ready demo (one host, no real users or on-call): built the way production would be, without a secret manager or paging.
 
@@ -12,7 +12,7 @@
 | Limits | Per-user and per-IP rate limits, and a daily token budget per user, in Redis | [Limits](#limits) |
 | Data | `DELETE /me` removes the account and everything kept about it; a retention policy; what goes to third parties | [Deleting a user's data](#deleting-a-users-data), [Retention and third parties](#retention-and-third-parties) |
 | Hardening | Secrets from the environment or mounted files; a prompt-injection review (one gap found and fixed) | [Secrets](#secrets), [Prompt-injection review](#prompt-injection-review) |
-| Observability | Traces with run metadata (Langfuse), Prometheus metrics, a Grafana dashboard, seven alerts (thirteen since Phase 9), eval scores on each run's trace | [Observability](#observability) |
+| Observability | Traces with run metadata (Langfuse), Prometheus metrics, a Grafana dashboard, seven alerts (ten since Phase 9, thirteen since Phase 10), eval scores on each run's trace | [Observability](#observability) |
 
 Every request now goes through these checks before a route runs:
 
@@ -85,14 +85,14 @@ flowchart TB
     Decode -->|"invalid: the reason goes<br/>to the log (e.g. Expired-<br/>SignatureError)"| E2["401 Invalid or expired token<br/>WWW-Authenticate: Bearer"]
     Decode -->|valid| Lookup[("users: SELECT<br/>the account by sub")]
     Lookup -->|"no such account<br/>(deleted)"| E2
-    Lookup -->|found| User["CurrentUser<br/>(id on request.state,<br/>for the log line)"]
-    User --> Limit[per-user rate limit]
+    Lookup -->|found| User["CurrentUser"]
+    User --> Limit["limited_user: id on request.state<br/>for the log line, then<br/>the per-user rate limit"]
 ```
 
 - The token comes from FastAPI's `OAuth2PasswordBearer` and is decoded with PyJWT: an HS256 signature with `JWT_SECRET`, with `sub` and `exp` required. Unsigned (`alg: none`) tokens are refused. The user is `sub`; nothing else in the request can say who it is, and the ownership checks on threads, memories and approvals (Phases 3, 4 and 6) use it.
 - **Every request looks the account up** (one primary-key query, about 1 ms next to model calls of seconds), so a deleted account's token stops working at once, and so does a token signed for a user this database doesn't have.
 - **One answer for every bad token**, "Invalid or expired token", so a caller can't probe why. The reason (`ExpiredSignatureError`, `InvalidSignatureError`, an unknown user) is only in the log.
-- Beyond the reference: without `JWT_SECRET`, requests get a clear 401 instead of a server error. The request's log line names the authenticated user.
+- Beyond the reference: without `JWT_SECRET`, requests get a clear 401 instead of a server error. The request's log line names the authenticated user on every route behind the rate limit (`limited_user`); `/auth/me` logs `-`.
 
 ## Your own model credentials
 
@@ -136,7 +136,7 @@ sequenceDiagram
 sequenceDiagram
     autonumber
     participant C as Client
-    participant A as API (dependencies.py)
+    participant A as API (security.py, dependencies.py)
     participant R as Redis
     participant G as Agent (SpendTokens)
 
@@ -176,7 +176,7 @@ sequenceDiagram
 - **The token budget** counts the input and output tokens of every model call in the user's agent runs (the `SpendTokens` middleware, after each call). It's checked when a run would start (`/chat`, `/chat/stream` and the two resumes), not during one, so a run that starts under the budget finishes. Summaries and memory pushes aren't counted, and reads and deletes need no budget.
 - **If Redis is down, requests go through**, with a warning in the log: the limits protect cost, and an outage of the counter store shouldn't take the chatbot down.
 - Redis is its own Compose service (`redis`, port 6380), separate from Langfuse's, with no volume: counters don't need to survive a restart. (Since Phase 9 it's a Deployment in the kind cluster, still without a volume, which Tilt forwards to port 6380.)
-- **Sizing:** the per-user limit started at 30 a minute, which the UI hit by itself: it makes three reads per page run (thread list, messages, memories), and the memory panel crashed on the 429. The defaults are now 120 per user and 300 per IP, and the UI shows a notice for a 429 instead.
+- **Sizing:** the per-user limit started at 30 a minute, which the UI hit by itself: it made three reads per page run (thread list, messages, memories); it now makes two (threads, memories), plus the messages when a chat opens, and the memory panel crashed on the 429. The defaults are now 120 per user and 300 per IP, and the UI shows a notice for a 429 instead.
 
 ## Deleting a user's data
 
@@ -197,14 +197,17 @@ sequenceDiagram
         A->>DB: delete its checkpoints, then the thread
     end
     A->>DB: delete the store's memories, memory cursors and memory version
-    A->>W: release the lock
     A->>DB: delete the account (last, so a failed delete can be retried)
+    A->>W: release the lock
+    Note over W: a push that waited (on the queue or the lock) finds no account and writes nothing
     A-->>U: 204
     Note over U: logged out. The old token gets 401: its account is gone
 ```
 
 - Other users' threads and memories are untouched.
 - **Not deleted:** the day's token count in Redis (a number, which expires after midnight UTC), log lines and metrics (no message text), and Langfuse traces. Traces hold the user's PII-redacted messages under a hashed user id: delete them in Langfuse by filtering on that id (`hashed_user` in `observability/tracing.py`).
+- **Since Phases 9 to 11, also not deleted:** the Postgres backups in MinIO, which hold the deleted rows until they age out after 7 days (Phase 10); a memory push in the dead-letter queue, which holds PII-redacted turns until someone purges it (Phase 9); and cached web search results in Redis, for `WEB_SEARCH_CACHE_SECONDS` (600 s, Phase 11).
+- **Since Phase 12, a push that waited writes nothing.** Before, the account was deleted after the lock was released, and nothing told a push that the user was gone: one still on the queue (Phase 9), or waiting for a write slot, ran afterwards and wrote memories or a cursor back. Now the account is deleted inside the lock, and `MemoryWriter` (given the `UserStore` in the API and the worker) checks it still exists once it holds the user's lock. A push for a deleted account logs `long-term memory push skipped` and counts as done, so the queue acks it. `tests/unit/test_memory_queue.py` covers a queued summary and remember, an idle push, and a push waiting on the lock.
 - Deleting one thread (`DELETE /threads/{id}`) and forgetting memories (`DELETE /me/memory`) still work on their own.
 
 ## Secrets
@@ -236,7 +239,7 @@ What's left is the usual residual risk: a page can still try to steer the answer
 flowchart LR
     API[API and agent] -->|"traces: name, thread as session,<br/>hashed user, tags, model, tokens,<br/>tool calls, approval pauses"| LF[Langfuse]
     API -->|"GET /metrics"| Prom[Prometheus<br/>15 days]
-    Prom --> Rules["alert rules<br/>7, 13 since Phase 9"]
+    Prom --> Rules["alert rules<br/>7, 13 since Phases 9 and 10"]
     Prom --> Graf[Grafana<br/>Chatbot dashboard]
     Rules -.->|firing| Graf
     Evals["make eval"] -->|"traces tagged eval,<br/>a score per metric"| LF
@@ -270,15 +273,17 @@ Langfuse records the rest from the run itself: each model call with its tokens, 
 | `chatbot_approval_pauses_total`, `chatbot_approval_decisions_total{decision}` | Runs paused for approval, and the answers (approve, edit, reject) | `api/runs.py`, `api/streaming.py`, `routes/threads.py` |
 | `chatbot_pii_redactions_total{type, source}` | PII redacted, by type, in the user's `message`, a `tool_result` or a `reply` | `api/runs.py`, `guardrails/pii.py` |
 | `chatbot_memory_recalls_total{result}` | Turns whose memory search found something (`hit`) or not | `LongTermMemory` |
-| `chatbot_limited_total{limit}` | 429s: `user`, `ip`, `login` or `budget` (since Phase 9 also `thread_busy`, a 409) | `accounts/limits.py` (`api/leases.py` for `thread_busy`) |
+| `chatbot_limited_total{limit}` | 429s: `user`, `ip`, `login` or `budget` (since Phase 10 also `thread_busy`, a 409) | `accounts/limits.py` (`api/leases.py` for `thread_busy`) |
 
-Counts are per process: with several API processes each is scraped and the dashboard sums them (since Phase 9, a `ServiceMonitor` scrapes every API pod and the worker). Counters with fixed label sets start at 0, so a series' first count shows in `increase()` (Phase 9).
+Since Phases 9 to 11 there are more: open streams and the memory queue (`chatbot_active_streams`, `chatbot_queue_*`, `chatbot_memory_pushes_total`, Phase 9), breakers and lease renewals (`chatbot_breaker_open`, `chatbot_thread_lease_renewal_failures_total`, Phase 10), and caching (`chatbot_model_cached_tokens_total`, `chatbot_web_search_cache_total`, Phase 11), all in `observability/metrics.py`.
+
+Counts are per process: with several API processes each is scraped and the dashboard sums them (since Phase 9, ServiceMonitors scrape every API pod and the worker). Counters with fixed label sets start at 0, so a series' first count shows in `increase()` (Phase 9).
 
 ### From the API to Grafana
 
 Nothing is pushed: the API only keeps counters in memory, and Prometheus pulls them.
 
-> **Since Phase 9** Prometheus, Grafana and Alertmanager run in the kind cluster (kube-prometheus-stack). A `ServiceMonitor` scrapes every API pod and the worker on a separate metrics port, the alerts are a `PrometheusRule` in `deploy/base/monitoring.yaml`, the dashboard is `deploy/base/config/chatbot-dashboard.json`, and all three are at `http://localhost:8088/grafana`, `/prometheus` and `/alertmanager`. `ops/prometheus` and `ops/grafana` are gone. The diagram below is the Phase 8 setup, on Docker Compose; the flow is the same. See [Phase 9](phase-9-reliability-deployment.md#deployment).
+> **Since Phase 9** Prometheus, Grafana and Alertmanager run in the kind cluster (kube-prometheus-stack). ServiceMonitors scrape every API pod and the worker on a separate metrics port, the alerts are a `PrometheusRule` in `deploy/base/monitoring.yaml`, the dashboard is `deploy/base/config/chatbot-dashboard.json`, and all three are at `http://localhost:8088/grafana`, `/prometheus` and `/alertmanager`. `ops/prometheus` and `ops/grafana` are gone. The diagram below is the Phase 8 setup, on Docker Compose; the flow is the same. See [Phase 9](phase-9-deployment.md).
 
 ```mermaid
 flowchart LR
@@ -319,15 +324,15 @@ flowchart LR
 - **Running it** (Phase 8): `make up` (or Tilt) started Prometheus at http://localhost:9091 (9090 is Langfuse's MinIO) and Grafana at http://localhost:3001/d/chatbot (3000 is Langfuse), which opens read only without a login (admin/admin to edit). Prometheus reached the API on the host as `host.docker.internal:8000`, which Docker Desktop and Rancher Desktop provide. Since Phase 9 Grafana is at http://localhost:8088/grafana/d/chatbot, also read only without a login.
 - **An empty panel:** check that the target is `up` (http://localhost:9091/targets; since Phase 9, http://localhost:8088/prometheus/targets) and that something has happened yet: a counter whose labels aren't a fixed set (models, routes) only appears after its first increment.
 
-The "Chatbot" dashboard has, from the top: requests, error rate, p95 time to first token and today's tokens; firing alerts; requests and latency by route; time to first token; model latency, tokens and errors by model; tool calls and error rate by tool; approvals and the share of runs that pause; PII redacted by type and source; memory recall hit rate; 429s by limit. Phase 9 added 409s for a busy thread to that panel, and panels for circuit breakers, Postgres backups, and the prompt cache and web search cache hit rates.
+The "Chatbot" dashboard has, from the top: requests, error rate, p95 time to first token and today's tokens; firing alerts; requests and latency by route; time to first token; model latency, tokens and errors by model; tool calls and error rate by tool; approvals and the share of runs that pause; PII redacted by type and source; memory recall hit rate; 429s by limit. Phase 10 added 409s for a busy thread to that panel, and panels for circuit breakers and Postgres backups; Phase 11 panels for the prompt cache and web search cache hit rates.
 
 ### Alerts
 
-`ops/prometheus/alerts.yml` (since Phase 9, the `PrometheusRule` in `deploy/base/monitoring.yaml`, with three queue and worker alerts, a circuit-breaker alert and two backup alerts added), evaluated by Prometheus every 30 s. A rule whose query stays true for its `for:` time fires, and shows on Prometheus's alerts page and in the dashboard's "Firing alerts" table (the `ALERTS` series). Nothing pages, since there's no on-call; an Alertmanager with a receiver would send them on.
+`ops/prometheus/alerts.yml` (since Phase 9, the `PrometheusRule` in `deploy/base/monitoring.yaml`, with three queue and worker alerts added; Phase 10 added a circuit-breaker alert and two backup alerts), evaluated by Prometheus every 30 s. A rule whose query stays true for its `for:` time fires, and shows on Prometheus's alerts page and in the dashboard's "Firing alerts" table (the `ALERTS` series). Nothing pages, since there's no on-call; an Alertmanager with a receiver would send them on.
 
 | Alert | Fires when | Severity |
 | --- | --- | --- |
-| `ChatbotDown` | `/metrics` hasn't answered for 2 minutes | critical |
+| `ChatbotDown` | An API pod's metrics endpoint (`/metrics`; since Phase 9 the metrics port) hasn't answered for 2 minutes | critical |
 | `ChatbotErrorRate` | over 5% of requests fail for 5 minutes: 500s, plus streamed runs that ended in an error event (which answer 200) | critical |
 | `ChatbotSlowFirstToken` | p95 time to first token over 15 s for 10 minutes | warning |
 | `ChatbotSlowModel` | p95 model call over 20 s for 10 minutes, per model (the gateway struggling) | warning |
@@ -349,8 +354,11 @@ The "Chatbot" dashboard has, from the top: requests, error rate, p95 time to fir
 | Threads and checkpoints | Postgres | Until the user deletes the thread or the account. Threads idle over `CHECKPOINT_RETENTION_DAYS` (30) keep only their latest checkpoint (`make retention`, nightly) |
 | Long-term memories and cursors | Postgres store | Until the user forgets them (`DELETE /me/memory`) or deletes the account. Temporary facts ("in Pune until Friday") expire through the store's TTL |
 | Rate-limit windows and token counts | Redis | A minute; the day's count until just after midnight UTC |
-| Metrics | Prometheus | 15 days (`--storage.tsdb.retention.time`). No user data |
+| Metrics | Prometheus | 15 days (`--storage.tsdb.retention.time`; since Phase 9 the kube-prometheus-stack value `retention: 15d`). No user data |
 | Traces | Langfuse | Until deleted in Langfuse. For production, set a retention period there if your edition has one, or delete old traces |
+| Backups (since Phase 10) | MinIO | Base backups and WAL for 7 days (`retentionPolicy` in `deploy/base/backup.yaml`), deleted rows included |
+| Dead-lettered memory pushes (since Phase 9) | ElasticMQ (SQS) | Until purged. PII-redacted turns |
+| Web search results (since Phase 11) | Redis | `WEB_SEARCH_CACHE_SECONDS` (600 s) |
 | Logs | stdout, then the deployment's log store | 14 days is plenty. Request lines with route, status, time and the user's id; counts and types (PII types, tool names); never message text, passwords, keys or tokens. A paused run's pending web query is logged, already redacted |
 
 **What leaves the service, and to whom.** All of it is after PII redaction (Phase 5).
@@ -419,7 +427,7 @@ Any secret setting can also come from a file in `/run/secrets` ([Secrets](#secre
 | Tests | `tests/apiclient.py`, `tests/fakes.py` | Tests run as authenticated users (`auth("alice")`), with in-memory users, and limits off unless a test passes them |
 | | `tests/evals/settings.py` | Evals call the agent directly, so the auth and limit settings may come from `.env` |
 
-The loose modules of `src/chatbot/` also moved into packages in this phase (`accounts/`, `guardrails/`, `observability/`, `storage/`); see the README's layout.
+The loose modules of `src/chatbot/` also moved into packages in this phase (`accounts/`, `guardrails/`, `observability/`, `storage/`); see [the repository layout](development.md#repository-layout).
 
 ### Tests
 
@@ -436,7 +444,7 @@ The loose modules of `src/chatbot/` also moved into packages in this phase (`acc
 
 ### Effect on the evals
 
-The evals call the agent directly, not through the API, so authentication and limits don't apply (`SpendTokens` is only added when the API builds the graph). An early re-run on this branch scored faithfulness 69% against `main`'s 72%, a 3-point drop where the tolerance is 2.6 (one case of 39), and the gate blocked; that's the run-to-run noise Phase 7 measured (65% and 72% on the same code). Citations moved the other way (72% to 82%). What the model reads changed after that (`as_data` in search results and memories); the report this phase merged with, run after it, scored faithfulness and citations 77.5% each.
+The evals call the agent directly, not through the API, so authentication and limits don't apply (`SpendTokens` is only added when the API builds the graph). An early re-run on this branch scored faithfulness 69% against `main`'s 72%, a 3-point drop where the tolerance was then 2.6 (one case of 39), and the gate blocked (since Phase 9 judged metrics may drop three cases, [Phase 7](phase-7-eval-gate.md#noise)); that's the run-to-run noise Phase 7 measured (65% and 72% on the same code). Citations moved the other way (72% to 82%). What the model reads changed after that (`as_data` in search results and memories); the report this phase merged with, run after it (2026-10-19), scored faithfulness and citations 77.5% each.
 
 ## Exit criteria
 

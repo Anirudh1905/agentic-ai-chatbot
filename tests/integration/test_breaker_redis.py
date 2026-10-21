@@ -1,4 +1,4 @@
-"""Circuit breakers shared in Redis (Phase 9, reliability/breaker.py): what one process sees,
+"""Circuit breakers shared in Redis (Phase 10, reliability/breaker.py): what one process sees,
 every process sees. Skipped when Redis isn't reachable, unless REQUIRE_REDIS=1 (CI)."""
 
 import os

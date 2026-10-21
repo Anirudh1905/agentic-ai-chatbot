@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# make restore-test (Phase 9): proves the backups restore to a point in time, not just that
+# make restore-test (Phase 10): proves the backups restore to a point in time, not just that
 # they exist. Writes a marker, notes the time T, writes a second marker, waits until the WAL
 # holding both is archived, restores to T (deploy/restore.sh), and checks that the copy has
 # the first marker and not the second. Then removes the copy and the markers.

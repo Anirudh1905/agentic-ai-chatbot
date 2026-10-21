@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Restore Postgres from its backups (Phase 9, deploy/base/backup.yaml) into a second cluster,
+# Restore Postgres from its backups (Phase 10, deploy/base/backup.yaml) into a second cluster,
 # `postgres-restore`, beside the live one: the latest base backup, then the archived WAL up to
 # TARGET_TIME (an ISO timestamp, e.g. "2026-10-20 09:30:00+00"), or all of it without one.
 #

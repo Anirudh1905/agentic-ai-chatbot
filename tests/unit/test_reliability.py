@@ -1,4 +1,4 @@
-"""Circuit breakers and the fallback model (Phase 9, chatbot/reliability/)."""
+"""Circuit breakers and the fallback model (Phase 10, chatbot/reliability/)."""
 
 import logging
 from typing import Any

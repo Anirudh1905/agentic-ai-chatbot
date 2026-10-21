@@ -67,7 +67,8 @@ async def delete_me(
     memories and memory cursors, then the account itself, so my token stops working.
 
     A memory push in progress for me finishes first (it would write memories back
-    afterwards), and none starts while this runs. Safe to retry: the account goes last.
+    afterwards), and none starts while this runs; one that was waiting finds the account gone
+    and writes nothing. Safe to retry: the account goes last.
     """
     lock = writer.user_lock(store, user_id) if writer and store else nullcontext()
     async with lock:
@@ -76,7 +77,8 @@ async def delete_me(
             await checkpointer.adelete_thread(str(thread_id))
             await threads.delete(thread_id)
         memories = await forget_user(store, user_id) if store else 0
-    await users.delete(user_id)
+        # Inside the lock: a push that takes it next must find the account gone.
+        await users.delete(user_id)
     logger.info(
         "deleted user %s: %d threads, %d long-term memories", user_id, len(thread_ids), memories
     )

@@ -1,4 +1,4 @@
-"""Circuit breakers on the calls that leave the cluster (Phase 9): each model, the embeddings,
+"""Circuit breakers on the calls that leave the cluster (Phase 10): each model, the embeddings,
 web search.
 
 A breaker counts a dependency's outages (`is_outage`: timeouts, connection errors, 429s and
@@ -51,17 +51,6 @@ def is_outage(error: BaseException) -> bool:
     if isinstance(error, openai.APIStatusError):
         return error.status_code == 429 or error.status_code >= 500
     return isinstance(error, openai.APIConnectionError | httpx.TransportError | TimeoutError)
-
-
-def outage_reason(error: BaseException) -> str:
-    """The outage, as a metric label."""
-    if isinstance(error, BreakerOpen):
-        return "breaker_open"
-    if isinstance(error, openai.APITimeoutError | httpx.TimeoutException | TimeoutError):
-        return "timeout"
-    if isinstance(error, openai.APIStatusError):
-        return "rate_limit" if error.status_code == 429 else "server_error"
-    return "connection"
 
 
 class BreakerStore(Protocol):

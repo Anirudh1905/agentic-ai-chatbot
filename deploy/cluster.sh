@@ -31,7 +31,7 @@ helm upgrade --install eg oci://docker.io/envoyproxy/gateway-helm --version 1.9.
 helm upgrade --install cnpg cnpg/cloudnative-pg --version 0.29.1 \
   --kube-context "$CONTEXT" --namespace cnpg-system --create-namespace \
   --values deploy/helm/cloudnative-pg.yaml --wait
-# Postgres backups (Phase 9): CNPG's Barman Cloud plugin, beside the operator; its TLS
+# Postgres backups (Phase 10): CNPG's Barman Cloud plugin, beside the operator; its TLS
 # certificates come from cert-manager.
 helm upgrade --install cert-manager jetstack/cert-manager --version v1.21.2 \
   --kube-context "$CONTEXT" --namespace cert-manager --create-namespace \

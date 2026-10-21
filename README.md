@@ -10,17 +10,20 @@ The phase plans and as-built docs are in [docs/](docs/); the [Status](#status) t
 
 | Phase | What it adds | Status |
 | --- | --- | --- |
-| [1. Foundation](docs/phase-1-foundation.md) | FastAPI service, streaming chat, Streamlit UI, Langfuse tracing, logging | Built |
-| [2. Tools](docs/phase-2-tools-rag-web-search.md) | Knowledge base search (hybrid vector + full-text, reranked) and DuckDuckGo web search | Built |
-| [3. Short-term memory](docs/phase-3-short-term-memory-checkpointing.md) | Threads checkpointed to Postgres, resume and time travel, summarization of old turns, retention | Built |
-| [4. Approvals](docs/phase-4-human-in-the-loop.md) | `HumanInTheLoopMiddleware`: risky tool calls wait for a person | Built |
-| [5. PII redaction](docs/phase-5-pii-detection-masking.md) | Emails, cards, phones and IPs redacted from messages, tool results, replies and the stream | Built |
+| [1. Foundation](docs/phase-1-foundation.md) | FastAPI service, streaming chat, Streamlit UI, Langfuse tracing, logging | Built ([PR #2](https://github.com/Anirudh1905/agentic-ai-chatbot/pull/2)) |
+| [2. Tools](docs/phase-2-tools-rag-web-search.md) | Knowledge base search (hybrid vector + full-text, reranked) and DuckDuckGo web search | Built ([PR #3](https://github.com/Anirudh1905/agentic-ai-chatbot/pull/3)) |
+| [3. Short-term memory](docs/phase-3-short-term-memory-checkpointing.md) | Threads checkpointed to Postgres, resume and time travel, summarization of old turns, retention | Built ([PR #4](https://github.com/Anirudh1905/agentic-ai-chatbot/pull/4)) |
+| [4. Approvals](docs/phase-4-human-in-the-loop.md) | `HumanInTheLoopMiddleware`: risky tool calls wait for a person | Built ([PR #5](https://github.com/Anirudh1905/agentic-ai-chatbot/pull/5)) |
+| [5. PII redaction](docs/phase-5-pii-detection-masking.md) | Emails, cards, phones and IPs redacted from messages, tool results, replies and the stream | Built ([PR #6](https://github.com/Anirudh1905/agentic-ai-chatbot/pull/6)) |
 | [6. Long-term memory](docs/phase-6-long-term-memory.md) | Per-fact memories per user across threads: pushed at the token breach, after 30 idle minutes, or on request; recalled each turn, closest to the message | Built ([PR #7](https://github.com/Anirudh1905/agentic-ai-chatbot/pull/7)) |
 | [7. Eval gate](docs/phase-7-eval-gate.md) | Golden sets, a judge model (DeepEval) and a regression gate on every PR | Built ([PR #8](https://github.com/Anirudh1905/agentic-ai-chatbot/pull/8)) |
 | [8. Security and observability](docs/phase-8-security-observability.md) | Accounts and login (JWT), your own model key, Redis rate limits and token budgets, deleting a user's data, trace metadata, Prometheus metrics, a Grafana dashboard and alerts | Built ([PR #9](https://github.com/Anirudh1905/agentic-ai-chatbot/pull/9)) |
-| [9. Reliability and deployment](docs/phase-9-reliability-deployment.md) | Kubernetes (kind): 2 API replicas behind Envoy Gateway, memory pushes on an SQS queue run by a worker, CloudNativePG, kube-prometheus-stack, a kind smoke test in CI; retries, circuit breakers and a fallback model, a per-thread lock, Postgres backups with a tested point-in-time restore; prompt caching measured, caps on context, a web search cache; a load test, an outage test and a runbook | Built, with the outage test passed and a runbook (on `phase-9-reliability-deployment`); the load test runs with no errors but misses its p95 latency target |
+| [9. Deployment](docs/phase-9-deployment.md) | Kubernetes (kind) with Tilt: one image, 2 API replicas behind Envoy Gateway, memory pushes on an SQS queue run by a worker, a migrate Job, CloudNativePG, kube-prometheus-stack, a kind smoke test in CI | Built ([PR #10](https://github.com/Anirudh1905/agentic-ai-chatbot/pull/10)) |
+| [10. Reliability](docs/phase-10-reliability.md) | Retries, a fallback model and circuit breakers on the model calls; breakers on the embeddings and web search; one run at a time per thread; Postgres backups with a tested point-in-time restore | Built ([PR #10](https://github.com/Anirudh1905/agentic-ai-chatbot/pull/10)) |
+| [11. Cost and latency](docs/phase-11-cost-latency.md) | Prompt cache hits measured, caps on retrieved context and on old tool results, a web search cache in Redis | Built ([PR #10](https://github.com/Anirudh1905/agentic-ai-chatbot/pull/10)) |
+| [12. Load and outage tests](docs/phase-12-load-outage-tests.md) | A load test, a provider-outage test and a [runbook](docs/runbook.md) | Run ([PR #10](https://github.com/Anirudh1905/agentic-ai-chatbot/pull/10)). The outage test passes; the load test runs 10 users with no errors, but p95 time to first token (17.9 s on 8 CPUs and 24 GB, 2026-10-21) misses its 10 s target |
 
-`make check` runs ruff, mypy and the tests (289 at the moment: unit, and integration against the cluster's Postgres, ElasticMQ and Redis). `make eval` runs the eval suites against the real model and writes `tests/evals/report.json`, which CI checks on every PR (see [Evals](docs/development.md#evals)).
+`make check` runs ruff, mypy and the tests (292 on 2026-10-21: unit, and integration against the cluster's Postgres, ElasticMQ and Redis). `make eval` runs the eval suites against the real model and writes `tests/evals/report.json`, which CI checks on every PR (see [Evals](docs/development.md#evals)).
 
 ## Quickstart
 
@@ -79,8 +82,9 @@ sequenceDiagram
     participant W as Queue + worker
     U->>UI: a message (browser → Envoy Gateway → ui pod)
     UI->>API: POST /chat/stream, Bearer JWT
-    API->>R: per-IP and per-user limits, token budget
+    API->>R: per-IP limit
     API->>PG: the account behind the token
+    API->>R: per-user limit, token budget left
     API->>API: redact PII in the message
     API->>PG: claim the thread (404 if someone else's), take its lease (409 if busy)
     API->>A: run it, streamed back as Server-Sent Events
@@ -94,13 +98,13 @@ sequenceDiagram
     else
         A-->>UI: tool_start
         A->>T: search_knowledge_base (embed, hybrid search, rerank) or web_search (Redis cache, else DuckDuckGo)
-        T-->>A: results, PII-redacted
+        T-->>A: results (PII redacted before the model reads them)
         A-->>UI: tool_end with the sources
         A->>M: the results
         M-->>A: the reply, token by token
         A-->>UI: token events (PII redacted as they stream)
     end
-    A->>R: the run's tokens against the daily budget
+    A->>R: each model call's tokens against the daily budget
     A->>PG: a checkpoint after every step
     opt the thread passed CONTEXT_MAX_TOKENS
         A->>M: summarize the older turns (gpt-4.1-mini), after the reply
@@ -115,7 +119,7 @@ Every endpoint's flow is in [API](docs/api.md), and each feature in [How it work
 
 ## Observability
 
-Traces go to Langfuse, metrics to Prometheus with 13 alerts, and the "Chatbot" dashboard in Grafana charts them. Here it is under `make load` with 10 users: no errors, p95 time to first token 17.9 s, held back by the CPU reranker ([Load test](docs/phase-9-reliability-deployment.md#load-test)):
+Traces go to Langfuse, metrics to Prometheus with 13 alerts, and the "Chatbot" dashboard in Grafana charts them. Here it is under `make load` with 10 users on 8 CPUs and 24 GB (2026-10-21): no errors, p95 time to first token 17.9 s by the load test's count (the dashboard's histogram estimate says 18.7 s), held back by the CPU reranker ([Load test](docs/phase-12-load-outage-tests.md#load-test)):
 
 <img alt="The Chatbot dashboard in Grafana, dark theme, during a 10-user load test: about 1.2 requests a second, 0% errors, p95 time to first token 18.7 s, request latency by route, time to first token, model call latency (2.4 s p50, under 5 s p95), tokens per minute rising, and the ChatbotTokenSpike alert firing." src="docs/images/grafana-10-users-dark.png" width="800">
 
@@ -128,4 +132,5 @@ Traces go to Langfuse, metrics to Prometheus with 13 alerts, and the "Chatbot" d
 | [Configuration](docs/configuration.md) | Every setting, its default and what it does |
 | [Development](docs/development.md) | The repository layout, the local services, evals and the make targets |
 | [Runbook](docs/runbook.md) | What to do when the model provider, a backup or the cluster fails, a run is stuck, or PII leaks |
+| [CLAUDE.md](CLAUDE.md) | Guidance for working in the repo: where things are, the commands, and the rules (built-ins first, the eval fingerprint, never committing secrets, only the kind context) |
 | Phase docs (the [Status](#status) table) | How each phase was designed and built, what changed, and how it was tested |

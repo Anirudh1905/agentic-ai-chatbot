@@ -46,7 +46,7 @@ curl -fsS "$BASE/alertmanager/api/v2/status" | grep -q '"cluster"' \
 echo "ok: Grafana and Alertmanager"
 
 retry '[ "$(series "up{namespace=\"chatbot\"} == 1")" -ge 3 ]' 180
-echo "ok: Prometheus scrapes both API pods and the worker"
+echo "ok: Prometheus scrapes at least 3 chatbot targets"
 
 rules=$(curl -fsS "$BASE/prometheus/api/v1/rules" \
   | python3 -c 'import json,sys; print(sum(len(g["rules"]) for g in json.load(sys.stdin)["data"]["groups"] if g["name"] == "chatbot"))')

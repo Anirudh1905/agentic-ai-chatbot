@@ -49,7 +49,7 @@ Agent = CompiledStateGraph[AgentState, RunContext]
 # a run's own config replaces it.
 RECURSION_LIMIT = 200
 
-# What the model sees instead of an old search result once the context is long (Phase 9).
+# What the model sees instead of an old search result once the context is long (Phase 11).
 CLEARED_TOOL_RESULT = (
     "[An earlier search result, removed to keep the conversation short. Search again if you "
     "need it.]"
@@ -207,12 +207,13 @@ def build_graph(
         *(output_middleware() if settings.pii_enabled else []),
         summarization(settings, summary_model, on_summarize=writer.schedule if writer else None),
         # Past CONTEXT_CLEAR_TOOL_RESULTS_TOKENS, the model is sent only the latest few tool
-        # results (Phase 9); the thread keeps all of them, and summarization still applies.
+        # results (Phase 11); the thread keeps all of them, and summarization still applies.
         *([context_editing(settings)] if settings.context_clear_tool_results_tokens else []),
         system_prompt,
-        # Outermost first (Phase 9). In an outage the fallback model answers; each model's call
-        # is retried, then counted by its breaker, which fails it at once while open. Outside
-        # ModelCallMiddleware, so every attempt is measured under its own model's name.
+        # Outermost first (Phase 10). In an outage the fallback model answers. Each attempt goes
+        # through its model's breaker (retries included), which fails it at once while open;
+        # outages are retried, an open breaker isn't. Outside ModelCallMiddleware, so every
+        # attempt is measured under its own model's name.
         *([ModelFallbackMiddleware(fallback)] if fallback else []),
         ModelRetryMiddleware(
             max_retries=settings.model_max_retries, retry_on=is_outage, on_failure="error"

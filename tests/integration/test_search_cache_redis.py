@@ -1,4 +1,4 @@
-"""The web search cache on a real Redis (Phase 9, tools/web_search.py): what one pod cached,
+"""The web search cache on a real Redis (Phase 11, tools/web_search.py): what one pod cached,
 another pod reads. Skipped when Redis isn't reachable, unless REQUIRE_REDIS=1 (CI)."""
 
 import os

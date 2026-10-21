@@ -1,4 +1,4 @@
-"""The per-thread run lease (Phase 9): one run at a time per thread, across every API pod.
+"""The per-thread run lease (Phase 10): one run at a time per thread, across every API pod.
 
 Two runs on one thread would both read the same checkpoint, and the later write would win
 (Phase 3). So a run takes a lease on its thread's row before it starts (refused with 409 if
