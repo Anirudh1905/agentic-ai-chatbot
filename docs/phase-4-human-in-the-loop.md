@@ -79,6 +79,8 @@ Emails, card numbers and phone numbers used to be checks here too. Since Phase 5
 
 `src/chatbot/agent/builder.py` adds `HumanInTheLoopMiddleware(interrupt_on)` last. `create_agent` builds the graph, and each middleware hook becomes a node.
 
+<img alt="The agent's middleware chain for one turn, as it is now, with HumanInTheLoop among the after_model hooks: the before hooks (LongTermMemory recall, PII on tool results, Summarization, ModelCallLimit, context editing), the wrap_model_call stack outermost first (system_prompt, ModelFallback, ModelRetry, ModelBreaker, ModelCallMiddleware, UserModel), the chat model, the after_model hooks (HumanInTheLoop, which can pause for approval, SpendTokens, ModelCallLimit, PII on the reply), then either the tool calls (ToolCallMetrics, ToolRetry, the tool node) and back to the next model call, or the end of the turn, where after_agent summarization may send a memory push." src="images/agent-middleware-dark.png" width="800">
+
 ```mermaid
 flowchart TB
     START((START)) --> Before["before_agent, before_model<br/>memory recall, PII, summarization, call limit"]

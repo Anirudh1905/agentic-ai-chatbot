@@ -109,6 +109,8 @@ sequenceDiagram
 
 `src/chatbot/memory/short_term.py`, a subclass of LangChain's `SummarizationMiddleware`, with the prompt in `prompts/summarize.md`.
 
+<img alt="Short-term and long-term memory as they are now (Phases 6 and 9 added long-term memory and the queue): Summarization folds old turns into the thread's summary in the Postgres checkpoints (short-term memory) and sends a summary push; LongTermMemory recalls the closest memories from the Postgres memory store (long-term memory) each turn; pushes go through the memory-pushes.fifo queue to the worker, whose MemoryWriter.run extracts facts and adds, updates or deletes memories; the idle-thread scan enqueues idle threads and the TTL sweeper deletes expired facts." src="images/memory-dark.png" width="800">
+
 ```mermaid
 flowchart LR
     In[Turn ends] --> Count{Thread over<br/>CONTEXT_MAX_TOKENS?}

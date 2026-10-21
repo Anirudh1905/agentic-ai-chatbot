@@ -1,0 +1,659 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Short-term and long-term memory",
+    "output": ".archify/architecture-memory-20261021-143000/memory.html",
+    "quality_profile": "showcase",
+    "locale": "en",
+    "repository": {
+      "url": "https://github.com/Anirudh1905/agentic-ai-chatbot.git",
+      "provider": "github",
+      "link_mode": "web",
+      "revision": "d384ee888d1bc5399ca23aebe3a1a855f23b160d"
+    }
+  },
+  "components": [
+    {
+      "id": "rtool",
+      "type": "backend",
+      "label": "remember tool",
+      "sublabel": "user: \"remember that…\"",
+      "tag": "agent tool",
+      "pos": [
+        40,
+        40
+      ],
+      "size": [
+        190,
+        84
+      ],
+      "sources": [
+        {
+          "path": "src/chatbot/tools/memory.py",
+          "line": 16,
+          "end_line": 28,
+          "label": "build_remember_tool"
+        }
+      ]
+    },
+    {
+      "id": "rbutton",
+      "type": "frontend",
+      "label": "Remember this",
+      "sublabel": "POST …/messages/{i}/remember",
+      "tag": "route · 202",
+      "pos": [
+        40,
+        220
+      ],
+      "size": [
+        190,
+        84
+      ],
+      "sources": [
+        {
+          "path": "src/chatbot/api/routes/threads.py",
+          "line": 121,
+          "end_line": 147,
+          "label": "remember route"
+        }
+      ]
+    },
+    {
+      "id": "summarize",
+      "type": "backend",
+      "label": "Summarization",
+      "sublabel": "after a reply, past 10k tokens",
+      "tag": "keeps ~5k tokens · gpt-4.1-mini",
+      "pos": [
+        340,
+        400
+      ],
+      "size": [
+        190,
+        84
+      ],
+      "sources": [
+        {
+          "path": "src/chatbot/memory/short_term.py",
+          "line": 39,
+          "end_line": 74,
+          "label": "after_agent summary"
+        },
+        {
+          "path": "src/chatbot/memory/short_term.py",
+          "line": 116,
+          "end_line": 132,
+          "label": "trigger and keep"
+        },
+        {
+          "path": "src/chatbot/agent/builder.py",
+          "line": 208,
+          "label": "writer.schedule"
+        }
+      ]
+    },
+    {
+      "id": "recall",
+      "type": "backend",
+      "label": "LongTermMemory",
+      "sublabel": "each turn: top 10 for the message",
+      "tag": "before_agent · adds new ones",
+      "sources": [
+        {
+          "path": "src/chatbot/memory/long_term/middleware.py",
+          "line": 41,
+          "end_line": 73,
+          "label": "abefore_agent"
+        },
+        {
+          "path": "src/chatbot/agent/middleware.py",
+          "line": 44,
+          "end_line": 52,
+          "label": "system prompt"
+        },
+        {
+          "path": "src/chatbot/config.py",
+          "line": 143,
+          "label": "MEMORY_RECALL_LIMIT"
+        }
+      ],
+      "pos": [
+        340,
+        580
+      ],
+      "size": [
+        190,
+        84
+      ]
+    },
+    {
+      "id": "enqueue",
+      "type": "backend",
+      "label": "_enqueue_or_run",
+      "sublabel": "3 tries · pauses 0.2 s, 0.5 s",
+      "tag": "MemoryWriter",
+      "pos": [
+        340,
+        220
+      ],
+      "size": [
+        190,
+        84
+      ],
+      "sources": [
+        {
+          "path": "src/chatbot/memory/long_term/writer.py",
+          "line": 237,
+          "end_line": 255,
+          "label": "_enqueue_or_run"
+        },
+        {
+          "path": "src/chatbot/memory/long_term/writer.py",
+          "line": 39,
+          "label": "ENQUEUE_RETRY_PAUSES"
+        }
+      ]
+    },
+    {
+      "id": "inproc",
+      "type": "backend",
+      "label": "In-process push",
+      "sublabel": "MemoryWriter.run in this pod",
+      "tag": "QUEUE_FALLBACKS +1",
+      "pos": [
+        340,
+        760
+      ],
+      "size": [
+        190,
+        84
+      ],
+      "sources": [
+        {
+          "path": "src/chatbot/memory/long_term/writer.py",
+          "line": 247,
+          "end_line": 255,
+          "label": "fallback"
+        }
+      ]
+    },
+    {
+      "id": "queue",
+      "type": "messagebus",
+      "label": "memory-pushes.fifo",
+      "sublabel": "group = user_id · dedupe id",
+      "tag": "unacked: back in 300 s",
+      "pos": [
+        640,
+        220
+      ],
+      "size": [
+        190,
+        84
+      ],
+      "sources": [
+        {
+          "path": "src/chatbot/jobs/queue.py",
+          "line": 80,
+          "end_line": 87,
+          "label": "SendMessage"
+        },
+        {
+          "path": "src/chatbot/jobs/push.py",
+          "line": 56,
+          "end_line": 71,
+          "label": "group and dedupe ids"
+        },
+        {
+          "path": "deploy/base/config/elasticmq.conf",
+          "line": 16,
+          "end_line": 26,
+          "label": "visibility, redrive"
+        }
+      ]
+    },
+    {
+      "id": "dlq",
+      "type": "messagebus",
+      "label": "memory-pushes-dlq.fifo",
+      "sublabel": "each message replayable",
+      "tag": "alert: DeadLettered",
+      "pos": [
+        640,
+        40
+      ],
+      "size": [
+        190,
+        84
+      ],
+      "sources": [
+        {
+          "path": "deploy/base/config/elasticmq.conf",
+          "line": 13,
+          "end_line": 25,
+          "label": "maxReceiveCount 5"
+        },
+        {
+          "path": "deploy/base/monitoring.yaml",
+          "line": 152,
+          "end_line": 158,
+          "label": "dead-letter alert"
+        }
+      ]
+    },
+    {
+      "id": "ckpt",
+      "type": "database",
+      "label": "Postgres: checkpoints",
+      "sublabel": "per thread: messages · summary",
+      "tag": "short-term memory",
+      "sources": [
+        {
+          "path": "src/chatbot/memory/short_term.py",
+          "line": 1,
+          "end_line": 8,
+          "label": "short-term memory"
+        },
+        {
+          "path": "src/chatbot/memory/threads.py",
+          "line": 168,
+          "end_line": 176,
+          "label": "idle_between"
+        }
+      ],
+      "pos": [
+        640,
+        400
+      ],
+      "size": [
+        190,
+        84
+      ]
+    },
+    {
+      "id": "store",
+      "type": "database",
+      "label": "Postgres: memory store",
+      "sublabel": "(\"memories\", user) · vector index",
+      "tag": "long-term memory · TTL",
+      "sources": [
+        {
+          "path": "src/chatbot/storage/langgraph.py",
+          "line": 15,
+          "end_line": 26,
+          "label": "index and TTL"
+        },
+        {
+          "path": "src/chatbot/memory/long_term/store.py",
+          "line": 17,
+          "end_line": 56,
+          "label": "namespaces, version"
+        },
+        {
+          "path": "src/chatbot/memory/long_term/writer.py",
+          "line": 257,
+          "end_line": 285,
+          "label": "push and cursor"
+        }
+      ],
+      "pos": [
+        640,
+        580
+      ],
+      "size": [
+        190,
+        264
+      ]
+    },
+    {
+      "id": "consumer",
+      "type": "backend",
+      "label": "Consumer loop",
+      "sublabel": "receive ≤10 · long poll 20 s",
+      "tag": "Worker.run_once",
+      "pos": [
+        940,
+        220
+      ],
+      "size": [
+        190,
+        84
+      ],
+      "sources": [
+        {
+          "path": "src/chatbot/worker.py",
+          "line": 60,
+          "end_line": 93,
+          "label": "run_once, run"
+        },
+        {
+          "path": "src/chatbot/jobs/queue.py",
+          "line": 88,
+          "end_line": 117,
+          "label": "receive, ack"
+        }
+      ]
+    },
+    {
+      "id": "run",
+      "type": "backend",
+      "label": "MemoryWriter.run",
+      "sublabel": "extract → filter → decide changes",
+      "tag": "2 write slots",
+      "pos": [
+        1240,
+        220
+      ],
+      "size": [
+        190,
+        84
+      ],
+      "sources": [
+        {
+          "path": "src/chatbot/memory/long_term/writer.py",
+          "line": 203,
+          "end_line": 235,
+          "label": "run"
+        },
+        {
+          "path": "src/chatbot/memory/long_term/writer.py",
+          "line": 370,
+          "end_line": 384,
+          "label": "advisory lock"
+        }
+      ]
+    },
+    {
+      "id": "model",
+      "type": "external",
+      "label": "Model gateway",
+      "sublabel": "gpt-5-mini · fallback model",
+      "tag": "memory model",
+      "pos": [
+        1240,
+        40
+      ],
+      "size": [
+        190,
+        84
+      ],
+      "sources": [
+        {
+          "path": "src/chatbot/worker.py",
+          "line": 121,
+          "end_line": 126,
+          "label": "memory model"
+        },
+        {
+          "path": "src/chatbot/config.py",
+          "line": 141,
+          "label": "MEMORY_MODEL"
+        }
+      ]
+    },
+    {
+      "id": "idlescan",
+      "type": "backend",
+      "label": "Idle-thread scan",
+      "sublabel": "every 1 min · idle 30 min to 7 d",
+      "tag": "skips unchanged cursors",
+      "pos": [
+        940,
+        400
+      ],
+      "size": [
+        190,
+        84
+      ],
+      "sources": [
+        {
+          "path": "src/chatbot/memory/long_term/writer.py",
+          "line": 135,
+          "end_line": 201,
+          "label": "start, push_idle"
+        },
+        {
+          "path": "src/chatbot/worker.py",
+          "line": 131,
+          "end_line": 137,
+          "label": "writer.start"
+        }
+      ]
+    },
+    {
+      "id": "sweeper",
+      "type": "backend",
+      "label": "TTL sweeper",
+      "sublabel": "drops expired temporary facts",
+      "tag": "LangGraph store",
+      "pos": [
+        940,
+        760
+      ],
+      "size": [
+        190,
+        84
+      ],
+      "sources": [
+        {
+          "path": "src/chatbot/worker.py",
+          "line": 130,
+          "label": "start_ttl_sweeper"
+        }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "api pods ×2 · FastAPI",
+      "wraps": [
+        "rtool",
+        "rbutton",
+        "summarize",
+        "recall",
+        "enqueue",
+        "inproc"
+      ],
+      "pad": 24
+    },
+    {
+      "kind": "region",
+      "label": "ElasticMQ · stands in for SQS",
+      "wraps": [
+        "queue",
+        "dlq"
+      ],
+      "pad": 24
+    },
+    {
+      "kind": "region",
+      "label": "worker pod ×1 · always on · metrics :9100",
+      "wraps": [
+        "consumer",
+        "run",
+        "idlescan",
+        "sweeper"
+      ],
+      "pad": 24
+    }
+  ],
+  "connections": [
+    {
+      "from": "rtool",
+      "to": "enqueue",
+      "label": "remember push",
+      "fromSide": "right",
+      "toSide": "top"
+    },
+    {
+      "from": "rbutton",
+      "to": "enqueue",
+      "label": "remember push"
+    },
+    {
+      "from": "summarize",
+      "to": "enqueue",
+      "label": "summary push"
+    },
+    {
+      "from": "summarize",
+      "to": "ckpt",
+      "label": "folds turns",
+      "variant": "emphasis"
+    },
+    {
+      "from": "recall",
+      "to": "store",
+      "label": "top-10 search",
+      "variant": "emphasis"
+    },
+    {
+      "from": "recall",
+      "to": "ckpt",
+      "label": "into thread state",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "from": "enqueue",
+      "to": "queue",
+      "label": "SendMessage",
+      "variant": "emphasis"
+    },
+    {
+      "from": "enqueue",
+      "to": "inproc",
+      "label": "3rd failure",
+      "variant": "dashed",
+      "fromSide": "left",
+      "toSide": "left"
+    },
+    {
+      "from": "inproc",
+      "to": "store",
+      "label": "same push",
+      "variant": "dashed"
+    },
+    {
+      "from": "queue",
+      "to": "dlq",
+      "label": "5 receives, no ack",
+      "variant": "dashed"
+    },
+    {
+      "from": "consumer",
+      "to": "queue",
+      "label": "poll · ack",
+      "variant": "emphasis"
+    },
+    {
+      "from": "consumer",
+      "to": "run",
+      "label": "user by user",
+      "variant": "emphasis"
+    },
+    {
+      "from": "run",
+      "to": "model",
+      "label": "extract · decide"
+    },
+    {
+      "from": "run",
+      "to": "store",
+      "label": "add · update · delete facts",
+      "fromSide": "bottom",
+      "toSide": "right"
+    },
+    {
+      "from": "idlescan",
+      "to": "queue",
+      "label": "idle job (ids only)",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "from": "idlescan",
+      "to": "ckpt",
+      "label": "idle ≥30 min"
+    },
+    {
+      "from": "sweeper",
+      "to": "store",
+      "label": "expired facts"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Short-term memory: the thread",
+      "items": [
+        "The thread's messages live in the checkpointer, one state per thread_id",
+        "After a reply, once the thread passes CONTEXT_MAX_TOKENS (10,000), older turns are folded into one running summary; about 5,000 tokens of recent turns stay, cut at a turn boundary",
+        "The turns folded away become a summary push into long-term memory",
+        "Past 6,000 tokens the model is sent only the latest 3 tool results; the thread keeps all of them"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Long-term memory: the user",
+      "items": [
+        "Small memories, one fact each, at (\"memories\", user_id), with a vector index on their content",
+        "Every turn LongTermMemory searches them with the latest user message (MEMORY_RECALL_LIMIT 10) and adds the ones the thread hasn't recalled yet to its state; the system prompt lists them",
+        "A write or delete bumps the user's memory version, so threads recall afresh",
+        "Temporary facts carry an end date: the store's TTL hides them, the sweeper deletes them hourly",
+        "If embeddings are down, the turn goes on with what the thread already recalled"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "What a push does",
+      "items": [
+        "The memory model lists the facts the user stated, each with a scope, a topic and an end date if temporary",
+        "Facts with redaction placeholders or claims of status, discounts or permissions are dropped in code",
+        "For each fact, the 5 closest existing memories are found, and the model decides: add it, update the ones it corrects, delete the ones it makes obsolete",
+        "One push per user at a time (a Postgres advisory lock); a per-thread cursor means no turn is pushed twice"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "What gets enqueued",
+      "items": [
+        "summary: the thread passed CONTEXT_MAX_TOKENS; the job carries the turns being folded away",
+        "remember: the Remember this button (question + reply) or the remember tool (the user's words)",
+        "idle: the thread has been idle 30 min and changed since its last push; the job holds only ids, and the worker reads the thread from the checkpointer",
+        "No SQS_QUEUE_URL: no queue at all, every push runs in the process that triggered it"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "Order, retries, dead letters",
+      "items": [
+        "MessageGroupId is the user: one user's pushes run in order, one at a time; different users run side by side",
+        "The dedupe id makes the same push enqueued twice within 5 min run once",
+        "The worker deletes a message only after its push succeeds; otherwise it comes back after the 300 s visibility timeout",
+        "After 5 receives the queue moves it to the DLQ, and ChatbotMemoryPushesDeadLettered fires"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "When SendMessage fails",
+      "items": [
+        "Retried after 0.2 s and 0.5 s; after the third failure the push runs in the pod that triggered it",
+        "QUEUE_FALLBACKS counts each one, so a push is never dropped while the queue is down",
+        "The idle scan uses the same path, so in the worker the fallback runs in the worker"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "The worker is always on",
+      "items": [
+        "A Deployment with 1 replica and the Recreate strategy: never two idle scanners, even mid-rollout",
+        "Four things in one process: the consumer loop, the idle scan, the store's TTL sweeper and metrics on :9100 (pushes, queue depth, job age)",
+        "The API pods set BACKGROUND_JOBS=false; under make dev the API runs the idle scan itself"
+      ]
+    }
+  ]
+}

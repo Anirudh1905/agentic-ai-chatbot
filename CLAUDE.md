@@ -12,6 +12,7 @@ An agentic chatbot: FastAPI + LangChain's `create_agent` with middleware, LangGr
 - `src/chatbot/api/`: routes, auth (`security.py`), the per-thread lease (`leases.py`), SSE (`streaming.py`).
 - `src/chatbot/config.py`: every setting, with its default and why. A new setting goes here, in `.env.example` and in `docs/configuration.md`.
 - `deploy/`: Kustomize (`base/`, `local/`, `ci/`), Helm values, and the scripts (`cluster.sh`, `smoke.sh`, `restore*.sh`, `outage-test.sh`).
+- `.archify/`: the sources (`candidate.json`) of the diagrams in `docs/images/` (architecture, memory, knowledge base, middleware chain). After changing a diagram, re-run archify's `finalize` and export the dark PNG from its page (Export → PNG).
 - `tests/`: `unit/`, `integration/` (need the cluster), `evals/` (golden sets and the gate), `load/`, `outage/`. Shared fakes are in `tests/fakes.py`.
 
 ## Commands

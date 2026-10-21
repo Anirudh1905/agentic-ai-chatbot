@@ -29,9 +29,9 @@
 
 ## What runs where
 
-<img alt="Architecture on Kubernetes. A browser reaches Envoy Gateway on localhost:8088 in a kind cluster: / goes to the Streamlit ui pod and /api to two FastAPI API pods. In each API pod a request passes the FastAPI app, then Auth + limits (JWT, rate limits and token budget in Redis, which also holds the circuit breakers and the web search cache; accounts in Postgres), then the agent loop, which calls the model gateway (retried once, then the fallback model), checkpoints and recalls memories in Postgres (CloudNativePG), and uses three tools: web_search (DuckDuckGo; sensitive queries wait for approval), search_knowledge_base (Postgres chunks, filled by the ingest Job) and remember. Memory pushes go to an ElasticMQ (SQS) FIFO queue with a dead-letter queue; the worker long-polls it and writes memories to Postgres. migrate and retention Jobs maintain the schema and checkpoints, and Postgres archives its WAL and a nightly base backup to MinIO. kube-prometheus-stack, behind /grafana, scrapes the API pods and the worker. The app sends run traces to Langfuse in Docker Compose, and the eval suites send their scores there." src="images/architecture-dark.png">
+<img alt="Architecture on Kubernetes. A browser reaches Envoy Gateway on localhost:8088 in a kind cluster: / goes to the Streamlit ui pod and /api to two FastAPI API pods. In each API pod a request passes the FastAPI app, then Auth + limits (JWT, rate limits and token budget in Redis, which also holds the circuit breakers and the web search cache; accounts in Postgres), then the agent loop, which calls the model gateway (retried once, then the fallback model), checkpoints and recalls memories in Postgres (CloudNativePG), and uses three tools: web_search (DuckDuckGo; sensitive queries wait for approval), search_knowledge_base (Postgres chunks, filled by the ingest Job) and remember. The agent's summaries and the remember tool push to an ElasticMQ (SQS) FIFO queue with a dead-letter queue; the worker sends it idle-thread jobs, long-polls it, acks each push once it's written, and writes memories to Postgres. migrate and retention Jobs maintain the schema and checkpoints, and Postgres archives its WAL and a nightly base backup to MinIO. kube-prometheus-stack, behind /grafana, scrapes the API pods and the worker. The app sends run traces to Langfuse in Docker Compose, and the eval suites send their scores there." src="images/architecture-dark.png">
 
-The picture's source is `.archify/architecture-chatbot-k8s-20261019-231500/candidate.json`. The Mermaid version adds the per-route detail:
+The picture's source is `.archify/architecture-chatbot-k8s-20261021-150000/candidate.json`. The Mermaid version adds the per-route detail:
 
 ```mermaid
 flowchart TB
@@ -72,6 +72,8 @@ flowchart TB
 - **Layout:** `deploy/kind.yaml` (the cluster), `cluster.sh` (`make cluster`), `helm/` (chart values), `base/` (our manifests; `config/` holds the ElasticMQ config and the dashboard), `local/` (the kind overlay), `ci/`, `smoke.sh`, `restore.sh`, `restore-test.sh`, `outage-test.sh` and `outage/` (the [outage test](phase-12-load-outage-tests.md#outage-test)).
 
 ## Memory pushes on a queue
+
+<img alt="Memory pushes through the queue, with the stores they read and write. The API pods' summary and remember pushes go through _enqueue_or_run to the memory-pushes.fifo queue in ElasticMQ (grouped by user, with a dedupe id); after a third failed SendMessage the push runs in the pod. The worker's consumer loop long-polls the queue and acks each push once it succeeds; a message received 5 times without an ack moves to memory-pushes-dlq.fifo. MemoryWriter.run takes each user's jobs in order, calls the model gateway, and writes the Postgres memory store. The worker's idle-thread scan reads idle threads from the Postgres checkpoints and enqueues idle jobs to the same queue, and its TTL sweeper deletes expired facts. LongTermMemory in the API recalls from the memory store each turn, and Summarization folds old turns into the checkpoints." src="images/memory-dark.png" width="800">
 
 ```mermaid
 sequenceDiagram
